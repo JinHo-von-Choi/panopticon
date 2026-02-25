@@ -88,7 +88,66 @@ class RansomwareLateralEngine(DetectionEngine):
 
     def analyze(self, packet: Packet) -> Alert | None:
         """패킷당 즉시 탐지: 허니팟 접근 확인 + SMB/RDP 데이터 수집."""
-        pass  # Task 2, 3, 4에서 구현
+        src_ip, dst_ip = get_ip_addrs(packet)
+        if not src_ip or not dst_ip:
+            return None
+
+        # ── 허니팟 접근 즉시 탐지 ──────────────────────────────────────────
+        honeypot_hit = (
+            (dst_ip in self._honeypot_ips and src_ip != dst_ip)
+            or (src_ip in self._honeypot_ips)
+        )
+        if honeypot_hit:
+            attacker_ip = src_ip if dst_ip in self._honeypot_ips else dst_ip
+            now = time.time()
+            last = self._honeypot_alerted.get(attacker_ip, 0.0)
+            if now - last < self._cooldown:
+                return None  # 쿨다운 적용
+            self._honeypot_alerted[attacker_ip] = now
+            return Alert(
+                engine      = self.name,
+                severity    = Severity.CRITICAL,
+                title       = f"Honeypot Access Detected: {attacker_ip}",
+                description = (
+                    f"Host {attacker_ip} accessed honeypot resource "
+                    f"({src_ip} → {dst_ip}). "
+                    "This is a high-confidence indicator of lateral movement."
+                ),
+                source_ip   = attacker_ip,
+                confidence  = 1.0,
+                metadata    = {
+                    "src_ip":       src_ip,
+                    "dst_ip":       dst_ip,
+                    "honeypot_ips": sorted(self._honeypot_ips),
+                },
+            )
+
+        # ── SMB / RDP 데이터 수집 (on_tick에서 분석) ──────────────────────
+        if not packet.haslayer(TCP):
+            return None
+
+        tcp = packet[TCP]
+        # SYN only (SYN=1, ACK=0)
+        if not (tcp.flags & 0x02) or (tcp.flags & 0x10):
+            return None
+
+        # 양쪽 모두 내부 IP여야 함
+        if not is_internal(src_ip) or not is_internal(dst_ip):
+            return None
+
+        dst_port = tcp.dport
+        now = time.time()
+
+        if dst_port == 445:
+            if len(self._smb) < self._max_tracked:
+                self._smb[src_ip].append((now, dst_ip))
+
+        elif dst_port == 3389:
+            key = (src_ip, dst_ip)
+            if len(self._rdp) < self._max_tracked:
+                self._rdp[key].append(now)
+
+        return None
 
     def on_tick(self, timestamp: float) -> list[Alert]:
         """슬라이딩 윈도우 집계 결과를 바탕으로 알림을 생성한다."""
