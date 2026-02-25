@@ -256,6 +256,7 @@ class DeviceRepository:
         device_buffer: mac -> {
             ip, hostname, vendor, os_hint, bytes, packets,
             hostname_sources: {source: {name, updated}, ...}  # 선택
+            open_ports: set[int]                               # 선택
         }
 
         hostname_sources 처리:
@@ -264,6 +265,10 @@ class DeviceRepository:
 
         ip_history 처리:
         - IP가 변경된 경우 이전 IP를 history 앞에 prepend (최대 20건 유지).
+
+        open_ports 처리:
+        - 기존 포트 배열과 새 포트 집합을 union 병합한다 (최대 100개 유지).
+        - 새 포트가 없으면 기존 배열을 그대로 유지한다.
         """
         if not device_buffer:
             return
@@ -281,12 +286,13 @@ class DeviceRepository:
                         hostname=best_hostname,
                         hostname_sources=sources,
                     )
+                    new_ports = sorted(info.get("open_ports") or set())
                     await conn.execute(
                         """INSERT INTO devices
                                (mac_address, ip_address, hostname, vendor,
                                 first_seen, last_seen, total_packets, total_bytes,
-                                os_hint, hostname_sources, device_type)
-                           VALUES ($1::macaddr, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                os_hint, hostname_sources, device_type, open_ports)
+                           VALUES ($1::macaddr, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                            ON CONFLICT(mac_address) DO UPDATE SET
                                ip_address = COALESCE(EXCLUDED.ip_address, devices.ip_address),
                                hostname   = COALESCE(EXCLUDED.hostname,   devices.hostname),
@@ -318,6 +324,25 @@ class DeviceRepository:
                                        ) sub
                                    )
                                    ELSE devices.ip_history
+                               END,
+                               open_ports = CASE
+                                   WHEN jsonb_array_length(EXCLUDED.open_ports) = 0
+                                   THEN devices.open_ports
+                                   ELSE (
+                                       SELECT COALESCE(
+                                           to_jsonb(array_agg(p ORDER BY p)),
+                                           '[]'::jsonb
+                                       )
+                                       FROM (
+                                           SELECT DISTINCT value::text::int AS p
+                                           FROM (
+                                               SELECT * FROM jsonb_array_elements(devices.open_ports)
+                                               UNION ALL
+                                               SELECT * FROM jsonb_array_elements(EXCLUDED.open_ports)
+                                           ) combined
+                                           LIMIT 100
+                                       ) deduped
+                                   )
                                END""",
                         mac,
                         info.get("ip"),
@@ -329,6 +354,7 @@ class DeviceRepository:
                         info.get("os_hint"),
                         sources,
                         inferred_type,
+                        new_ports,
                     )
 
     async def update_open_ports(self, mac_address: str, ports: list[int]) -> None:

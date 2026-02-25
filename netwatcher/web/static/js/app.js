@@ -681,9 +681,10 @@
         if (dev.notes) html += row("Notes", dev.notes);
         html += '</div></div>';
         if (dev.open_ports && dev.open_ports.length) {
+            var ports = dev.open_ports.slice().sort(function (a, b) { return a - b; });
             html += '<div class="detail-section"><h3>Observed Open Ports</h3>';
-            html += '<div style="display:flex;flex-wrap:wrap;gap:4px">';
-            dev.open_ports.forEach(function (p) { html += '<span class="layer-badge">' + p + '</span>'; });
+            html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">';
+            ports.forEach(function (p) { html += renderPortBadge(p); });
             html += '</div></div>';
         }
 
@@ -791,6 +792,41 @@
         } catch (e) {
             console.error("Failed to load events:", e);
         }
+    }
+
+    /** 포트 번호 → 서비스 이름 매핑 (port_tracker.py와 동일하게 유지). */
+    var PORT_SERVICES = {
+        21: "FTP",      22: "SSH",      23: "Telnet",
+        25: "SMTP",     53: "DNS",      67: "DHCP",
+        69: "TFTP",     80: "HTTP",     110: "POP3",
+        119: "NNTP",    123: "NTP",     143: "IMAP",
+        161: "SNMP",    389: "LDAP",    443: "HTTPS",
+        445: "SMB",     465: "SMTPS",   514: "Syslog",
+        515: "LPD",     587: "SMTP/TLS", 636: "LDAPS",
+        993: "IMAPS",   995: "POP3S",   1194: "OpenVPN",
+        1433: "MSSQL",  1521: "Oracle", 1883: "MQTT",
+        2375: "Docker", 2376: "Docker-TLS", 3306: "MySQL",
+        3389: "RDP",    5432: "PostgreSQL", 5900: "VNC",
+        6379: "Redis",  7001: "WebLogic",   8080: "HTTP-Alt",
+        8443: "HTTPS-Alt", 8883: "MQTTS",   9200: "Elasticsearch",
+        9300: "ES-Cluster", 11211: "Memcached",
+        27017: "MongoDB",   27018: "MongoDB", 27019: "MongoDB",
+    };
+
+    /**
+     * 포트 번호를 "포트번호 서비스명" 배지 HTML로 변환한다.
+     * Telnet/RDP/FTP/SNMP 등 고위험 서비스는 주황색으로 강조한다.
+     * @param {number} port - 포트 번호
+     * @returns {string} HTML 배지 문자열
+     */
+    function renderPortBadge(port) {
+        var svc   = PORT_SERVICES[port];
+        var label = svc ? port + " " + svc : "" + port;
+        var danger = (port === 23 || port === 3389 || port === 21 ||
+                      port === 161 || port === 69  || port === 2375);
+        return '<span class="layer-badge" style="' +
+               (danger ? 'color:var(--warning);border-color:rgba(255,165,2,0.35)' : '') +
+               '">' + esc(label) + '</span>';
     }
 
     /**

@@ -10,7 +10,7 @@ from scapy.all import ARP, DNS, TCP, UDP, Packet
 
 from netwatcher.detection.models import Alert, Severity
 from netwatcher.detection.utils import get_ip_addrs
-from netwatcher.inventory import hostname_resolver
+from netwatcher.inventory import hostname_resolver, port_tracker
 from netwatcher.utils.geoip import enrich_alert_metadata
 from netwatcher.utils.network import mac_vendor_lookup
 from netwatcher.utils.packet_info import extract_packet_info, guess_os
@@ -140,6 +140,14 @@ class PacketProcessor:
             # 소스에서 IP를 얻었고 버퍼에 아직 IP가 없는 경우 보완
             if hit.ip and not hit_buf.get("ip"):
                 hit_buf["ip"] = hit.ip
+
+        # 패시브 포트 탐지 (TCP SYN-ACK 관찰)
+        for phit in port_tracker.extract(packet):
+            phit_buf = self._device_buffer.setdefault(
+                phit.mac, {"bytes": 0, "packets": 0},
+            )
+            open_ports: set[int] = phit_buf.setdefault("open_ports", set())
+            open_ports.add(phit.port)
 
         # 탐지 엔진 실행
         alerts = self.registry.process_packet(packet)
