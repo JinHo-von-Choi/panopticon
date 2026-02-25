@@ -23,6 +23,7 @@ _KILL_CHAIN_STAGES = {
     "threat_intel": "command_and_control",
     "http_suspicious": "command_and_control",
     "lateral_movement": "lateral_movement",
+    "ransomware_lateral": "lateral_movement",
     "mac_spoof": "defense_evasion",
     "protocol_anomaly": "defense_evasion",
     "data_exfil": "exfiltration",

@@ -94,3 +94,18 @@ class TestAlertCorrelator:
 
         assert incident is not None
         assert len(incident.kill_chain_stages) >= 2
+
+
+class TestRansomwareLateralKillChain:
+    def test_ransomware_lateral_mapped_to_lateral_movement_stage(self):
+        """ransomware_lateral 엔진은 킬체인 lateral_movement 단계로 매핑되어야 한다."""
+        from netwatcher.detection.correlator import _KILL_CHAIN_STAGES
+        assert _KILL_CHAIN_STAGES.get("ransomware_lateral") == "lateral_movement"
+
+    def test_port_scan_then_ransomware_lateral_creates_kill_chain_incident(self):
+        """port_scan(recon) → ransomware_lateral(lateral) 시퀀스가 킬체인 인시던트를 생성한다."""
+        corr = AlertCorrelator(time_window=300)
+        corr.process_alert(make_alert("port_scan", "192.168.1.10"),          event_id=1)
+        incident = corr.process_alert(make_alert("ransomware_lateral", "192.168.1.10"), event_id=2)
+        assert incident is not None
+        assert "kill_chain" in incident.rule or "multi_engine" in incident.rule
