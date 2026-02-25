@@ -195,7 +195,7 @@ class NetWatcher:
 
         import uvicorn
         web_host = self.config.get("web.host", "0.0.0.0")
-        web_port = self.config.get("web.port", 8080)
+        web_port = self.config.get("web.port", 38585)
 
         # TLS 설정
         tls_cfg  = self.config.section("web").get("tls", {})

@@ -71,7 +71,7 @@ netwatcher:
         enabled: false
         webhook_url: ""
         min_severity: "CRITICAL"
-        dashboard_url: "https://watcher.realpt.co.kr"
+        dashboard_url: ""                              # 환경변수 또는 직접 설정
       discord:
         enabled: true
         webhook_url: ""           # 반드시 환경변수(NETWATCHER_DISCORD_WEBHOOK_URL)로 설정
