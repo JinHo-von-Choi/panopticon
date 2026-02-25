@@ -236,6 +236,18 @@ class NetWatcher:
             )
             await daily_reporter.start()
 
+        # ── 자산 변경 모니터 ──────────────────────────────────────────────
+        asset_monitor = None
+        asset_monitor_cfg = self.config.section("asset_monitor") or {}
+        if asset_monitor_cfg.get("enabled"):
+            from netwatcher.services.asset_monitor import AssetMonitorService
+            asset_monitor = AssetMonitorService(
+                device_repo=device_repo,
+                dispatcher=dispatcher,
+                config=self.config,
+            )
+            await asset_monitor.start()
+
         # ── DNS 리졸버 & 스니퍼 ──────────────────────────────────────────
         await self._dns_resolver.start()
 
@@ -277,6 +289,8 @@ class NetWatcher:
         await self._dns_resolver.stop()
         if daily_reporter:
             await daily_reporter.stop()
+        if asset_monitor:
+            await asset_monitor.stop()
         server.should_exit = True
         await server_task
         await dispatcher.stop()

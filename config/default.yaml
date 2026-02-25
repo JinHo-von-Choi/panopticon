@@ -266,6 +266,11 @@ netwatcher:
     enabled: true
     report_hour: 12  # KST noon
 
+  asset_monitor:
+    enabled: true
+    check_interval_seconds: 60      # 기기 변경 감지 주기 (초)
+    offline_threshold_minutes: 60   # 미관찰 후 오프라인 간주 시간 (분)
+
   analysis:
     enabled: false
     extract_files: true
