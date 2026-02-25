@@ -45,6 +45,24 @@ class FlowProcessor:
                         engine.name, flow.src_ip, flow.dst_ip,
                     )
 
+    def on_tick(self, timestamp: float) -> None:
+        """등록된 모든 활성 FlowEngine의 on_tick을 호출하고 알림을 디스패처에 큐잉한다.
+
+        TickService에서 1초 주기로 호출된다.
+        """
+        for engine in self._engines:
+            if not engine.enabled:
+                continue
+            try:
+                alerts = engine.on_tick(timestamp)
+                for alert in alerts:
+                    if self._dispatcher is not None:
+                        self._dispatcher.enqueue(alert)
+            except Exception:
+                logger.exception(
+                    "FlowEngine %s raised exception in on_tick", engine.name
+                )
+
     @property
     def total_flows(self) -> int:
         """처리된 총 플로우 수."""

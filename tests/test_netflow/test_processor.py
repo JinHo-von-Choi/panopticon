@@ -108,3 +108,48 @@ class TestFlowProcessor:
         proc = FlowProcessor(dispatcher=self.dispatcher)
         proc.on_flows([_make_flow(), _make_flow()])
         assert proc.total_flows == 2
+
+    def test_on_tick_dispatches_engine_alerts(self):
+        """on_tick이 FlowEngine.on_tick()에서 생성된 알림을 디스패처에 전달해야 한다."""
+        import time
+
+        class _TickAlertingEngine(FlowEngine):
+            name = "tick_alerting"
+
+            def analyze_flow(self, flow: "FlowRecord") -> "Alert | None":
+                return None
+
+            def on_tick(self, timestamp: float) -> "list[Alert]":
+                return [Alert(
+                    engine="tick_alerting",
+                    severity=Severity.WARNING,
+                    title="Tick Alert",
+                    source_ip="10.0.0.1",
+                    dest_ip="10.0.0.2",
+                )]
+
+        proc = FlowProcessor(dispatcher=self.dispatcher)
+        proc.register_engine(_TickAlertingEngine({"enabled": True}))
+        proc.on_tick(time.time())
+        self.dispatcher.enqueue.assert_called_once()
+
+    def test_on_tick_skips_disabled_engines(self):
+        """on_tick이 비활성 엔진의 on_tick()을 호출하지 않아야 한다."""
+        import time
+
+        class _TickAlertingEngine(FlowEngine):
+            name = "tick_alerting_disabled"
+            called = False
+
+            def analyze_flow(self, flow: "FlowRecord") -> "Alert | None":
+                return None
+
+            def on_tick(self, timestamp: float) -> "list[Alert]":
+                _TickAlertingEngine.called = True
+                return []
+
+        proc = FlowProcessor(dispatcher=self.dispatcher)
+        proc.register_engine(_TickAlertingEngine({"enabled": False}))
+        proc.on_tick(time.time())
+        assert _TickAlertingEngine.called is False
+        self.dispatcher.enqueue.assert_not_called()

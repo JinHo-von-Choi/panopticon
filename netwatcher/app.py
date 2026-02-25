@@ -275,6 +275,7 @@ class NetWatcher:
                 port      = netflow_cfg.get("port", 2055),
             )
             await flow_collector.start()
+            tick_service.set_flow_processor(flow_processor)
             logger.info(
                 "NetFlow collector enabled on %s:%d (%d flow engines)",
                 netflow_cfg.get("host", "0.0.0.0"),
