@@ -153,3 +153,70 @@ class TestSmbWormScan:
         alerts = self.engine.on_tick(time.time())
         smb_alerts = [a for a in alerts if "SMB" in a.title]
         assert len(smb_alerts) == 0
+
+
+class TestRdpBruteForce:
+    def setup_method(self):
+        self.engine = RansomwareLateralEngine({
+            **_CFG,
+            "rdp_brute_threshold": 5,
+            "rdp_brute_window_seconds": 60,
+            "honeypot_ips": [],
+        })
+
+    def _send_rdp_syns(self, src: str, dst: str, count: int):
+        for _ in range(count):
+            self.engine.analyze(make_syn(src, dst, 3389))
+
+    def test_below_threshold_no_alert(self):
+        self._send_rdp_syns("192.168.1.10", "192.168.1.20", 4)
+        alerts = self.engine.on_tick(time.time())
+        rdp_alerts = [a for a in alerts if "RDP" in a.title]
+        assert len(rdp_alerts) == 0
+
+    def test_at_threshold_fires_warning(self):
+        self._send_rdp_syns("192.168.1.10", "192.168.1.20", 5)
+        alerts = self.engine.on_tick(time.time())
+        rdp_alerts = [a for a in alerts if "RDP" in a.title]
+        assert len(rdp_alerts) == 1
+        assert rdp_alerts[0].severity == Severity.WARNING
+        assert rdp_alerts[0].source_ip  == "192.168.1.10"
+        assert rdp_alerts[0].dest_ip    == "192.168.1.20"
+
+    def test_different_dst_counted_separately(self):
+        """다른 대상에 대한 RDP 시도는 각각 독립적으로 집계된다."""
+        self._send_rdp_syns("192.168.1.10", "192.168.1.20", 5)
+        self._send_rdp_syns("192.168.1.10", "192.168.1.21", 5)
+        alerts = self.engine.on_tick(time.time())
+        rdp_alerts = [a for a in alerts if "RDP" in a.title]
+        assert len(rdp_alerts) == 2
+
+    def test_external_dst_ignored(self):
+        """외부 목적지 RDP는 무시한다."""
+        self._send_rdp_syns("192.168.1.10", "1.2.3.4", 10)
+        alerts = self.engine.on_tick(time.time())
+        assert len([a for a in alerts if "RDP" in a.title]) == 0
+
+    def test_non_syn_packet_ignored(self):
+        """SYN이 아닌 TCP 패킷(예: ACK)은 집계하지 않는다."""
+        from scapy.all import Ether, IP, TCP
+        for _ in range(10):
+            pkt = Ether() / IP(src="192.168.1.10", dst="192.168.1.20") \
+                  / TCP(sport=54321, dport=3389, flags="A")
+            self.engine.analyze(pkt)
+        alerts = self.engine.on_tick(time.time())
+        assert len([a for a in alerts if "RDP" in a.title]) == 0
+
+    def test_alert_contains_dest_ip(self):
+        self._send_rdp_syns("192.168.1.10", "192.168.1.20", 5)
+        alerts = self.engine.on_tick(time.time())
+        rdp = next(a for a in alerts if "RDP" in a.title)
+        assert rdp.dest_ip == "192.168.1.20"
+
+    def test_rdp_cooldown_suppresses_duplicate(self):
+        self._send_rdp_syns("192.168.1.10", "192.168.1.20", 5)
+        self.engine.on_tick(time.time())  # 첫 알림
+
+        self._send_rdp_syns("192.168.1.10", "192.168.1.20", 5)
+        alerts2 = self.engine.on_tick(time.time())
+        assert len([a for a in alerts2 if "RDP" in a.title]) == 0

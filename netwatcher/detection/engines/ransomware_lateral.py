@@ -202,7 +202,51 @@ class RansomwareLateralEngine(DetectionEngine):
         for k in dead_smb:
             del self._smb[k]
 
-        # ── RDP 브루트포스 탐지 (Task 4에서 추가) ────────────────────────
+        # ── RDP 브루트포스 탐지 ──────────────────────────────────────────
+        rdp_cutoff = now - self._rdp_window
+        dead_rdp: list[tuple[str, str]] = []
+
+        for (src_ip, dst_ip), timestamps in self._rdp.items():
+            # 화이트리스트 확인
+            if self.is_whitelisted(source_ip=src_ip):
+                dead_rdp.append((src_ip, dst_ip))
+                continue
+
+            # 윈도우 밖 타임스탬프 제거
+            while timestamps and timestamps[0] < rdp_cutoff:
+                timestamps.popleft()
+
+            if not timestamps:
+                dead_rdp.append((src_ip, dst_ip))
+                continue
+
+            if len(timestamps) >= self._rdp_threshold:
+                key = f"rdp:{src_ip}:{dst_ip}"
+                last = self._alerted.get(key, 0.0)
+                if now - last >= self._cooldown:
+                    self._alerted[key] = now
+                    confidence = min(1.0, 0.5 + len(timestamps) * 0.03)
+                    alerts.append(Alert(
+                        engine      = self.name,
+                        severity    = Severity.WARNING,
+                        title       = f"RDP Brute Force: {src_ip} → {dst_ip}",
+                        description = (
+                            f"Host {src_ip} attempted {len(timestamps)} TCP/3389 "
+                            f"connections to {dst_ip} in {self._rdp_window}s. "
+                            "Pattern consistent with RDP brute force."
+                        ),
+                        source_ip   = src_ip,
+                        dest_ip     = dst_ip,
+                        confidence  = confidence,
+                        metadata    = {
+                            "attempt_count":  len(timestamps),
+                            "window_seconds": self._rdp_window,
+                            "threshold":      self._rdp_threshold,
+                        },
+                    ))
+
+        for k in dead_rdp:
+            del self._rdp[k]
 
         # ── 만료된 쿨다운 정리 ───────────────────────────────────────────
         expired = [k for k, t in self._alerted.items() if now - t > self._cooldown * 2]
