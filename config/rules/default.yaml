@@ -1,0 +1,33 @@
+rules:
+  - id: "NW-001"
+    name: "SSH Brute Force Attempt"
+    severity: "CRITICAL"
+    protocol: "tcp"
+    dst_port: 22
+    flags: "SYN"
+    threshold:
+      count: 10
+      seconds: 60
+      by: "src_ip"
+
+  - id: "NW-002"
+    name: "SQL Injection in HTTP"
+    severity: "CRITICAL"
+    protocol: "tcp"
+    dst_port: [80, 8080, 443, 8443]
+    content:
+      - "UNION SELECT"
+      - "OR 1=1"
+    content_nocase: true
+
+  - id: "NW-003"
+    name: "Outbound IRC Traffic"
+    severity: "WARNING"
+    protocol: "tcp"
+    dst_port: [6667, 6668, 6669, 6697]
+
+  - id: "NW-004"
+    name: "DNS Zone Transfer Attempt"
+    severity: "CRITICAL"
+    protocol: "tcp"
+    dst_port: 53

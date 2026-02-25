@@ -1,0 +1,23 @@
+[Unit]
+Description=NetWatcher - Network Packet Monitoring System
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/nirna/job/panopticon
+EnvironmentFile=/home/nirna/job/panopticon/.env
+Environment=LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 PYTHONIOENCODING=utf-8
+ExecStart=/home/nirna/job/panopticon/.venv/bin/python -m netwatcher
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=no
+ProtectSystem=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

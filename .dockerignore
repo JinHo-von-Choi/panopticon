@@ -1,0 +1,14 @@
+.venv/
+.worktrees/
+__pycache__/
+*.pyc
+.git/
+.github/
+data/
+docs/
+tests/
+*.egg-info/
+*.bak
+.env
+.claude/
+.mcp.json

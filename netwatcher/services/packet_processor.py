@@ -1,0 +1,137 @@
+"""PacketProcessor - 패킷 콜백, 트래픽 카운터, 디바이스 버퍼, 엔진 디스패치."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from scapy.all import ARP, DNS, TCP, UDP, Packet
+
+from netwatcher.detection.utils import get_ip_addrs
+from netwatcher.utils.geoip import enrich_alert_metadata
+from netwatcher.utils.network import mac_vendor_lookup
+from netwatcher.utils.packet_info import extract_packet_info, guess_os
+
+try:
+    from netwatcher.web.metrics import packets_total as _packets_total
+except ImportError:
+    _packets_total = None
+
+if TYPE_CHECKING:
+    from netwatcher.alerts.dispatcher import AlertDispatcher
+    from netwatcher.capture.pcap_writer import PCAPWriter
+    from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.utils.network import AsyncDNSResolver
+
+logger = logging.getLogger("netwatcher.services.packet_processor")
+
+
+class PacketProcessor:
+    """패킷별 콜백, 트래픽 카운터, 디바이스 버퍼를 소유한다."""
+
+    def __init__(
+        self,
+        registry: EngineRegistry,
+        dispatcher: AlertDispatcher | None,
+        pcap_writer: PCAPWriter,
+        dns_resolver: AsyncDNSResolver,
+    ) -> None:
+        """패킷 프로세서를 초기화한다. 레지스트리, 디스패처, PCAP 기록기 등을 주입받는다."""
+        self.registry     = registry
+        self.dispatcher   = dispatcher
+        self.pcap_writer  = pcap_writer
+        self._dns_resolver = dns_resolver
+
+        # 트래픽 카운터 (플러시 간격 단위)
+        self._pkt_count  = 0
+        self._byte_count = 0
+        self._tcp_count  = 0
+        self._udp_count  = 0
+        self._arp_count  = 0
+        self._dns_count  = 0
+
+        # 디바이스 배치 버퍼
+        self._device_buffer: dict[str, dict] = {}
+
+    def on_packet(self, packet: Packet) -> None:
+        """스니퍼 스레드의 콜백, call_soon_threadsafe를 통해 디스패치된다."""
+        # 트래픽 카운터 업데이트
+        self._pkt_count += 1
+        pkt_len = len(packet)
+        self._byte_count += pkt_len
+
+        # Prometheus 패킷 카운터
+        if _packets_total is not None:
+            _packets_total.inc()
+
+        if packet.haslayer(TCP):
+            self._tcp_count += 1
+        if packet.haslayer(UDP):
+            self._udp_count += 1
+        if packet.haslayer(ARP):
+            self._arp_count += 1
+        if packet.haslayer(DNS):
+            self._dns_count += 1
+
+        # PCAP 링 버퍼에 추가
+        self.pcap_writer.add_packet(packet)
+
+        # 출발지 정보 추출
+        src_mac = getattr(packet, "src", None)
+        src_ip  = None
+        src_ip_pkt, _ = get_ip_addrs(packet)
+        if src_ip_pkt:
+            src_ip = src_ip_pkt
+        elif packet.haslayer(ARP):
+            src_ip  = packet[ARP].psrc
+            src_mac = packet[ARP].hwsrc
+
+        # 보강: 벤더 + 호스트명 (비동기, 논블로킹) + OS 힌트
+        vendor   = mac_vendor_lookup(src_mac) if src_mac else None
+        hostname = None
+        os_hint  = None
+        if src_ip:
+            hostname = self._dns_resolver.lookup(src_ip)
+            os_hint  = guess_os(packet)
+
+        # 메모리 버퍼에 디바이스 정보 축적 (주기적으로 일괄 플러시)
+        if src_mac:
+            buf = self._device_buffer.setdefault(src_mac, {"bytes": 0, "packets": 0})
+            buf["ip"]       = src_ip
+            buf["hostname"] = hostname
+            buf["vendor"]   = vendor
+            buf["os_hint"]  = os_hint
+            buf["bytes"]   += pkt_len
+            buf["packets"] += 1
+
+        # 탐지 엔진 실행
+        alerts = self.registry.process_packet(packet)
+        for alert in alerts:
+            alert.packet_info = extract_packet_info(packet)
+            enrich_alert_metadata(alert.metadata, alert.source_ip, alert.dest_ip)
+            if self.dispatcher:
+                self.dispatcher.enqueue(alert)
+
+    def snapshot_and_reset_counters(self) -> dict[str, int]:
+        """현재 카운터 값을 반환하고 0으로 초기화한다.
+
+        on_packet과 같은 이벤트 루프에서 호출해야 한다 (락 불필요).
+        """
+        snapshot = {
+            "total_packets": self._pkt_count,
+            "total_bytes":   self._byte_count,
+            "tcp_count":     self._tcp_count,
+            "udp_count":     self._udp_count,
+            "arp_count":     self._arp_count,
+            "dns_count":     self._dns_count,
+        }
+        self._pkt_count = self._byte_count = 0
+        self._tcp_count = self._udp_count  = 0
+        self._arp_count = self._dns_count   = 0
+        return snapshot
+
+    def drain_device_buffer(self) -> dict[str, dict]:
+        """축적된 디바이스 버퍼를 반환하고 비운다."""
+        batch = self._device_buffer.copy()
+        self._device_buffer.clear()
+        return batch

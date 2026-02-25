@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panopticon Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="login-overlay hidden">
+        <div class="login-box">
+            <img src="/img/panopticon.png" alt="Panopticon" class="login-logo" />
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" class="input-search" autocomplete="username" style="width:100%" />
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" class="input-search" autocomplete="current-password" style="width:100%" />
+                </div>
+                <div id="login-error" class="login-error"></div>
+                <button type="submit" class="btn btn-accent" style="width:100%">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <header>
+        <div class="header-left">
+            <h1>Panopticon</h1>
+            <span id="connection-status" class="status-dot disconnected" title="WebSocket disconnected"></span>
+        </div>
+        <div class="header-right">
+            <button id="btn-logout" class="btn" style="display:none">Logout</button>
+            <span id="clock"></span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Stats Cards -->
+        <section class="stats-grid">
+            <div class="stat-card critical">
+                <div class="stat-value" id="stat-critical">0</div>
+                <div class="stat-label">Critical</div>
+            </div>
+            <div class="stat-card warning">
+                <div class="stat-value" id="stat-warning">0</div>
+                <div class="stat-label">Warning</div>
+            </div>
+            <div class="stat-card info">
+                <div class="stat-value" id="stat-info">0</div>
+                <div class="stat-label">Info</div>
+            </div>
+            <div class="stat-card neutral">
+                <div class="stat-value" id="stat-packets">0</div>
+                <div class="stat-label">Total Packets</div>
+            </div>
+            <div class="stat-card neutral">
+                <div class="stat-value" id="stat-devices">0</div>
+                <div class="stat-label">Devices</div>
+            </div>
+        </section>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="events">Events</button>
+            <button class="tab" data-tab="traffic">Traffic</button>
+            <button class="tab" data-tab="devices">Devices</button>
+            <button class="tab" data-tab="blocklist">Blocklist</button>
+            <button class="tab" data-tab="engines">Engines</button>
+        </nav>
+
+        <!-- Events Tab -->
+        <section id="tab-events" class="tab-content active">
+            <div class="toolbar">
+                <select id="filter-severity">
+                    <option value="">All Severities</option>
+                    <option value="CRITICAL">Critical</option>
+                    <option value="WARNING">Warning</option>
+                    <option value="INFO">Info</option>
+                </select>
+                <select id="filter-engine">
+                    <option value="">All Engines</option>
+                </select>
+                <input type="text" id="filter-search" class="input-search" placeholder="Search events..." />
+                <input type="date" id="filter-since" class="input-date" title="Since" />
+                <input type="date" id="filter-until" class="input-date" title="Until" />
+                <select id="filter-pagesize">
+                    <option value="50">50 / page</option>
+                    <option value="100" selected>100 / page</option>
+                    <option value="200">200 / page</option>
+                </select>
+                <button id="btn-refresh" class="btn">Refresh</button>
+                <button id="btn-export-csv" class="btn btn-export">Export CSV</button>
+                <button id="btn-export-json" class="btn btn-export">Export JSON</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="events-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Severity</th>
+                            <th>Engine</th>
+                            <th>Title</th>
+                            <th>Source</th>
+                            <th>Destination</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-body">
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination" id="events-pagination"></div>
+        </section>
+
+        <!-- Traffic Tab -->
+        <section id="tab-traffic" class="tab-content">
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>Traffic Timeline (packets/min)</h3>
+                    <canvas id="chart-traffic"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Protocol Distribution</h3>
+                    <canvas id="chart-protocols"></canvas>
+                </div>
+            </div>
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>Alerts by Severity (24h)</h3>
+                    <canvas id="chart-severity"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Alerts by Engine (24h)</h3>
+                    <canvas id="chart-engines"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Devices Tab -->
+        <section id="tab-devices" class="tab-content">
+            <div class="toolbar">
+                <input type="text" id="devices-search" class="input-search" placeholder="Search devices..." />
+                <button id="btn-register-device" class="btn btn-accent">Register Device</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="devices-table">
+                    <thead>
+                        <tr>
+                            <th>Nickname</th>
+                            <th>MAC Address</th>
+                            <th>Vendor</th>
+                            <th>IP Address</th>
+                            <th>Hostname</th>
+                            <th>OS</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                            <th>Packets</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="devices-body">
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination" id="devices-pagination"></div>
+        </section>
+
+        <!-- Blocklist Tab -->
+        <section id="tab-blocklist" class="tab-content">
+            <div class="toolbar">
+                <select id="bl-filter-type">
+                    <option value="">All Types</option>
+                    <option value="ip">IP</option>
+                    <option value="domain">Domain</option>
+                </select>
+                <select id="bl-filter-source">
+                    <option value="">All Sources</option>
+                    <option value="custom">Custom</option>
+                    <option value="feed">Feed</option>
+                </select>
+                <input type="text" id="bl-search" class="input-search" placeholder="Search blocklist..." />
+                <button id="btn-add-blocklist" class="btn btn-accent">Add Entry</button>
+            </div>
+            <div id="bl-stats" class="bl-stats"></div>
+            <div class="table-wrapper">
+                <table id="blocklist-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Value</th>
+                            <th>Source</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="blocklist-body">
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination" id="blocklist-pagination"></div>
+        </section>
+
+        <!-- Engines Tab -->
+        <section id="tab-engines" class="tab-content">
+            <div class="engines-layout">
+                <div class="engines-list" id="engines-list"></div>
+                <div class="engine-detail" id="engine-detail">
+                    <div class="engine-detail-empty">Select an engine to configure</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Event Detail Modal -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modal-title">Event Detail</h2>
+                <button class="modal-close" id="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Detail Modal -->
+    <div id="device-modal-overlay" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="device-modal-title">Device Detail</h2>
+                <button class="modal-close" id="device-modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body" id="device-modal-body">
+            </div>
+        </div>
+    </div>
+
+    <!-- Register/Edit Device Modal -->
+    <div id="device-form-overlay" class="modal-overlay hidden">
+        <div class="modal" style="max-width:500px">
+            <div class="modal-header">
+                <h2 id="device-form-title">Register Device</h2>
+                <button class="modal-close" id="device-form-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="device-form">
+                    <input type="hidden" id="df-mode" value="register" />
+                    <div class="form-group">
+                        <label for="df-mac">MAC Address</label>
+                        <input type="text" id="df-mac" class="input-search" placeholder="aa:bb:cc:dd:ee:ff" style="width:100%" />
+                    </div>
+                    <div class="form-group">
+                        <label for="df-nickname">Nickname *</label>
+                        <input type="text" id="df-nickname" class="input-search" placeholder="e.g. Office Printer" style="width:100%" />
+                    </div>
+                    <div class="form-group">
+                        <label for="df-ip">IP Address</label>
+                        <input type="text" id="df-ip" class="input-search" placeholder="192.168.1.100" style="width:100%" />
+                    </div>
+                    <div class="form-group">
+                        <label for="df-hostname">Hostname</label>
+                        <input type="text" id="df-hostname" class="input-search" placeholder="printer.local" style="width:100%" />
+                    </div>
+                    <div class="form-group">
+                        <label for="df-os">OS Hint</label>
+                        <input type="text" id="df-os" class="input-search" placeholder="Linux" style="width:100%" />
+                    </div>
+                    <div class="form-group">
+                        <label for="df-notes">Notes</label>
+                        <textarea id="df-notes" class="input-search" rows="3" placeholder="Additional notes..." style="width:100%"></textarea>
+                    </div>
+                    <div id="df-error" style="color:var(--critical);font-size:13px;margin-bottom:8px;display:none"></div>
+                    <div class="form-actions">
+                        <button type="button" class="btn" id="device-form-cancel-btn">Cancel</button>
+                        <button type="submit" class="btn btn-accent">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Blocklist Entry Modal -->
+    <div id="blocklist-form-overlay" class="modal-overlay hidden">
+        <div class="modal" style="max-width:500px">
+            <div class="modal-header">
+                <h2>Add Blocklist Entry</h2>
+                <button class="modal-close" id="blocklist-form-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="blocklist-form">
+                    <div class="form-group">
+                        <label for="bf-type">Type</label>
+                        <select id="bf-type" style="width:100%">
+                            <option value="ip">IP Address</option>
+                            <option value="domain">Domain</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="bf-value">Value</label>
+                        <input type="text" id="bf-value" class="input-search" placeholder="e.g. 10.0.0.1 or evil.com" style="width:100%" />
+                    </div>
+                    <div class="form-group">
+                        <label for="bf-notes">Notes</label>
+                        <textarea id="bf-notes" class="input-search" rows="2" placeholder="Reason for blocking..." style="width:100%"></textarea>
+                    </div>
+                    <div id="bf-error" style="color:var(--critical);font-size:13px;margin-bottom:8px;display:none"></div>
+                    <div class="form-actions">
+                        <button type="button" class="btn" id="blocklist-form-cancel-btn">Cancel</button>
+                        <button type="submit" class="btn btn-accent">Add</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+# 자격증명은 환경변수 또는 .env 파일에서 로드됨.
+# 환경변수 목록: NETWATCHER_DB_HOST, NETWATCHER_DB_PORT, NETWATCHER_DB_NAME,
+# NETWATCHER_DB_USER, NETWATCHER_DB_PASSWORD, NETWATCHER_SLACK_WEBHOOK_URL,
+# NETWATCHER_SLACK_DASHBOARD_URL, NETWATCHER_JWT_SECRET (.env.example 참조)
+netwatcher:
+  interface:       # null = auto-detect
+  bpf_filter: ""   # additional BPF filter
+  promiscuous: true
+
+  postgresql:
+    enabled: true
+    host: "localhost"
+    port: 35432
+    database: "bee_db"
+    username: "bee"
+    password: ""
+    pool_size: 20
+    max_overflow: 40
+    ssl_mode: "disable"  # disable, allow, prefer, require, verify-ca, verify-full
+
+  logging:
+    level: "INFO"
+    directory: "data/logs"
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+    format: "text"       # "text" or "json"
+
+  web:
+    host: "0.0.0.0"
+    port: 38585
+    enable_docs: false   # /docs, /openapi.json 활성화 여부
+    tls:
+      enabled: false           # true로 설정 시 HTTPS 활성화
+      certfile: ""             # PEM 인증서 경로 (예: /etc/ssl/certs/netwatcher.pem)
+      keyfile: ""              # PEM 개인키 경로 (예: /etc/ssl/private/netwatcher.key)
+      # 리버스 프록시(Nginx 등) 뒤에서 운영할 경우 false로 유지하고
+      # 프록시에서 TLS 종료 처리
+    trusted_proxies:           # X-Forwarded-For를 신뢰할 리버스 프록시 주소
+      - "127.0.0.1"
+      - "::1"
+    cors:
+      allowed_origins:
+      - "http://localhost:38585"
+    csp: "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src
+      'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net;
+      img-src 'self' data:; connect-src 'self' ws: wss: https://cdn.jsdelivr.net"
+
+  auth:
+    enabled: true
+    username: "admin"
+    password: ""          # 반드시 환경변수(NETWATCHER_LOGIN_PASSWORD)로 설정
+    token_expire_hours: 24
+
+  retention:
+    events_days: 90            # 이벤트 보존 일수
+    traffic_stats_days: 365    # 트래픽 통계 보존 일수
+    incidents_days: 180        # 인시던트 보존 일수
+    cleanup_interval_hours: 6  # 정리 주기
+
+  alerts:
+    rate_limit:
+      window_seconds: 300  # 5 minutes
+      max_per_key: 5
+    channels:
+      telegram:
+        enabled: false
+        bot_token: ""
+        chat_id: ""
+        min_severity: "WARNING"
+      slack:
+        enabled: false
+        webhook_url: ""
+        min_severity: "CRITICAL"
+        dashboard_url: "https://watcher.realpt.co.kr"
+      discord:
+        enabled: true
+        webhook_url: ""           # 반드시 환경변수(NETWATCHER_DISCORD_WEBHOOK_URL)로 설정
+        min_severity: "WARNING"
+
+  # Whitelist: suppress alerts for known-safe entities
+  whitelist:
+    ips: []
+    ip_ranges: []        # CIDR notation, e.g. "192.168.1.0/24"
+    macs: []
+    domains:
+    - "github.com"
+    - "raw.githubusercontent.com"
+    - "gitlab.com"
+    - "google.com"
+    - "connectivity-check.ubuntu.com"
+    - "connectivitycheck.gstatic.com"
+    - "captive.apple.com"
+    - "www.msftconnecttest.com"
+    - "detectportal.firefox.com"
+    - "nmcheck.gnome.org"
+    domain_suffixes: [".local", ".internal"]
+
+  engines:
+    arp_spoof:
+      enabled: true
+      gratuitous_window_seconds: 31    # sliding window for gratuitous ARP flood
+      gratuitous_threshold: 10         # gratuitous ARP count to trigger alert
+      cooldown_seconds: 300            # re-alert cooldown
+
+      max_tracked_hosts: 10000
+    dns_anomaly:
+      enabled: true
+      max_label_length: 50
+      max_subdomain_depth: 7           # 5->7, CDN/cloud normal domains
+      entropy_threshold: 3.8           # 3.5->3.8, reduce DGA false positives
+      high_volume_threshold: 200       # queries in window to trigger alert
+      high_volume_window_seconds: 60   # sliding window for volume detection
+      dga_min_label_length: 10         # min label length for DGA check
+      dga_confidence_threshold: 0.5    # composite DGA score threshold
+
+    port_scan:
+      enabled: true
+      window_seconds: 60
+      threshold: 15
+      alerted_cooldown_seconds: 300    # cooldown before re-alerting same pair
+      max_tracked_connections: 10000   # max (src,dst) pairs tracked
+
+    http_suspicious:
+      enabled: true
+      beacon_interval_tolerance: 0.15
+      min_beacon_count: 5
+      beacon_window_seconds: 3600     # 1 hour window for beacon detection
+      max_tracked_pairs: 5000         # max src_ip/host pairs tracked
+
+    traffic_anomaly:
+      enabled: true
+      volume_threshold_multiplier: 3.0
+      min_baseline_bytes: 1000        # baseline >= 1KB to trigger anomaly
+      stats_interval_minutes: 1
+      warmup_ticks: 30                # ticks before anomaly detection activates
+      z_score_threshold: 3.0          # Z-score for Welford-based detection
+      host_eviction_seconds: 86400    # evict hosts unseen for 24h
+      max_tracked_hosts: 50000        # max hosts tracked
+
+    tls_fingerprint:
+      enabled: true
+      check_ja3: true
+      check_ja3s: true
+      check_ja4: true
+      check_sni: true
+      check_cert: true
+
+    dns_response:
+      enabled: true
+      flux_min_ips: 10
+      flux_max_ttl: 300
+      flux_window_seconds: 3600
+      nxdomain_threshold: 10
+      nxdomain_window_seconds: 60
+      max_domains: 10000              # max tracked domains
+      max_tracked_ips: 5000           # max tracked IPs per NXDOMAIN
+
+    threat_intel:
+      enabled: true
+      update_interval_hours: 6
+
+    icmp_anomaly:
+      enabled: true
+      ping_sweep_threshold: 20        # unique dest IPs per source
+      ping_sweep_window_seconds: 30
+      flood_threshold: 100            # ICMP packets per second
+      flood_window_seconds: 1
+      max_tracked_sources: 10000      # max tracked sources
+
+    dhcp_spoof:
+      enabled: true
+      known_servers: []               # 정상 DHCP 서버 IP 목록 (빈 목록 = 자동 학습)
+      starvation_threshold: 50        # DISCOVER count to detect starvation
+      starvation_window_seconds: 60
+
+    lateral_movement:
+      enabled: true
+      lateral_ports: [22, 445, 3389, 135, 5985, 5986, 23, 3306, 5432, 1433, 6379,
+        27017]
+      unique_host_threshold: 5        # unique internal hosts accessed
+      window_seconds: 300             # 5 minute window
+      chain_depth_threshold: 3        # A->B->C->D chain depth
+      max_tracked_connections: 10000  # max tracked connections
+
+    data_exfil:
+      enabled: true
+      byte_threshold: 104857600       # 100MB per hour
+      window_seconds: 3600            # 1 hour
+      dns_txt_size_threshold: 500     # DNS TXT record size (bytes)
+      max_tracked_pairs: 10000        # max tracked src/dst pairs
+
+    protocol_anomaly:
+      enabled: true
+      ttl_change_threshold: 10        # TTL change to trigger alert
+      min_ttl_samples: 5              # min samples before TTL anomaly
+
+    mac_spoof:
+      enabled: true
+      max_ips_per_mac: 5              # IPs per MAC before alert
+      ip_window_seconds: 300          # window for tracking IPs per MAC
+      max_tracked_macs: 10000         # max tracked MACs
+
+    protocol_inspect:
+      enabled: true
+      suspicious_user_agents:
+      - "Nmap"
+      - "sqlmap"
+      - "Nikto"
+      - "DirBuster"
+      - "Hydra"
+      - "Masscan"
+      - "ZmEu"
+      - "w3af"
+      sensitive_paths:
+      - "/admin"
+      - "/wp-login.php"
+      - "/.env"
+      - "/actuator"
+      - "/phpmyadmin"
+      - "/wp-config.php"
+      - "/.git"
+      - "/server-status"
+      check_response: true
+      max_tracked_responses: 5000
+      smtp_ports: [25, 587, 465]
+      ftp_ports: [20, 21]
+      ssh_port: 22
+      sensitive_files:
+      - ".env"
+      - ".htpasswd"
+      - "passwd"
+      - "shadow"
+      - "id_rsa"
+      - ".ssh"
+      smtp_auth_threshold: 5
+      smtp_auth_window: 300
+      ftp_fail_threshold: 5
+      ftp_fail_window: 300
+      max_tracked_sources: 10000
+
+    behavior_profile:
+      enabled: true
+      warmup_ticks: 300             # ticks before detection activates
+      z_threshold: 3.5              # Z-score threshold for anomaly
+      max_tracked_hosts: 10000      # max hosts tracked
+      eviction_seconds: 86400       # evict hosts unseen for 24h
+
+    signature:
+      enabled: true
+      rules_dir: "config/rules"
+      hot_reload: true
+
+  response:
+    enabled: false
+    backend: "iptables"
+    chain_name: "NETWATCHER_BLOCK"
+    default_duration: 3600
+    max_blocks: 1000
+    whitelist: []
+    auto_block_engines:
+    - "threat_intel"
+    - "port_scan"
+    - "arp_spoof"
+
+  daily_report:
+    enabled: true
+    report_hour: 12  # KST noon
+
+  analysis:
+    enabled: false
+    extract_files: true
+    output_dir: "data/extracted"
+    max_file_size: 10485760    # 10MB
+    yara_rules_dir: "config/yara"
+
+  threatfeeds:
+    config_path: "config/threatfeeds.yaml"

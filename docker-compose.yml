@@ -1,0 +1,64 @@
+services:
+  netwatcher:
+    build: .
+    container_name: netwatcher
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./config:/app/config:ro
+      - nw-data:/app/data
+      # TLS 인증서 (web.tls.enabled: true 시 마운트)
+      # - /etc/ssl/certs/netwatcher.pem:/app/certs/cert.pem:ro
+      # - /etc/ssl/private/netwatcher.key:/app/certs/key.pem:ro
+    env_file:
+      - .env
+
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+
+  db:
+    image: postgres:16-alpine
+    container_name: netwatcher-db
+    restart: unless-stopped
+    profiles:
+      - db
+    environment:
+      POSTGRES_DB: ${NETWATCHER_DB_NAME:-netwatcher}
+      POSTGRES_USER: ${NETWATCHER_DB_USER:-netwatcher}
+      POSTGRES_PASSWORD: ${NETWATCHER_DB_PASSWORD:?DB password required}
+    volumes:
+      - nw-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NETWATCHER_DB_USER:-netwatcher}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  db-migrate:
+    build: .
+    container_name: netwatcher-db-migrate
+    profiles:
+      - migrate
+    network_mode: host
+    volumes:
+      - ./config:/app/config:ro
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    env_file:
+      - .env
+    entrypoint: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+
+volumes:
+  nw-data:
+  nw-pgdata:
