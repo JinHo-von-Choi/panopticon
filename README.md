@@ -472,6 +472,32 @@ sudo .venv/bin/python -m netwatcher
 # http://localhost:38585
 ```
 
+### systemd 서비스로 설치 (상시 구동)
+
+`netwatcher.service`는 설치 경로를 `/opt/netwatcher`로 가정한다. 다른 경로에 클론했다면 서비스 등록 전에 복사하거나 서비스 파일의 경로를 수정해야 한다.
+
+```bash
+# 1. /opt/netwatcher 에 소스 배치
+sudo cp -r . /opt/netwatcher
+cd /opt/netwatcher
+
+# 2. 가상환경 구성
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# 3. 환경 변수 설정
+sudo cp .env.example /opt/netwatcher/.env
+sudo nano /opt/netwatcher/.env   # DB 자격증명, JWT 시크릿 등 편집
+
+# 4. 서비스 등록 및 시작
+sudo bash install-service.sh
+
+# 5. 부팅 후 자동 시작 확인
+sudo systemctl status netwatcher
+```
+
+서비스 파일의 주요 경로 (`WorkingDirectory`, `EnvironmentFile`, `ExecStart`) 가 모두 `/opt/netwatcher` 기준이므로 경로를 바꾸려면 `netwatcher.service`를 직접 수정한 뒤 `sudo systemctl daemon-reload`를 실행해야 한다.
+
 ### Docker 배포
 
 ```bash
