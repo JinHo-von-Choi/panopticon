@@ -27,20 +27,23 @@ EVENTS_INDEXES = [
 
 DEVICES_TABLE = """
 CREATE TABLE IF NOT EXISTS devices (
-    id            BIGSERIAL       PRIMARY KEY,
-    mac_address   MACADDR         UNIQUE NOT NULL,
-    ip_address    INET,
-    hostname      VARCHAR(255),
-    vendor        VARCHAR(255),
-    nickname      VARCHAR(128),
-    notes         TEXT            NOT NULL DEFAULT '',
-    first_seen    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    last_seen     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    is_known      BOOLEAN         NOT NULL DEFAULT FALSE,
-    total_packets BIGINT          NOT NULL DEFAULT 0,
-    total_bytes   BIGINT          NOT NULL DEFAULT 0,
-    open_ports    JSONB           NOT NULL DEFAULT '[]',
-    os_hint       VARCHAR(128)
+    id               BIGSERIAL    PRIMARY KEY,
+    mac_address      MACADDR      UNIQUE NOT NULL,
+    ip_address       INET,
+    hostname         VARCHAR(255),
+    vendor           VARCHAR(255),
+    nickname         VARCHAR(128),
+    notes            TEXT         NOT NULL DEFAULT '',
+    first_seen       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    last_seen        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    is_known         BOOLEAN      NOT NULL DEFAULT FALSE,
+    total_packets    BIGINT       NOT NULL DEFAULT 0,
+    total_bytes      BIGINT       NOT NULL DEFAULT 0,
+    open_ports       JSONB        NOT NULL DEFAULT '[]',
+    os_hint          VARCHAR(128),
+    device_type      VARCHAR(32)  NOT NULL DEFAULT 'unknown',
+    hostname_sources JSONB        NOT NULL DEFAULT '{}',
+    ip_history       JSONB        NOT NULL DEFAULT '[]'
 );
 """
 
@@ -48,6 +51,7 @@ DEVICES_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(mac_address);",
     "CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip_address) WHERE ip_address IS NOT NULL;",
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_devices_type ON devices(device_type) WHERE device_type != 'unknown';",
 ]
 
 CUSTOM_BLOCKLIST_TABLE = """

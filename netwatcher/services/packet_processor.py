@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from scapy.all import ARP, DNS, TCP, UDP, Packet
 
 from netwatcher.detection.utils import get_ip_addrs
+from netwatcher.inventory import hostname_resolver
 from netwatcher.utils.geoip import enrich_alert_metadata
 from netwatcher.utils.network import mac_vendor_lookup
 from netwatcher.utils.packet_info import extract_packet_info, guess_os
@@ -24,6 +26,11 @@ if TYPE_CHECKING:
     from netwatcher.utils.network import AsyncDNSResolver
 
 logger = logging.getLogger("netwatcher.services.packet_processor")
+
+
+def _utc_now_iso() -> str:
+    """현재 UTC 시각을 ISO 8601 문자열로 반환한다."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class PacketProcessor:
@@ -103,6 +110,17 @@ class PacketProcessor:
             buf["os_hint"]  = os_hint
             buf["bytes"]   += pkt_len
             buf["packets"] += 1
+
+        # 패시브 호스트명 수집 (DHCP/NetBIOS/mDNS/LLMNR)
+        for hit in hostname_resolver.extract(packet):
+            hit_buf = self._device_buffer.setdefault(
+                hit.mac, {"bytes": 0, "packets": 0},
+            )
+            sources: dict = hit_buf.setdefault("hostname_sources", {})
+            sources[hit.source] = {"name": hit.name, "updated": _utc_now_iso()}
+            # 소스에서 IP를 얻었고 버퍼에 아직 IP가 없는 경우 보완
+            if hit.ip and not hit_buf.get("ip"):
+                hit_buf["ip"] = hit.ip
 
         # 탐지 엔진 실행
         alerts = self.registry.process_packet(packet)

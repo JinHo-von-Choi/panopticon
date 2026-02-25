@@ -16,6 +16,19 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# hostname_sources 우선순위 (인벤토리 모듈과 동기화)
+_HOSTNAME_SOURCE_PRIORITY = ("dhcp", "netbios", "mdns", "llmnr", "reverse_dns")
+
+
+def _best_hostname_from_sources(sources: dict) -> str | None:
+    """hostname_sources dict에서 우선순위에 따라 최적 호스트명을 반환한다."""
+    for src in _HOSTNAME_SOURCE_PRIORITY:
+        entry = sources.get(src)
+        if entry and entry.get("name"):
+            return entry["name"]
+    return None
+
+
 def _sanitize(obj: Any) -> Any:
     """dict/list를 재귀 순회하며 문자열 내 PostgreSQL 저장 불가 null 바이트(\x00)를 제거한다."""
     if isinstance(obj, str):
@@ -239,7 +252,17 @@ class DeviceRepository:
     async def batch_upsert(self, device_buffer: dict[str, dict]) -> None:
         """인메모리 버퍼에서 디바이스를 일괄 upsert한다.
 
-        device_buffer: mac -> {ip, hostname, vendor, os_hint, bytes, packets}
+        device_buffer: mac -> {
+            ip, hostname, vendor, os_hint, bytes, packets,
+            hostname_sources: {source: {name, updated}, ...}  # 선택
+        }
+
+        hostname_sources 처리:
+        - 기존 JSONB와 병합(||): 새 소스가 기존 소스를 덮어쓴다.
+        - hostname 컬럼은 sources 우선순위로 자동 갱신된다.
+
+        ip_history 처리:
+        - IP가 변경된 경우 이전 IP를 history 앞에 prepend (최대 20건 유지).
         """
         if not device_buffer:
             return
@@ -247,26 +270,52 @@ class DeviceRepository:
         async with self._db.pool.acquire() as conn:
             async with conn.transaction():
                 for mac, info in device_buffer.items():
+                    sources: dict = info.get("hostname_sources") or {}
+                    # hostname 컬럼: sources 우선순위 → 기존 역방향DNS hostname 순
+                    best_hostname = _best_hostname_from_sources(sources) or info.get("hostname")
                     await conn.execute(
-                        """INSERT INTO devices (mac_address, ip_address, hostname, vendor,
-                                                first_seen, last_seen, total_packets, total_bytes, os_hint)
-                           VALUES ($1::macaddr, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """INSERT INTO devices
+                               (mac_address, ip_address, hostname, vendor,
+                                first_seen, last_seen, total_packets, total_bytes,
+                                os_hint, hostname_sources)
+                           VALUES ($1::macaddr, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                            ON CONFLICT(mac_address) DO UPDATE SET
                                ip_address = COALESCE(EXCLUDED.ip_address, devices.ip_address),
-                               hostname = COALESCE(EXCLUDED.hostname, devices.hostname),
-                               vendor = COALESCE(EXCLUDED.vendor, devices.vendor),
-                               os_hint = COALESCE(EXCLUDED.os_hint, devices.os_hint),
-                               last_seen = EXCLUDED.last_seen,
-                               total_packets = devices.total_packets + EXCLUDED.total_packets,
-                               total_bytes = devices.total_bytes + EXCLUDED.total_bytes""",
+                               hostname   = COALESCE(EXCLUDED.hostname,   devices.hostname),
+                               vendor     = COALESCE(EXCLUDED.vendor,     devices.vendor),
+                               os_hint    = COALESCE(EXCLUDED.os_hint,    devices.os_hint),
+                               last_seen      = EXCLUDED.last_seen,
+                               total_packets  = devices.total_packets + EXCLUDED.total_packets,
+                               total_bytes    = devices.total_bytes   + EXCLUDED.total_bytes,
+                               hostname_sources = devices.hostname_sources || EXCLUDED.hostname_sources,
+                               ip_history = CASE
+                                   WHEN EXCLUDED.ip_address IS NOT NULL
+                                        AND devices.ip_address IS NOT NULL
+                                        AND devices.ip_address::text != EXCLUDED.ip_address::text
+                                   THEN (
+                                       SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+                                       FROM (
+                                           SELECT jsonb_build_object(
+                                               'ip',        devices.ip_address::text,
+                                               'last_seen', devices.last_seen
+                                           ) AS e
+                                           UNION ALL
+                                           SELECT e
+                                           FROM jsonb_array_elements(devices.ip_history) AS e
+                                           LIMIT 19
+                                       ) sub
+                                   )
+                                   ELSE devices.ip_history
+                               END""",
                         mac,
                         info.get("ip"),
-                        info.get("hostname"),
+                        best_hostname,
                         info.get("vendor"),
                         now, now,
                         info.get("packets", 0),
                         info.get("bytes", 0),
                         info.get("os_hint"),
+                        sources,
                     )
 
     async def update_open_ports(self, mac_address: str, ports: list[int]) -> None:
