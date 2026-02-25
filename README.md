@@ -29,9 +29,11 @@
 - [빠른 시작](#빠른-시작)
 - [설정 가이드](#설정-가이드)
 - [Docker 배포](#docker-배포)
+- [운용 고려사항](#운용-고려사항)
+- [외부 데이터 의존성](#외부-데이터-의존성)
 - [API 레퍼런스](#api-레퍼런스)
 - [확장 가이드](#확장-가이드)
-- [기술 스택](#기술-스택)
+- [기술 스택 및 코드 품질](#기술-스택-및-코드-품질)
 
 ---
 
@@ -662,6 +664,77 @@ web:
 
 ---
 
+## 운용 고려사항
+
+### 성능 및 용량 기준
+
+Panopticon은 단일 Python 프로세스로 동작하므로 처리 한계가 있다. 아래는 일반적인 환경 기준 가이드라인이다.
+
+| 환경 | 권장 구성 | 비고 |
+|------|-----------|------|
+| 가정/소규모 사무실 (< 50 devices) | 2 core, 4 GB RAM | 전체 엔진 활성화 가능 |
+| 중규모 네트워크 (50~200 devices) | 4 core, 8 GB RAM | 트래픽 피크 시 BPF 필터 권장 |
+| 고밀도 트래픽 (> 500 Mbps) | 8 core, 16 GB RAM | TLS, behavior_profile 등 고비용 엔진 선별 비활성화 권장 |
+
+PostgreSQL 측면에서 이벤트 누적 시 체감 성능이 저하되는 임계점은 대략 **이벤트 100만 건 / 트래픽 통계 6개월치** 수준이다. 이 이상이라면 `retention.events_days`, `traffic_stats_days` 값을 낮추거나 PostgreSQL 파티셔닝을 검토한다.
+
+### IRS(자동 차단) 단계적 활성화 권고
+
+자동 차단은 오탐 시 정상 서비스 장애로 직결되므로, **다음 단계를 반드시 거칠 것을 강권한다.**
+
+1. **관찰 단계 (최소 1~2주)**: `response.enabled: false` 상태로 운영하며 어떤 알림이 발생하는지 파악한다.
+2. **화이트리스트 구성**: 내부 서버, 모니터링 에이전트, CI/CD 파이프라인 IP를 `response.whitelist`에 등록한다.
+3. **단일 엔진 시범 적용**: `auto_block_engines`에 `threat_intel`만 먼저 포함하여 외부 위협 IP 차단부터 시작한다.
+4. **전체 활성화**: 오탐율이 안정된 이후 `port_scan`, `arp_spoof` 등을 순차 추가한다.
+
+> 현재 dry-run 모드(로깅만 하고 실제 iptables 미적용)는 별도 구현되어 있지 않다. 위 단계별 접근이 그 대안이다.
+
+### 보안 솔루션 자체의 공격면
+
+Panopticon은 보안 도구이지만 그 자체도 공격 대상이 될 수 있다.
+
+| 항목 | 현재 동작 | 권고 사항 |
+|------|----------|----------|
+| 로그인 rate limit | IP당 10회/분 슬라이딩 윈도우 | 계정 락아웃은 없음. 외부 노출 시 Nginx 앞단 fail2ban 병행 권장 |
+| 관리자 계정 | 단일 계정 (`username: admin` 기본값), 역할 모델 없음 | 배포 즉시 `username`과 `NETWATCHER_LOGIN_PASSWORD`를 변경할 것 |
+| 권한 모델 | 로그인한 단일 사용자가 모든 권한 보유 | 다중 역할(읽기 전용/관리자 분리)은 미구현 |
+| 대시보드 노출 범위 | 기본 포트 38585, `host: 0.0.0.0` | 인터넷 직접 노출 금지. VPN/리버스 프록시 뒤에서 운영 권장 |
+| API 인증 우회 | `auth.enabled: false` 시 전체 무인증 | 테스트 외에는 반드시 `enabled: true` 유지 |
+
+---
+
+## 외부 데이터 의존성
+
+### 위협 인텔리전스 피드
+
+아래 피드는 모두 무료 공개 소스이며 **별도 계정 등록이나 API 키 없이** 사용 가능하다.
+
+| 피드 | 제공처 | 데이터 유형 | 라이선스 |
+|------|--------|-----------|---------|
+| URLhaus | Abuse.ch | 악성 URL 호스트 IP | CC0 |
+| Feodo Tracker | Abuse.ch | C2 서버 IP | CC0 |
+| SSLBL IP | Abuse.ch | SSL 악성 서버 IP | CC0 |
+| SSLBL JA3 | Abuse.ch | 악성 JA3 핑거프린트 | CC0 |
+| ThreatFox | Abuse.ch | 다목적 IOC (IP/도메인) | CC0 |
+| OpenPhish | OpenPhish | 피싱 URL 호스트 | 비상업적 무료 |
+| Emerging Threats | ProofPoint | 침해 IP | 비상업적 무료 |
+| Blocklist.de | Blocklist.de | SSH 공격 IP | 비상업적 무료 |
+| CI BadGuys | CINS Score | 악성 IP | 비상업적 무료 |
+
+> 상업적 목적 배포 시 OpenPhish, Emerging Threats, Blocklist.de, CINS Score의 라이선스 조건을 별도 확인해야 한다.
+
+### GeoIP (선택)
+
+GeoIP 기능을 사용하려면 MaxMind GeoLite2 데이터베이스(`GeoLite2-City.mmdb`, `GeoLite2-ASN.mmdb`)가 필요하다.
+
+1. [MaxMind 계정 생성](https://www.maxmind.com/en/geolite2/signup) (무료)
+2. GeoLite2 City / ASN 다운로드
+3. `config/default.yaml`의 `geoip.path`에 경로 지정
+
+GeoIP 파일이 없으면 IP 지리 정보 없이 정상 동작하며, 탐지 기능에는 영향이 없다.
+
+---
+
 ## API 레퍼런스
 
 모든 API는 JWT 인증이 필요하다 (`Authorization: Bearer <token>`).
@@ -840,7 +913,9 @@ rules:
 
 ---
 
-## 기술 스택
+## 기술 스택 및 코드 품질
+
+### 기술 스택
 
 | 구성 요소 | 기술 | 역할 |
 |-----------|------|------|
@@ -855,6 +930,35 @@ rules:
 | GeoIP | **geoip2** | IP 지리 정보 (MaxMind) |
 | 프론트엔드 | **Chart.js 4.4** | 트래픽/알림 시각화 |
 | 컨테이너 | **Docker** + **Docker Compose** | 프로덕션 배포 |
+
+### 테스트 구조
+
+736개 테스트는 다음 4개 레이어로 구성된다.
+
+| 레이어 | 디렉토리 | 내용 |
+|--------|----------|------|
+| 엔진 단위 | `tests/test_detection/` | 엔진별 Scapy 패킷 직접 구성 → Alert 발생 검증 |
+| 저장소/웹 API | `tests/test_storage/`, `tests/test_web/` | 임시 PostgreSQL DB + FastAPI TestClient |
+| 통합 | `tests/test_integration/` | 전체 파이프라인 (캡처 → 탐지 → 디스패치) |
+| 성능 | `tests/test_performance/` | 패킷 처리량(throughput) 기준선 검증 |
+
+```bash
+# 전체 실행
+.venv/bin/python -m pytest tests/ -v
+
+# 엔진 단위 테스트만
+.venv/bin/python -m pytest tests/test_detection/ -v
+```
+
+### 코드 품질
+
+전체 코드에 Python 타입 힌트가 적용되어 있다. 린터/포매터 설정 파일은 별도로 포함되어 있지 않으나 ruff + mypy 기준으로 점검 후 기여하는 것을 권장한다.
+
+```bash
+pip install ruff mypy
+ruff check netwatcher/
+mypy netwatcher/ --ignore-missing-imports
+```
 
 ---
 
