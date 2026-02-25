@@ -220,17 +220,19 @@ class NetWatcher:
 
         # ── 일일 리포트 스케줄러 ──────────────────────────────────────────
         daily_reporter = None
-        daily_cfg = self.config.section("daily_report") or {}
-        slack_cfg = self.config.section("alerts").get("channels", {}).get("slack", {})
-        if daily_cfg.get("enabled") and slack_cfg.get("webhook_url"):
+        daily_cfg    = self.config.section("daily_report") or {}
+        channels_cfg = self.config.section("alerts").get("channels", {})
+        _any_channel_enabled = any(
+            channels_cfg.get(ch, {}).get("enabled")
+            for ch in ("slack", "telegram", "discord")
+        )
+        if daily_cfg.get("enabled") and _any_channel_enabled:
             from netwatcher.alerts.daily_report import DailyReporter
             daily_reporter = DailyReporter(
-                webhook_url=slack_cfg["webhook_url"],
+                config=self.config,
                 event_repo=event_repo,
                 device_repo=device_repo,
                 stats_repo=stats_repo,
-                dashboard_url=slack_cfg.get("dashboard_url", ""),
-                report_hour=daily_cfg.get("report_hour", 12),
             )
             await daily_reporter.start()
 
