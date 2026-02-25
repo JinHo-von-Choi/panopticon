@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.netflow.processor import FlowProcessor
     from netwatcher.utils.yaml_editor import YamlConfigEditor
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,9 @@ class ToggleRequest(BaseModel):
 
 
 def create_engines_router(
-    registry: EngineRegistry,
-    yaml_editor: YamlConfigEditor,
+    registry: "EngineRegistry",
+    yaml_editor: "YamlConfigEditor",
+    flow_processor: "FlowProcessor | None" = None,
 ) -> APIRouter:
     """엔진 설정 API 라우터 팩토리.
 
@@ -44,8 +46,22 @@ def create_engines_router(
 
     @router.get("/engines")
     async def list_engines():
-        """모든 탐지 엔진 목록 반환."""
+        """모든 탐지 엔진 목록 반환 (패킷 기반 + NetFlow 기반)."""
+        from netwatcher.detection.schema_utils import schema_to_api
         engines = registry.get_all_engine_info()
+
+        if flow_processor is not None:
+            for eng in flow_processor.engines:
+                engines.append({
+                    "name":          eng.name,
+                    "description":   eng.description,
+                    "enabled":       eng.enabled,
+                    "requires_span": False,
+                    "source":        "netflow",
+                    "config":        dict(eng.config),
+                    "schema":        schema_to_api(eng.config_schema),
+                })
+
         return {"engines": engines}
 
     @router.get("/engines/{name}")
@@ -102,7 +118,14 @@ def create_engines_router(
 
     @router.patch("/engines/{name}/toggle")
     async def toggle_engine(name: str, body: ToggleRequest):
-        """엔진 활성화/비활성화 토글."""
+        """엔진 활성화/비활성화 토글 (패킷 기반 + NetFlow 기반)."""
+        # NetFlow 엔진 처리 (in-memory 토글, YAML 재시작 시 config 적용)
+        if flow_processor is not None:
+            for eng in flow_processor.engines:
+                if eng.name == name:
+                    eng.enabled = body.enabled
+                    return {"status": "ok", "name": name, "enabled": body.enabled}
+
         info = registry.get_engine_info(name)
         if info is None:
             return JSONResponse(

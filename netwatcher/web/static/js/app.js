@@ -613,6 +613,21 @@
             items.push(["판단 근거", "위협 인텔리전스 피드(abuse.ch, Feodo 등)에 등록된 악성 지표와 일치"]);
         }
 
+        if (engine === "flow_port_scan") {
+            if (meta.unique_ports) items.push(["고유 포트 수", meta.unique_ports + "개"]);
+            if (meta.window_seconds) items.push(["탐지 윈도우", meta.window_seconds + "초"]);
+            items.push(["데이터 소스", "NetFlow v5 (SPAN 불필요)"]);
+            items.push(["판단 근거", "라우터 NetFlow 기록에서 단시간 내 다수 고유 포트 접근 → 포트 스캔"]);
+        }
+
+        if (engine === "flow_data_exfil") {
+            if (meta.total_bytes) items.push(["전송량", (meta.total_bytes / 1048576).toFixed(1) + " MB"]);
+            if (meta.threshold_bytes) items.push(["임계값", (meta.threshold_bytes / 1048576).toFixed(0) + " MB"]);
+            if (meta.window_seconds) items.push(["집계 윈도우", meta.window_seconds + "초"]);
+            items.push(["데이터 소스", "NetFlow v5 (SPAN 불필요)"]);
+            items.push(["판단 근거", "내부 호스트에서 외부로 대용량 전송 감지 → 데이터 유출 의심"]);
+        }
+
         if (items.length > 0) {
             html += '<div class="detail-grid" style="margin-top:12px">';
             items.forEach(function (item) {
@@ -1330,9 +1345,11 @@
             var card = document.createElement("div");
             card.className = "engine-card" + (selectedEngine === eng.name ? " selected" : "");
             var displayName = eng.name.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
-            // SPAN 배지: 엔진이 SPAN을 필요로 하는 경우 표시
+            // SPAN / NetFlow 배지
             var spanBadge = "";
-            if (eng.requires_span) {
+            if (eng.source === "netflow") {
+                spanBadge = '<span class="engine-span-badge span-ok" title="NetFlow 기반 — SPAN 불필요">NetFlow</span>';
+            } else if (eng.requires_span) {
                 var visCard  = document.getElementById("stat-visibility-card");
                 var spanOk   = visCard && visCard.classList.contains("vis-full");
                 var badgeCls = "engine-span-badge" + (spanOk ? " span-ok" : "");

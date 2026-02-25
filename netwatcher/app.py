@@ -176,6 +176,45 @@ class NetWatcher:
                 sig_engine = engine
                 break
 
+        # ── NetFlow/IPFIX 수신기 (선택, enabled: true 시 활성화) ──────────
+        # create_app 보다 먼저 초기화해야 FlowEngine이 엔진 목록 API에 노출된다.
+        flow_processor = None
+        flow_collector = None
+        netflow_cfg = self.config.section("netflow") or {}
+        if netflow_cfg.get("enabled", False):
+            from netwatcher.netflow.collector import FlowCollector
+            from netwatcher.netflow.processor import FlowProcessor
+            from netwatcher.netflow.engines.port_scan import FlowPortScanEngine
+            from netwatcher.netflow.engines.data_exfil import FlowDataExfilEngine
+
+            flow_processor = FlowProcessor(dispatcher=dispatcher)
+
+            engines_cfg = netflow_cfg.get("engines", {})
+
+            ps_cfg = engines_cfg.get("flow_port_scan", {})
+            if ps_cfg.get("enabled", True):
+                flow_processor.register_engine(FlowPortScanEngine(ps_cfg))
+
+            de_cfg = engines_cfg.get("flow_data_exfil", {})
+            if de_cfg.get("enabled", True):
+                flow_processor.register_engine(FlowDataExfilEngine(de_cfg))
+
+            flow_collector = FlowCollector(
+                processor = flow_processor,
+                host      = netflow_cfg.get("host", "0.0.0.0"),
+                port      = netflow_cfg.get("port", 2055),
+            )
+            await flow_collector.start()
+            tick_service.set_flow_processor(flow_processor)
+            logger.info(
+                "NetFlow collector enabled on %s:%d (%d flow engines)",
+                netflow_cfg.get("host", "0.0.0.0"),
+                netflow_cfg.get("port", 2055),
+                len(flow_processor.engines),
+            )
+        else:
+            logger.info("NetFlow collector disabled (netflow.enabled: false)")
+
         # ── 웹 서버 ───────────────────────────────────────────────────────
         app = create_app(
             config=self.config,
@@ -192,6 +231,7 @@ class NetWatcher:
             signature_engine=sig_engine,
             registry=self.registry,
             yaml_editor=self._yaml_editor,
+            flow_processor=flow_processor,
         )
 
         import uvicorn
@@ -247,43 +287,6 @@ class NetWatcher:
                 config=self.config,
             )
             await asset_monitor.start()
-
-        # ── NetFlow/IPFIX 수신기 (선택, enabled: true 시 활성화) ──────────
-        flow_collector = None
-        netflow_cfg = self.config.section("netflow") or {}
-        if netflow_cfg.get("enabled", False):
-            from netwatcher.netflow.collector import FlowCollector
-            from netwatcher.netflow.processor import FlowProcessor
-            from netwatcher.netflow.engines.port_scan import FlowPortScanEngine
-            from netwatcher.netflow.engines.data_exfil import FlowDataExfilEngine
-
-            flow_processor = FlowProcessor(dispatcher=dispatcher)
-
-            engines_cfg = netflow_cfg.get("engines", {})
-
-            ps_cfg = engines_cfg.get("flow_port_scan", {})
-            if ps_cfg.get("enabled", True):
-                flow_processor.register_engine(FlowPortScanEngine(ps_cfg))
-
-            de_cfg = engines_cfg.get("flow_data_exfil", {})
-            if de_cfg.get("enabled", True):
-                flow_processor.register_engine(FlowDataExfilEngine(de_cfg))
-
-            flow_collector = FlowCollector(
-                processor = flow_processor,
-                host      = netflow_cfg.get("host", "0.0.0.0"),
-                port      = netflow_cfg.get("port", 2055),
-            )
-            await flow_collector.start()
-            tick_service.set_flow_processor(flow_processor)
-            logger.info(
-                "NetFlow collector enabled on %s:%d (%d flow engines)",
-                netflow_cfg.get("host", "0.0.0.0"),
-                netflow_cfg.get("port", 2055),
-                len(flow_processor.engines),
-            )
-        else:
-            logger.info("NetFlow collector disabled (netflow.enabled: false)")
 
         # ── DNS 리졸버 & 스니퍼 ──────────────────────────────────────────
         await self._dns_resolver.start()
