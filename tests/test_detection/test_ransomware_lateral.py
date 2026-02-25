@@ -73,3 +73,83 @@ class TestHoneypotDetection:
         engine = RansomwareLateralEngine(cfg)
         pkt = make_syn("192.168.1.10", "10.0.0.99", 445)
         assert engine.analyze(pkt) is None
+
+
+class TestSmbWormScan:
+    def setup_method(self):
+        self.engine = RansomwareLateralEngine({
+            **_CFG,
+            "smb_scan_threshold": 5,
+            "smb_scan_window_seconds": 30,
+            "honeypot_ips": [],
+        })
+
+    def _send_smb_syns(self, src: str, dst_prefix: str, count: int):
+        for i in range(count):
+            pkt = make_syn(src, f"{dst_prefix}.{10 + i}", 445)
+            self.engine.analyze(pkt)
+
+    def test_below_threshold_no_alert(self):
+        self._send_smb_syns("192.168.1.10", "192.168.1", 4)
+        alerts = self.engine.on_tick(time.time())
+        smb_alerts = [a for a in alerts if "SMB" in a.title]
+        assert len(smb_alerts) == 0
+
+    def test_at_threshold_fires_warning(self):
+        self._send_smb_syns("192.168.1.10", "192.168.1", 5)
+        alerts = self.engine.on_tick(time.time())
+        smb_alerts = [a for a in alerts if "SMB" in a.title]
+        assert len(smb_alerts) == 1
+        assert smb_alerts[0].severity == Severity.WARNING
+        assert smb_alerts[0].source_ip == "192.168.1.10"
+
+    def test_same_dst_repeated_does_not_trigger(self):
+        """동일 대상 반복은 고유 호스트 수를 늘리지 않는다."""
+        src = "192.168.1.10"
+        for _ in range(10):
+            self.engine.analyze(make_syn(src, "192.168.1.20", 445))
+        alerts = self.engine.on_tick(time.time())
+        smb_alerts = [a for a in alerts if "SMB" in a.title]
+        assert len(smb_alerts) == 0
+
+    def test_external_src_ignored(self):
+        """외부 IP 출발 SMB 스캔은 무시한다 (경계 방화벽 영역)."""
+        for i in range(10):
+            self.engine.analyze(make_syn("8.8.8.8", f"192.168.1.{10 + i}", 445))
+        alerts = self.engine.on_tick(time.time())
+        assert len(alerts) == 0
+
+    def test_non_445_port_ignored(self):
+        for i in range(5):
+            self.engine.analyze(make_syn("192.168.1.11", f"192.168.1.{20 + i}", 80))
+        alerts = self.engine.on_tick(time.time())
+        smb_alerts = [a for a in alerts if "SMB" in a.title]
+        assert len([a for a in smb_alerts if a.source_ip == "192.168.1.11"]) == 0
+
+    def test_alert_metadata_includes_target_count(self):
+        self._send_smb_syns("192.168.1.10", "192.168.1", 7)
+        alerts = self.engine.on_tick(time.time())
+        smb = next(a for a in alerts if "SMB" in a.title)
+        assert smb.metadata.get("unique_targets") == 7
+
+    def test_cooldown_suppresses_second_alert(self):
+        """쿨다운 내 동일 소스의 중복 알림을 억제한다."""
+        self._send_smb_syns("192.168.1.10", "192.168.1", 5)
+        self.engine.on_tick(time.time())  # 첫 알림
+
+        # 더 보내도 쿨다운 내에서는 재알림 없음
+        self._send_smb_syns("192.168.1.10", "192.168.2", 5)
+        alerts2 = self.engine.on_tick(time.time())
+        smb_alerts2 = [a for a in alerts2 if "SMB" in a.title]
+        assert len(smb_alerts2) == 0
+
+    def test_whitelisted_src_no_alert(self):
+        """화이트리스트에 등록된 IP는 SMB 스캔 알림을 발생시키지 않는다."""
+        from netwatcher.detection.whitelist import Whitelist
+        wl = Whitelist({"ips": ["192.168.1.10"], "ip_ranges": [], "macs": [],
+                        "domains": [], "domain_suffixes": []})
+        self.engine.set_whitelist(wl)
+        self._send_smb_syns("192.168.1.10", "192.168.1", 10)
+        alerts = self.engine.on_tick(time.time())
+        smb_alerts = [a for a in alerts if "SMB" in a.title]
+        assert len(smb_alerts) == 0

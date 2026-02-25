@@ -151,7 +151,65 @@ class RansomwareLateralEngine(DetectionEngine):
 
     def on_tick(self, timestamp: float) -> list[Alert]:
         """슬라이딩 윈도우 집계 결과를 바탕으로 알림을 생성한다."""
-        return []  # Task 3, 4에서 구현
+        alerts: list[Alert] = []
+        now    = time.time()
+
+        # ── SMB 워드 스캔 탐지 ───────────────────────────────────────────
+        smb_cutoff = now - self._smb_window
+        dead_smb: list[str] = []
+
+        for src_ip, entries in self._smb.items():
+            # 화이트리스트 확인
+            if self.is_whitelisted(source_ip=src_ip):
+                dead_smb.append(src_ip)
+                continue
+
+            # 윈도우 밖 항목 제거
+            while entries and entries[0][0] < smb_cutoff:
+                entries.popleft()
+
+            if not entries:
+                dead_smb.append(src_ip)
+                continue
+
+            unique_targets = {dst for _, dst in entries}
+            if len(unique_targets) >= self._smb_threshold:
+                key  = f"smb:{src_ip}"
+                last = self._alerted.get(key, 0.0)
+                if now - last >= self._cooldown:
+                    self._alerted[key] = now
+                    confidence = min(1.0, 0.6 + len(unique_targets) * 0.02)
+                    alerts.append(Alert(
+                        engine      = self.name,
+                        severity    = Severity.WARNING,
+                        title       = f"SMB Worm Scan: {src_ip}",
+                        description = (
+                            f"Internal host {src_ip} sent TCP/445 SYN to "
+                            f"{len(unique_targets)} unique internal hosts in "
+                            f"{self._smb_window}s. "
+                            "Pattern consistent with SMB worm propagation (WannaCry/EternalBlue)."
+                        ),
+                        source_ip   = src_ip,
+                        confidence  = confidence,
+                        metadata    = {
+                            "unique_targets": len(unique_targets),
+                            "target_sample":  sorted(unique_targets)[:10],
+                            "window_seconds": self._smb_window,
+                            "threshold":      self._smb_threshold,
+                        },
+                    ))
+
+        for k in dead_smb:
+            del self._smb[k]
+
+        # ── RDP 브루트포스 탐지 (Task 4에서 추가) ────────────────────────
+
+        # ── 만료된 쿨다운 정리 ───────────────────────────────────────────
+        expired = [k for k, t in self._alerted.items() if now - t > self._cooldown * 2]
+        for k in expired:
+            del self._alerted[k]
+
+        return alerts
 
     def shutdown(self) -> None:
         """종료 시 모든 추적 자료구조를 정리한다."""
