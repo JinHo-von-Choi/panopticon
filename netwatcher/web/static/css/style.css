@@ -114,10 +114,20 @@ header h1 {
 .header-right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: 13px;
+}
+
+#clock {
+    background: var(--accent-bg);
+    color: var(--accent);
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
 }
 
 .status-dot {
@@ -166,11 +176,11 @@ main {
     background: var(--surface);
     border: 1px solid var(--border);
     border-left: 4px solid transparent;
-    border-radius: var(--radius-md);
-    padding: 18px 18px 18px;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: 16px 18px;
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 6px;
     position: relative;
     overflow: hidden;
     transition: transform var(--transition), box-shadow var(--transition);
@@ -239,27 +249,29 @@ main {
    ================================================================ */
 .tabs {
     display: flex;
-    gap: 0;
+    gap: 4px;
     border-bottom: 1px solid var(--border);
-    margin-bottom: 20px;
+    margin-bottom: 24px;
 }
 
 .tab {
     background: none;
     border: none;
     color: var(--text-dim);
-    padding: 12px 22px;
+    padding: 12px 24px;
     cursor: pointer;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
-    transition: color var(--transition-fast), border-color var(--transition-fast);
+    transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
     position: relative;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .tab:hover {
     color: var(--text);
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .tab.active {
@@ -270,14 +282,12 @@ main {
 .tab.active::after {
     content: '';
     position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 4px;
-    height: 4px;
-    background: var(--accent);
-    border-radius: 50% 50% 0 0;
-    opacity: 0.5;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+    pointer-events: none;
 }
 
 .tab-content { display: none; }
@@ -289,9 +299,13 @@ main {
 .toolbar {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 10px;
     margin-bottom: 16px;
     align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 14px 18px;
 }
 
 select {
@@ -360,14 +374,20 @@ select:focus {
 }
 
 .btn-export {
-    background: var(--accent-bg);
-    color: var(--accent);
-    border-color: rgba(95, 111, 255, 0.3);
+    background: var(--surface3);
+    color: var(--text);
+    border-color: var(--border);
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 7px 14px;
 }
 
 .btn-export:hover {
-    background: rgba(95, 111, 255, 0.2);
-    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+    border-color: rgba(95, 111, 255, 0.4);
 }
 
 .btn-sm {
@@ -492,8 +512,8 @@ th {
 }
 
 td {
-    padding: 10px 16px;
-    border-top: 1px solid rgba(46, 51, 72, 0.6);
+    padding: 12px 16px;
+    border-top: 1px solid rgba(46, 51, 72, 0.4);
     font-size: 13px;
 }
 
@@ -502,7 +522,7 @@ tbody tr {
 }
 
 tbody tr:hover td {
-    background: rgba(36, 40, 54, 0.7);
+    background: rgba(255, 255, 255, 0.03);
 }
 
 tr.clickable { cursor: pointer; }
@@ -512,8 +532,8 @@ tr.clickable { cursor: pointer; }
    ================================================================ */
 .severity-badge {
     display: inline-block;
-    padding: 4px 12px;
-    border-radius: 999px;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
@@ -663,12 +683,14 @@ tr.clickable { cursor: pointer; }
 }
 
 .chart-card h3 {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-dim);
     text-transform: uppercase;
-    letter-spacing: 0.7px;
+    letter-spacing: 0.5px;
     margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
 }
 
 .chart-card canvas {
@@ -922,11 +944,11 @@ textarea.input-search {
 .login-box {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 40px 36px;
+    border-radius: var(--radius-xl);
+    padding: 48px 40px;
     width: 100%;
-    max-width: 460px;
-    box-shadow: var(--shadow-lg);
+    max-width: 420px;
+    box-shadow: var(--shadow-lg), 0 0 80px rgba(95, 111, 255, 0.06);
     animation: modal-in 0.25s cubic-bezier(0.34, 1.1, 0.64, 1);
 }
 
@@ -1157,8 +1179,8 @@ textarea.input-search {
 .inv-summary {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 16px;
+    gap: 10px;
+    margin-bottom: 20px;
 }
 
 .inv-type-card {
@@ -1215,17 +1237,21 @@ textarea.input-search {
 .bl-stats {
     display: flex;
     gap: 10px;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
     font-size: 13px;
     color: var(--text-dim);
     flex-wrap: wrap;
-}
-
-.bl-stats span {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 7px 14px;
+    padding: 14px 18px;
+}
+
+.bl-stats span {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
 }
 
 .bl-stats .stat-num {

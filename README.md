@@ -23,6 +23,7 @@
 - [개요](#개요)
 - [주요 기능](#주요-기능)
 - [시스템 아키텍처](#시스템-아키텍처)
+- [네트워크 가시성 요구사항](#네트워크-가시성-요구사항)
 - [탐지 엔진 상세](#탐지-엔진-상세)
 - [웹 대시보드](#웹-대시보드)
 - [스크린샷](#스크린샷)
@@ -154,6 +155,151 @@ Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포�
 | `TickService` | 1초 | 엔진 `on_tick()` 호출 (시간 윈도우 기반 탐지), 스니퍼 워치독 |
 | `StatsFlushService` | 60초 | 트래픽 카운터/디바이스 버퍼를 DB에 배치 플러시, Prometheus 메트릭 업데이트 |
 | `MaintenanceService` | 6시간 | 데이터 보존 정책 적용, 위협 피드 갱신, 만료 차단 정리 |
+
+---
+
+## 네트워크 가시성 요구사항
+
+> **핵심 전제**: Panopticon은 트래픽을 분석하는 도구다. 분석할 트래픽이 NIC에 도달해야 한다.
+> SPAN/포트 미러링 없이는 스위치가 격리한 유니캐스트 트래픽이 절대 보이지 않는다.
+
+### 가시성 없이 발생하는 문제
+
+일반 공유기 + 비관리형 스위치 환경에서 Panopticon을 설치하면:
+
+- **보이는 것**: 자기 자신의 트래픽, ARP 브로드캐스트, DHCP, 멀티캐스트
+- **안 보이는 것**: 다른 호스트 간의 모든 유니캐스트 트래픽
+
+결과적으로 18개 탐지 엔진 중 3개(ARP/DHCP/MAC 스푸핑)만 실질적으로 동작한다.
+나머지 15개 엔진은 활성화되어 있어도 분석할 패킷이 도달하지 않아 사실상 휴면 상태가 된다.
+
+### 배포 토폴로지 옵션
+
+세 가지 옵션이 있으며, 각각 트레이드오프가 다르다.
+
+#### 옵션 1: 관리형 스위치 SPAN (권장)
+
+```
+인터넷
+  │
+[라우터]
+  │
+[관리형 스위치] ─── SPAN 미러 포트 ───> [Panopticon 호스트]
+  ├── Host A
+  ├── Host B
+  └── Host C
+```
+
+| 항목 | 내용 |
+|------|------|
+| 장점 | 네트워크 성능에 영향 없음, 인라인 장비 불필요 |
+| 단점 | 관리형 스위치 필요 (Cisco, Netgear, TP-Link, MikroTik 관리형 등) |
+| 주의 | 소비자용 비관리형 스위치는 포트 미러링 미지원 |
+
+벤더별 SPAN 설정 방법은 아래 [SPAN 설정 방법 (주요 벤더)](#span-설정-방법-주요-벤더) 참조.
+
+#### 옵션 2: 라우터/방화벽에 직접 설치
+
+```
+인터넷
+  │
+[OpenWrt / pfSense / MikroTik CHR 라우터] ← Panopticon 직접 설치
+  │
+[스위치]
+  ├── Host A
+  └── Host B
+```
+
+| 항목 | 내용 |
+|------|------|
+| 장점 | 모든 트래픽을 라우터 수준에서 캡처, 별도 하드웨어 불필요 |
+| 단점 | 라우터 CPU를 공유, 커스텀 펌웨어(OpenWrt 등) 필요 |
+| 추천 환경 | OpenWrt 설치 가능한 공유기, pfSense/OPNsense 방화벽 |
+
+#### 옵션 3: Raspberry Pi 인라인 탭 (SPAN 없는 환경 대안)
+
+```
+인터넷
+  │
+[라우터]
+  │
+[Raspberry Pi — eth0 ↔ br0 ↔ eth1] ← Panopticon이 br0에서 캡처
+  │
+[비관리형 스위치]
+  ├── Host A
+  └── Host B
+```
+
+| 항목 | 내용 |
+|------|------|
+| 장점 | 비관리형 스위치 환경에서도 전체 가시성 확보, 저비용 (Pi 4B 기준 약 10만원) |
+| 단점 | 인라인 구성 — Pi 장애 시 해당 세그먼트 네트워크 단절 |
+| 처리 한계 | Raspberry Pi 4B 기준 ~300Mbps 실용 상한 (GbE 풀 속도 불가) |
+
+```bash
+# Raspberry Pi 브릿지 구성 (eth0: 업스트림, eth1: 다운스트림)
+ip link add name br0 type bridge
+ip link set eth0 master br0
+ip link set eth1 master br0
+ip link set br0 up
+ip addr flush dev eth0
+ip addr flush dev eth1
+
+# Panopticon을 br0 인터페이스에서 실행
+# config/default.yaml: interface: br0
+```
+
+장애 대비를 위해 브릿지 양단에 **STP(Spanning Tree Protocol)를 비활성화**하고,
+Pi 전원 장애 시 네트워크가 복구되도록 별도 물리 바이패스 스위치를 고려한다.
+
+### 가시성 수준 확인
+
+대시보드 상단의 **Hosts Visible** 카드가 가시성 수준을 실시간으로 표시한다.
+직전 60초 윈도우에서 관찰된 고유 source MAC 수를 기준으로 판정한다.
+
+| 수준 | 고유 source MAC | 의미 |
+|------|----------------|------|
+| `none` | 1 ~ 2개 | SPAN 미구성. ARP/DHCP 탐지만 동작 |
+| `partial` | 3 ~ 8개 | 일부 트래픽만 가시. 토폴로지 점검 필요 |
+| `full` | 9개 이상 | SPAN 정상 동작. 전체 탐지 활성 |
+
+`none` 상태에서 `port_scan`, `lateral_movement` 등 유니캐스트 의존 엔진을 활성화해도
+탐지 결과가 발생하지 않는다. 이는 오류가 아니라 가시성 부재에 의한 정상 동작이다.
+
+### 엔진별 가시성 요구사항
+
+| 엔진 | SPAN 없이 동작 | SPAN 필요 |
+|------|:--------------:|:---------:|
+| ARP Spoof (`arp_spoof`) | O | |
+| DHCP Spoof (`dhcp_spoof`) | O | |
+| MAC Spoof (`mac_spoof`) | O | |
+| Port Scan (`port_scan`) | | O |
+| ICMP Anomaly (`icmp_anomaly`) | | O |
+| Protocol Anomaly (`protocol_anomaly`) | | O |
+| Lateral Movement (`lateral_movement`) | | O |
+| Ransomware Lateral (`ransomware_lateral`) | | O |
+| DNS Anomaly (`dns_anomaly`) | | O |
+| DNS Response (`dns_response`) | | O |
+| HTTP Suspicious (`http_suspicious`) | | O |
+| Protocol Inspect (`protocol_inspect`) | | O |
+| TLS Fingerprint (`tls_fingerprint`) | | O |
+| Traffic Anomaly (`traffic_anomaly`) | | O |
+| Behavior Profile (`behavior_profile`) | | O |
+| Data Exfiltration (`data_exfil`) | | O |
+| Threat Intel (`threat_intel`) | | O |
+| Signature (`signature`) | | O |
+
+### SPAN 설정 방법 (주요 벤더)
+
+| 벤더 | 설정 키워드 |
+|------|------------|
+| Cisco IOS / Catalyst | `monitor session` (SPAN) |
+| Cisco Nexus | `monitor session` (SPAN / ERSPAN) |
+| Netgear 관리형 | Port Mirroring |
+| TP-Link 관리형 | Port Mirroring |
+| Ubiquiti EdgeSwitch | Port Mirror |
+| MikroTik | `/interface ethernet switch mirror` |
+| OpenWrt | 브릿지 모드 직접 설치 권장 (옵션 2 참조) |
 
 ---
 
@@ -391,46 +537,13 @@ rules:
 
 ## 웹 대시보드
 
-### SPAN 포트 없이 동작하는 기능
+### 가시성 수준 표시 (Hosts Visible)
 
-> **SPAN/포트 미러링이란?** 스위치의 특정 포트로 모든 트래픽을 복사하는 기능이다. 이것 없이는 모니터링 호스트가 자신의 트래픽 + 브로드캐스트(ARP·DHCP)만 볼 수 있다.
+대시보드 상단의 **Hosts Visible** 카드는 직전 60초 윈도우에서 관찰된 고유 source MAC 수를 기반으로
+현재 네트워크 가시성 수준을 `none` / `partial` / `full` 세 단계로 표시한다.
 
-| 엔진 / 기능 | SPAN 없이 동작 | SPAN 필요 |
-|-------------|:--------------:|:---------:|
-| ARP Spoof (`arp_spoof`) | O | |
-| DHCP Spoof (`dhcp_spoof`) | O | |
-| MAC Spoof (`mac_spoof`) | O | |
-| Port Scan (`port_scan`) | | O |
-| ICMP Anomaly (`icmp_anomaly`) | | O |
-| Protocol Anomaly (`protocol_anomaly`) | | O |
-| Lateral Movement (`lateral_movement`) | | O |
-| Ransomware Lateral (`ransomware_lateral`) | | O |
-| DNS Anomaly (`dns_anomaly`) | | O |
-| DNS Response (`dns_response`) | | O |
-| HTTP Suspicious (`http_suspicious`) | | O |
-| Protocol Inspect (`protocol_inspect`) | | O |
-| TLS Fingerprint (`tls_fingerprint`) | | O |
-| Traffic Anomaly (`traffic_anomaly`) | | O |
-| Behavior Profile (`behavior_profile`) | | O |
-| Data Exfiltration (`data_exfil`) | | O |
-| Threat Intel (`threat_intel`) | | O |
-| Signature (`signature`) | | O |
-
-SPAN 없이 운용할 경우 ARP·DHCP 계층 탐지와 자산 인벤토리 기능은 정상 동작한다. 대시보드 **Hosts Visible** 카드가 가시성 수준을 실시간으로 표시한다.
-
-#### SPAN 설정 방법 (주요 벤더)
-
-| 벤더 | 설정 키워드 |
-|------|------------|
-| Cisco IOS / Catalyst | `monitor session` (SPAN) |
-| Cisco Nexus | `monitor session` (SPAN / ERSPAN) |
-| Netgear 관리형 | Port Mirroring |
-| TP-Link 관리형 | Port Mirroring |
-| Ubiquiti EdgeSwitch | Port Mirror |
-| MikroTik | `/interface ethernet switch mirror` |
-| OpenWrt | 브리지 모드 직접 설치 권장 |
-
-비관리형(Unmanaged) 스위치는 포트 미러링을 지원하지 않는다. 네트워크 경로상의 라우터(OpenWrt·pfSense)에 직접 설치하는 것이 가장 효과적인 대안이다.
+SPAN 구성 방법, 배포 토폴로지 옵션(관리형 스위치 / 라우터 직접 설치 / Raspberry Pi 인라인 탭),
+엔진별 가시성 요구사항 테이블은 [네트워크 가시성 요구사항](#네트워크-가시성-요구사항) 섹션을 참조한다.
 
 ---
 
@@ -508,10 +621,21 @@ SPAN 없이 운용할 경우 ARP·DHCP 계층 탐지와 자산 인벤토리 기�
 
 ### 사전 요구 사항
 
+**소프트웨어**
+
 - Python 3.12+
 - PostgreSQL 16+ (또는 Docker)
 - libpcap (패킷 캡처용)
 - root 권한 (raw socket 접근)
+
+**네트워크 토폴로지 (설치 전 필수 확인)**
+
+Panopticon을 설치하기 전에 트래픽이 실제로 도달하는 환경인지 확인해야 한다.
+SPAN/TAP 없이 비관리형 스위치 하단에 설치하면 15개 엔진이 동작하지 않는다.
+
+- 관리형 스위치가 있다면 → SPAN 포트를 Panopticon 호스트로 구성
+- 비관리형 스위치 환경이라면 → 라우터에 직접 설치하거나 Raspberry Pi 인라인 탭 구성
+- 상세 방법은 [네트워크 가시성 요구사항](#네트워크-가시성-요구사항) 참조
 
 ### 로컬 설치
 
