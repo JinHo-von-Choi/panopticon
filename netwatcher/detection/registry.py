@@ -171,11 +171,12 @@ class EngineRegistry:
         active = self._find_active(name)
         if active is not None:
             return {
-                "name":        name,
-                "description": engine_cls.description,
-                "enabled":     True,
-                "config":      dict(active.config),
-                "schema":      schema_to_api(engine_cls.config_schema),
+                "name":          name,
+                "description":   engine_cls.description,
+                "enabled":       True,
+                "requires_span": getattr(engine_cls, "requires_span", False),
+                "config":        dict(active.config),
+                "schema":        schema_to_api(engine_cls.config_schema),
             }
 
         # 비활성 엔진: YAML 설정에서 config 가져오기
@@ -183,11 +184,12 @@ class EngineRegistry:
         if not isinstance(yaml_config, dict):
             yaml_config = {}
         return {
-            "name":        name,
-            "description": engine_cls.description,
-            "enabled":     False,
-            "config":      dict(yaml_config),
-            "schema":      schema_to_api(engine_cls.config_schema),
+            "name":          name,
+            "description":   engine_cls.description,
+            "enabled":       False,
+            "requires_span": getattr(engine_cls, "requires_span", False),
+            "config":        dict(yaml_config),
+            "schema":        schema_to_api(engine_cls.config_schema),
         }
 
     def get_all_engine_info(self) -> list[dict[str, Any]]:

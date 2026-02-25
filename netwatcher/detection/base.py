@@ -21,6 +21,10 @@ class DetectionEngine(abc.ABC):
     # 기본 틱 간격(초) — 서브클래스에서 오버라이드 가능
     tick_interval: int = 1
 
+    # True이면 SPAN/포트 미러링 없이는 탐지 효과가 크게 제한됨.
+    # ARP·DHCP 브로드캐스트만으로 동작하는 엔진은 False(기본값)를 유지한다.
+    requires_span: bool = False
+
     # 서브클래스에서 설정 스키마 정의: key -> (type, default) 튜플 또는 dict
     config_schema: dict[str, Any] = {}
 

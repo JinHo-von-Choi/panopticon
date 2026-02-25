@@ -62,6 +62,7 @@ class TrafficAnomalyEngine(DetectionEngine):
     """
 
     name = "traffic_anomaly"
+    requires_span = True
     description = "트래픽 볼륨의 통계적 이상을 탐지합니다. 기준선 대비 급격한 트래픽 증감으로 DDoS, 데이터 유출 등을 식별합니다."
     config_schema = {
         "volume_threshold_multiplier": {

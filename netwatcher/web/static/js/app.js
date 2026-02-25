@@ -1330,9 +1330,17 @@
             var card = document.createElement("div");
             card.className = "engine-card" + (selectedEngine === eng.name ? " selected" : "");
             var displayName = eng.name.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+            // SPAN 배지: 엔진이 SPAN을 필요로 하는 경우 표시
+            var spanBadge = "";
+            if (eng.requires_span) {
+                var visCard  = document.getElementById("stat-visibility-card");
+                var spanOk   = visCard && visCard.classList.contains("vis-full");
+                var badgeCls = "engine-span-badge" + (spanOk ? " span-ok" : "");
+                spanBadge = '<span class="' + badgeCls + '" title="SPAN/포트 미러링 필요">SPAN</span>';
+            }
             card.innerHTML =
                 '<div class="engine-card-header">' +
-                    '<span class="engine-card-name">' + esc(displayName) + '</span>' +
+                    '<span class="engine-card-name">' + esc(displayName) + spanBadge + '</span>' +
                     '<label class="toggle-switch">' +
                         '<input type="checkbox"' + (eng.enabled ? ' checked' : '') + ' data-engine="' + esc(eng.name) + '" />' +
                         '<span class="toggle-slider"></span>' +
@@ -1544,9 +1552,35 @@
             document.getElementById("stat-info").textContent = data.events.info;
             document.getElementById("stat-packets").textContent =
                 (data.traffic.total_packets || 0).toLocaleString();
+
+            // 가시성 카드 업데이트
+            if (data.visibility) {
+                updateVisibilityCard(data.visibility);
+            }
         } catch (e) {
             console.error("Failed to load stats:", e);
         }
+    }
+
+    function updateVisibilityCard(vis) {
+        var card  = document.getElementById("stat-visibility-card");
+        var value = document.getElementById("stat-visibility");
+        var macs  = vis.distinct_src_macs || 0;
+        var level = vis.level || "none";
+
+        value.textContent = macs;
+        card.classList.remove("vis-none", "vis-partial", "vis-full");
+        card.classList.add("vis-" + level);
+
+        var tipMap = {
+            "none":    "가시성 낮음 — SPAN/포트 미러링 설정을 확인하세요",
+            "partial": "가시성 제한 — 일부 트래픽만 캡처 중입니다",
+            "full":    "가시성 양호 — SPAN 포트가 정상 동작 중입니다",
+        };
+        card.title = (tipMap[level] || "") + " (고유 source MAC: " + macs + "개)";
+
+        // 엔진 목록이 로드된 경우 SPAN 배지 색상도 갱신
+        renderEnginesList();
     }
 
     // === WEBSOCKET ===

@@ -420,6 +420,7 @@ class TLSFingerprintEngine(DetectionEngine):
     """
 
     name = "tls_fingerprint"
+    requires_span = True
     description = "TLS 핸드셰이크의 JA3/JA4 핑거프린트를 분석합니다. 알려진 악성 클라이언트, 자체서명 인증서, 의심스러운 암호화 설정을 탐지합니다."
     config_schema = {
         "check_ja3": {

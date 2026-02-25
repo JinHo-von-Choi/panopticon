@@ -22,6 +22,7 @@ class DataExfilEngine(DetectionEngine):
     """
 
     name = "data_exfil"
+    requires_span = True
     description = "대용량 데이터 유출을 탐지합니다. 외부로 전송되는 비정상적 데이터 볼륨을 모니터링하여 정보 탈취를 식별합니다."
     config_schema = {
         "byte_threshold": {

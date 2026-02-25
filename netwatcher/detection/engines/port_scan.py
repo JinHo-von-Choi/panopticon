@@ -47,6 +47,7 @@ class PortScanEngine(DetectionEngine):
     """
 
     name = "port_scan"
+    requires_span = True
     description = "네트워크 포트 스캔 활동을 탐지합니다. SYN/FIN/NULL/Xmas 스캔 등 다양한 스캔 기법을 식별합니다."
     config_schema = {
         "window_seconds": {

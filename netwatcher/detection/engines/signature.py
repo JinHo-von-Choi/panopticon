@@ -271,6 +271,7 @@ class SignatureEngine(DetectionEngine):
     """YAML 시그니처 기반 패킷 매칭 탐지 엔진."""
 
     name = "signature"
+    requires_span = True
     description = "YARA 규칙 기반 시그니처 매칭을 수행합니다. 패킷 페이로드에서 알려진 악성코드 패턴, 익스플로잇 코드를 탐지합니다."
     config_schema = {
         "rules_dir": {

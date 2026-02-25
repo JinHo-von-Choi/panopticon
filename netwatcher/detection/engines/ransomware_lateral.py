@@ -25,6 +25,7 @@ class RansomwareLateralEngine(DetectionEngine):
     """
 
     name = "ransomware_lateral"
+    requires_span = True
     description = (
         "랜섬웨어 내부 확산 패턴을 탐지합니다. "
         "SMB 워드 스캔(WannaCry 패턴), RDP 브루트포스, 허니팟 접근을 감시합니다."

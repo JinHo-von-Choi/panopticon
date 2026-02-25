@@ -64,6 +64,10 @@ class PacketProcessor:
         # 신규 기기 감지 캐시 — app.py 기동 시 init_seen_macs()로 초기화
         self._seen_macs: set[str] = set()
 
+        # 가시성 추적: 플러시 윈도우 내 고유 source MAC 집합
+        # SPAN 없는 스위치 환경에서는 1~2개, SPAN 있으면 다수 관찰됨
+        self._src_macs_window: set[str] = set()
+
     async def init_seen_macs(self, device_repo: object) -> None:
         """DB에 이미 존재하는 MAC 주소를 캐시에 로드한다.
 
@@ -115,6 +119,10 @@ class PacketProcessor:
             hostname = self._dns_resolver.lookup(src_ip)
             os_hint  = guess_os(packet)
 
+        # 가시성 윈도우에 source MAC 기록
+        if src_mac:
+            self._src_macs_window.add(src_mac)
+
         # 메모리 버퍼에 디바이스 정보 축적 (주기적으로 일괄 플러시)
         if src_mac:
             buf = self._device_buffer.setdefault(src_mac, {"bytes": 0, "packets": 0})
@@ -163,16 +171,18 @@ class PacketProcessor:
         on_packet과 같은 이벤트 루프에서 호출해야 한다 (락 불필요).
         """
         snapshot = {
-            "total_packets": self._pkt_count,
-            "total_bytes":   self._byte_count,
-            "tcp_count":     self._tcp_count,
-            "udp_count":     self._udp_count,
-            "arp_count":     self._arp_count,
-            "dns_count":     self._dns_count,
+            "total_packets":    self._pkt_count,
+            "total_bytes":      self._byte_count,
+            "tcp_count":        self._tcp_count,
+            "udp_count":        self._udp_count,
+            "arp_count":        self._arp_count,
+            "dns_count":        self._dns_count,
+            "distinct_src_macs": len(self._src_macs_window),
         }
         self._pkt_count = self._byte_count = 0
         self._tcp_count = self._udp_count  = 0
         self._arp_count = self._dns_count   = 0
+        self._src_macs_window = set()
         return snapshot
 
     def _fire_new_device_alert(

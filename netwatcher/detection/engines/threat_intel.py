@@ -23,6 +23,7 @@ class ThreatIntelEngine(DetectionEngine):
     """
 
     name = "threat_intel"
+    requires_span = True
     description = "위협 인텔리전스 피드 기반으로 악성 IP/도메인 통신을 탐지합니다. 알려진 C2 서버, 봇넷, 피싱 사이트 접속을 실시간 차단합니다."
     config_schema = {}
 

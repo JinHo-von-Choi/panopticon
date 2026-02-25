@@ -34,6 +34,7 @@ class ICMPAnomalyEngine(DetectionEngine):
     """
 
     name = "icmp_anomaly"
+    requires_span = True
     description = "ICMP 트래픽의 이상 패턴을 탐지합니다. Ping 플러드, ICMP 터널링, 비정상 크기 패킷 등을 식별합니다."
     config_schema = {
         "ping_sweep_threshold": {

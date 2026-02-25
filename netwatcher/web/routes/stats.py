@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query
 
+from netwatcher.services import visibility as _visibility
 from netwatcher.storage.repositories import EventRepository, TrafficStatsRepository
 
 
@@ -27,11 +28,12 @@ def create_stats_router(
         return {
             "traffic": traffic,
             "events": {
-                "total": total_events,
+                "total":    total_events,
                 "critical": critical,
-                "warning": warning,
-                "info": info,
+                "warning":  warning,
+                "info":     info,
             },
+            "visibility": _visibility.state.to_dict(),
         }
 
     @router.get("/stats/traffic")

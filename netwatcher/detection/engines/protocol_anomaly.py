@@ -35,6 +35,7 @@ class ProtocolAnomalyEngine(DetectionEngine):
     """
 
     name = "protocol_anomaly"
+    requires_span = True
     description = "프로토콜 규격 위반 및 비정상 패킷 구조를 탐지합니다. 잘못된 헤더, 비표준 플래그 조합 등 프로토콜 수준 이상을 식별합니다."
     config_schema = {
         "ttl_change_threshold": {

@@ -14,6 +14,8 @@ except ImportError:
     _active_devices  = None
     _packets_dropped = None
 
+from netwatcher.services import visibility as _visibility
+
 if TYPE_CHECKING:
     from netwatcher.capture.sniffer import PacketSniffer
     from netwatcher.services.packet_processor import PacketProcessor
@@ -65,10 +67,13 @@ class StatsFlushService:
             # 트래픽 통계 플러시
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:00Z")
             counters = self.packet_processor.snapshot_and_reset_counters()
+            # distinct_src_macs는 DB 스키마에 없으므로 별도 추출 후 제거
+            distinct_src_macs = counters.pop("distinct_src_macs", 0)
             await self.stats_repo.insert(timestamp=ts, **counters)
+            _visibility.state.update(distinct_src_macs, counters["total_packets"])
             logger.debug(
-                "Stats flushed: %d pkts, %d bytes",
-                counters["total_packets"], counters["total_bytes"],
+                "Stats flushed: %d pkts, %d bytes, %d distinct MACs",
+                counters["total_packets"], counters["total_bytes"], distinct_src_macs,
             )
 
             # 디바이스 버퍼 플러시 (일괄 upsert)

@@ -1025,6 +1025,36 @@ textarea.input-search {
     text-align:   right;
 }
 
+/* Visibility stat card */
+.stat-card.visibility-card { border-left: 3px solid var(--text-dim); cursor: default; }
+.stat-card.visibility-card .stat-value { color: var(--text-dim); }
+.stat-card.visibility-card.vis-none  { border-left-color: var(--critical); }
+.stat-card.visibility-card.vis-none  .stat-value { color: var(--critical); }
+.stat-card.visibility-card.vis-partial { border-left-color: var(--warning); }
+.stat-card.visibility-card.vis-partial .stat-value { color: var(--warning); }
+.stat-card.visibility-card.vis-full  { border-left-color: var(--green); }
+.stat-card.visibility-card.vis-full  .stat-value { color: var(--green); }
+
+/* SPAN required badge on engine cards */
+.engine-span-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+    background: rgba(255, 165, 2, 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(255, 165, 2, 0.3);
+    letter-spacing: 0.03em;
+}
+.engine-span-badge.span-ok {
+    background: rgba(46, 213, 115, 0.12);
+    color: var(--green);
+    border-color: rgba(46, 213, 115, 0.25);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     main { padding: 12px; }

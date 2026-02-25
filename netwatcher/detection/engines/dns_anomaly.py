@@ -152,6 +152,7 @@ class DNSAnomalyEngine(DetectionEngine):
     """
 
     name = "dns_anomaly"
+    requires_span = True
     description = "DNS 터널링, DGA 도메인, 비정상 쿼리 패턴을 탐지합니다. DNS를 이용한 데이터 유출 및 C2 통신을 식별합니다."
     config_schema = {
         "max_label_length": {

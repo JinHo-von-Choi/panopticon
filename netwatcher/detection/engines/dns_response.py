@@ -27,6 +27,7 @@ class DNSResponseEngine(DetectionEngine):
     """
 
     name = "dns_response"
+    requires_span = True
     description = "DNS 응답의 이상 징후를 분석합니다. DNS 캐시 포이즈닝, 스푸핑된 응답, 비정상 TTL 등을 탐지합니다."
     config_schema = {
         "flux_min_ips": {

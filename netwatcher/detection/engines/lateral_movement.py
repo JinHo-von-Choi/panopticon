@@ -27,6 +27,7 @@ class LateralMovementEngine(DetectionEngine):
     """
 
     name = "lateral_movement"
+    requires_span = True
     description = "내부 네트워크 횡이동을 탐지합니다. 단일 호스트가 다수의 내부 서비스에 접근하는 패턴으로 침투 확산을 식별합니다."
     config_schema = {
         "lateral_ports": {

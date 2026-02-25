@@ -124,6 +124,7 @@ class ProtocolInspectEngine(DetectionEngine):
     """
 
     name = "protocol_inspect"
+    requires_span = True
     description = "프로토콜 심층 분석(DPI)을 수행합니다. FTP, SMTP, SSH 등 애플리케이션 프로토콜의 비정상 사용 패턴을 탐지합니다."
     config_schema = {
         "suspicious_user_agents": {

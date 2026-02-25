@@ -117,6 +117,7 @@ class BehaviorProfileEngine(DetectionEngine):
     """
 
     name = "behavior_profile"
+    requires_span = True
     description = "호스트별 행위 프로파일을 구축하여 이상 행동을 탐지합니다. 정상 패턴 대비 비정상적 접속 시간, 프로토콜 변화 등을 식별합니다."
     config_schema = {
         "warmup_ticks": {

@@ -391,6 +391,49 @@ rules:
 
 ## 웹 대시보드
 
+### SPAN 포트 없이 동작하는 기능
+
+> **SPAN/포트 미러링이란?** 스위치의 특정 포트로 모든 트래픽을 복사하는 기능이다. 이것 없이는 모니터링 호스트가 자신의 트래픽 + 브로드캐스트(ARP·DHCP)만 볼 수 있다.
+
+| 엔진 / 기능 | SPAN 없이 동작 | SPAN 필요 |
+|-------------|:--------------:|:---------:|
+| ARP Spoof (`arp_spoof`) | O | |
+| DHCP Spoof (`dhcp_spoof`) | O | |
+| MAC Spoof (`mac_spoof`) | O | |
+| Port Scan (`port_scan`) | | O |
+| ICMP Anomaly (`icmp_anomaly`) | | O |
+| Protocol Anomaly (`protocol_anomaly`) | | O |
+| Lateral Movement (`lateral_movement`) | | O |
+| Ransomware Lateral (`ransomware_lateral`) | | O |
+| DNS Anomaly (`dns_anomaly`) | | O |
+| DNS Response (`dns_response`) | | O |
+| HTTP Suspicious (`http_suspicious`) | | O |
+| Protocol Inspect (`protocol_inspect`) | | O |
+| TLS Fingerprint (`tls_fingerprint`) | | O |
+| Traffic Anomaly (`traffic_anomaly`) | | O |
+| Behavior Profile (`behavior_profile`) | | O |
+| Data Exfiltration (`data_exfil`) | | O |
+| Threat Intel (`threat_intel`) | | O |
+| Signature (`signature`) | | O |
+
+SPAN 없이 운용할 경우 ARP·DHCP 계층 탐지와 자산 인벤토리 기능은 정상 동작한다. 대시보드 **Hosts Visible** 카드가 가시성 수준을 실시간으로 표시한다.
+
+#### SPAN 설정 방법 (주요 벤더)
+
+| 벤더 | 설정 키워드 |
+|------|------------|
+| Cisco IOS / Catalyst | `monitor session` (SPAN) |
+| Cisco Nexus | `monitor session` (SPAN / ERSPAN) |
+| Netgear 관리형 | Port Mirroring |
+| TP-Link 관리형 | Port Mirroring |
+| Ubiquiti EdgeSwitch | Port Mirror |
+| MikroTik | `/interface ethernet switch mirror` |
+| OpenWrt | 브리지 모드 직접 설치 권장 |
+
+비관리형(Unmanaged) 스위치는 포트 미러링을 지원하지 않는다. 네트워크 경로상의 라우터(OpenWrt·pfSense)에 직접 설치하는 것이 가장 효과적인 대안이다.
+
+---
+
 ### 탭 구성
 
 | 탭 | 기능 |

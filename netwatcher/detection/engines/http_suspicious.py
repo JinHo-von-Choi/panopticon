@@ -64,6 +64,7 @@ class HTTPSuspiciousEngine(DetectionEngine):
     """
 
     name = "http_suspicious"
+    requires_span = True
     description = "HTTP 트래픽에서 의심스러운 패턴을 탐지합니다. SQL Injection, XSS, 디렉토리 트래버설 등 웹 공격 시도를 식별합니다."
     config_schema = {
         "beacon_interval_tolerance": {
