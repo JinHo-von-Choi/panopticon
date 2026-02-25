@@ -253,6 +253,10 @@ class RansomwareLateralEngine(DetectionEngine):
         for k in expired:
             del self._alerted[k]
 
+        expired_hp = [k for k, t in self._honeypot_alerted.items() if now - t > self._cooldown * 2]
+        for k in expired_hp:
+            del self._honeypot_alerted[k]
+
         return alerts
 
     def shutdown(self) -> None:
