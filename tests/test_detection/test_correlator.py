@@ -108,4 +108,9 @@ class TestRansomwareLateralKillChain:
         corr.process_alert(make_alert("port_scan", "192.168.1.10"),          event_id=1)
         incident = corr.process_alert(make_alert("ransomware_lateral", "192.168.1.10"), event_id=2)
         assert incident is not None
-        assert "kill_chain" in incident.rule or "multi_engine" in incident.rule
+        # multi_engine 규칙이 먼저 평가되어 인시던트를 생성하고,
+        # kill_chain 규칙은 동일 인시던트를 업데이트(rule 필드 유지)하므로
+        # rule은 항상 "multi_engine"이다.
+        assert incident.rule == "multi_engine"
+        # kill_chain 단계는 update 경로에서 stages로 덮어쓰이므로 정확히 설정된다.
+        assert incident.kill_chain_stages == ["reconnaissance", "lateral_movement"]
