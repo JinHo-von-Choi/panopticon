@@ -119,6 +119,18 @@
         location.reload();
     });
 
+    /** 기기 타입별 표시 메타데이터. */
+    var DEVICE_TYPE_MAP = {
+        pc:      { label: "PC",      color: "#3498db", bg: "rgba(52,152,219,0.12)"  },
+        mobile:  { label: "Mobile",  color: "#2ed573", bg: "rgba(46,213,115,0.12)"  },
+        printer: { label: "Printer", color: "#ffa502", bg: "rgba(255,165,2,0.12)"   },
+        router:  { label: "Router",  color: "#a29bfe", bg: "rgba(162,155,254,0.12)" },
+        nas:     { label: "NAS",     color: "#00cec9", bg: "rgba(0,206,201,0.12)"   },
+        server:  { label: "Server",  color: "#ff4757", bg: "rgba(255,71,87,0.12)"   },
+        iot:     { label: "IoT",     color: "#ffc048", bg: "rgba(255,192,72,0.12)"  },
+        unknown: { label: "?",       color: "#8b8fa3", bg: "rgba(139,143,163,0.12)" },
+    };
+
     // Pagination state
     var eventsPage = 0;
     var eventsTotal = 0;
@@ -154,6 +166,8 @@
     var $blFilterType = document.getElementById("bl-filter-type");
     var $blFilterSource = document.getElementById("bl-filter-source");
     var $blSearch = document.getElementById("bl-search");
+    var $devicesFilterType  = document.getElementById("devices-filter-type");
+    var $devicesFilterKnown = document.getElementById("devices-filter-known");
 
     // Chart instances
     var trafficChart = null;
@@ -633,21 +647,26 @@
         document.getElementById("device-modal-overlay").classList.remove("hidden");
 
         try {
-            var resp = await authFetch(API + "/api/devices/" + encodeURIComponent(mac));
+            var [resp, histResp] = await Promise.all([
+                authFetch(API + "/api/devices/" + encodeURIComponent(mac)),
+                authFetch(API + "/api/devices/" + encodeURIComponent(mac) + "/history"),
+            ]);
             if (!resp.ok) { body.innerHTML = "Error: HTTP " + resp.status; return; }
-            var data = await resp.json();
+            var data     = await resp.json();
+            var histData = histResp.ok ? await histResp.json() : null;
             var dev = data.device;
             if (!dev) { body.innerHTML = "Device not found"; return; }
-            renderDeviceDetail(dev);
+            renderDeviceDetail(dev, histData);
         } catch (e) {
             body.innerHTML = "Failed to load: " + esc(e.message);
         }
     };
 
-    function renderDeviceDetail(dev) {
+    function renderDeviceDetail(dev, histData) {
         document.getElementById("device-modal-title").textContent = "Device: " + (dev.nickname || dev.hostname || dev.ip_address || dev.mac_address);
         var body = document.getElementById("device-modal-body");
         var html = '<div class="detail-section"><h3>Device Info</h3><div class="detail-grid">';
+        html += row("Type", renderDeviceTypeChip(dev.device_type || "unknown"));
         html += row("Nickname", dev.nickname ? '<span class="nickname-tag">' + esc(dev.nickname) + '</span>' : "-");
         html += row("MAC Address", dev.mac_address);
         html += row("Vendor", dev.vendor || "Unknown");
@@ -667,6 +686,22 @@
             dev.open_ports.forEach(function (p) { html += '<span class="layer-badge">' + p + '</span>'; });
             html += '</div></div>';
         }
+
+        // IP 변경 이력
+        var ipHistory = (histData && histData.ip_history) || [];
+        if (ipHistory.length) {
+            html += '<div class="detail-section"><h3>IP History</h3>';
+            html += '<ul class="ip-history-list">';
+            ipHistory.forEach(function (entry) {
+                var ip = entry.ip || entry;    // {ip, ts} 또는 문자열 모두 대응
+                var ts = entry.ts ? entry.ts.replace("T", " ").slice(0, 19) + " UTC" : "";
+                html += '<li><span>' + esc(ip) + '</span>';
+                if (ts) html += '<span class="ip-history-ts">' + esc(ts) + '</span>';
+                html += '</li>';
+            });
+            html += '</ul></div>';
+        }
+
         body.innerHTML = html;
     }
 
@@ -758,20 +793,39 @@
         }
     }
 
+    /**
+     * 기기 타입 코드를 컬러 칩 HTML로 변환한다.
+     * @param {string} type - 기기 타입 코드
+     * @returns {string} HTML 문자열
+     */
+    function renderDeviceTypeChip(type) {
+        var t = DEVICE_TYPE_MAP[type] || DEVICE_TYPE_MAP.unknown;
+        return '<span class="dev-type-chip" style="color:' + t.color + ';background:' + t.bg + '">' + esc(t.label) + '</span>';
+    }
+
     // === DEVICES LIST WITH CLIENT-SIDE PAGINATION ===
     function filterDevices() {
-        var q = ($devicesSearch.value || "").trim().toLowerCase();
-        if (!q) {
-            devicesFiltered = devicesAll;
-        } else {
-            devicesFiltered = devicesAll.filter(function (d) {
-                return (d.mac_address || "").toLowerCase().indexOf(q) >= 0 ||
-                       (d.ip_address || "").toLowerCase().indexOf(q) >= 0 ||
-                       (d.hostname || "").toLowerCase().indexOf(q) >= 0 ||
-                       (d.nickname || "").toLowerCase().indexOf(q) >= 0 ||
-                       (d.vendor || "").toLowerCase().indexOf(q) >= 0;
-            });
-        }
+        var q         = ($devicesSearch.value    || "").trim().toLowerCase();
+        var typeVal   = ($devicesFilterType      ? $devicesFilterType.value  : "");
+        var knownVal  = ($devicesFilterKnown     ? $devicesFilterKnown.value : "");
+
+        devicesFiltered = devicesAll.filter(function (d) {
+            // 텍스트 검색
+            if (q) {
+                var hit = (d.mac_address || "").toLowerCase().indexOf(q) >= 0 ||
+                          (d.ip_address  || "").toLowerCase().indexOf(q) >= 0 ||
+                          (d.hostname    || "").toLowerCase().indexOf(q) >= 0 ||
+                          (d.nickname    || "").toLowerCase().indexOf(q) >= 0 ||
+                          (d.vendor      || "").toLowerCase().indexOf(q) >= 0;
+                if (!hit) return false;
+            }
+            // 타입 필터
+            if (typeVal && (d.device_type || "unknown") !== typeVal) return false;
+            // 인가 여부 필터
+            if (knownVal === "known"        &&  !d.is_known) return false;
+            if (knownVal === "unregistered" && !!d.is_known) return false;
+            return true;
+        });
     }
 
     function renderDevicesPage(page) {
@@ -788,6 +842,7 @@
                 ? '<span class="nickname-tag">' + esc(d.nickname) + '</span>' + (d.is_known ? ' <span class="known-badge">R</span>' : '')
                 : (d.is_known ? '<span class="known-badge">Registered</span>' : '<span style="color:var(--text-dim)">-</span>');
             tr.innerHTML =
+                "<td>" + renderDeviceTypeChip(d.device_type || "unknown") + "</td>" +
                 "<td>" + nickHtml + "</td>" +
                 "<td><code>" + esc(d.mac_address) + "</code></td>" +
                 "<td>" + (d.vendor ? '<span class="vendor-tag">' + esc(d.vendor) + '</span>' : '<span style="color:var(--text-dim)">Unknown</span>') + "</td>" +
@@ -818,9 +873,110 @@
             document.getElementById("stat-devices").textContent = devicesAll.length;
             filterDevices();
             renderDevicesPage(0);
+            loadInventorySummary();
         } catch (e) {
             console.error("Failed to load devices:", e);
         }
+    }
+
+    /** 인벤토리 요약 카드를 API에서 로드하여 렌더링한다. */
+    async function loadInventorySummary() {
+        try {
+            var resp = await authFetch(API + "/api/inventory/summary");
+            if (!resp.ok) return;
+            var data = await resp.json();
+            renderInventorySummary(data);
+        } catch (e) {
+            console.error("Failed to load inventory summary:", e);
+        }
+    }
+
+    /**
+     * 인벤토리 요약 카드를 #inv-summary 요소에 렌더링한다.
+     * 타입 카드 클릭 시 해당 타입으로 필터링한다.
+     * @param {object} data - inventory_summary API 응답
+     */
+    function renderInventorySummary(data) {
+        var el = document.getElementById("inv-summary");
+        if (!el) return;
+        var byType = data.by_type || {};
+        var html = "";
+
+        // 타입별 카드 (count > 0인 것만)
+        Object.keys(byType).sort().forEach(function (type) {
+            var cnt  = byType[type];
+            if (!cnt) return;
+            var info = DEVICE_TYPE_MAP[type] || DEVICE_TYPE_MAP.unknown;
+            html += '<div class="inv-type-card" data-type="' + esc(type) + '">';
+            html += '<div>';
+            html += '<div class="inv-type-count" style="color:' + info.color + '">' + cnt + '</div>';
+            html += '<div class="inv-type-label">' + esc(info.label) + '</div>';
+            html += '</div></div>';
+        });
+
+        // 고정 집계 카드들
+        if (data.new_today !== undefined) {
+            html += '<div class="inv-type-card" style="border-left:3px solid var(--warning);cursor:default">';
+            html += '<div>';
+            html += '<div class="inv-type-count" style="color:var(--warning)">' + (data.new_today || 0) + '</div>';
+            html += '<div class="inv-type-label">New Today</div>';
+            html += '</div></div>';
+        }
+        if (data.known !== undefined) {
+            html += '<div class="inv-type-card" style="border-left:3px solid var(--green);cursor:default">';
+            html += '<div>';
+            html += '<div class="inv-type-count" style="color:var(--green)">' + (data.known || 0) + '</div>';
+            html += '<div class="inv-type-label">Registered</div>';
+            html += '</div></div>';
+        }
+        if (data.unknown !== undefined) {
+            html += '<div class="inv-type-card" style="border-left:3px solid var(--text-dim);cursor:default">';
+            html += '<div>';
+            html += '<div class="inv-type-count" style="color:var(--text-dim)">' + (data.unknown || 0) + '</div>';
+            html += '<div class="inv-type-label">Unregistered</div>';
+            html += '</div></div>';
+        }
+
+        el.innerHTML = html;
+
+        // 타입 카드 클릭 → 필터 연동
+        el.querySelectorAll(".inv-type-card[data-type]").forEach(function (card) {
+            card.addEventListener("click", function () {
+                var type = card.getAttribute("data-type");
+                if ($devicesFilterType && $devicesFilterType.value === type) {
+                    $devicesFilterType.value = "";
+                    card.classList.remove("active");
+                } else {
+                    if ($devicesFilterType) $devicesFilterType.value = type;
+                    el.querySelectorAll(".inv-type-card").forEach(function (c) { c.classList.remove("active"); });
+                    card.classList.add("active");
+                }
+                filterDevices();
+                renderDevicesPage(0);
+            });
+        });
+    }
+
+    /**
+     * 화면 우측 하단에 토스트 알림을 표시한다.
+     * @param {string} title    - 알림 제목
+     * @param {string} body     - 알림 본문 (옵션)
+     * @param {string} severity - "warning" | "critical" | "info"
+     */
+    function showToast(title, body, severity) {
+        var container = document.getElementById("toast-container");
+        if (!container) return;
+        var toast = document.createElement("div");
+        toast.className = "toast toast-" + (severity || "info").toLowerCase();
+        toast.innerHTML =
+            '<div class="toast-content">' +
+            '<div class="toast-title">' + esc(title) + '</div>' +
+            (body ? '<div class="toast-body">' + esc(body) + '</div>' : '') +
+            '</div>' +
+            '<button class="toast-close">&times;</button>';
+        toast.querySelector(".toast-close").addEventListener("click", function () { toast.remove(); });
+        container.appendChild(toast);
+        setTimeout(function () { if (toast.parentNode) toast.remove(); }, 7000);
     }
 
     // === DEVICE REGISTER / EDIT ===
@@ -1356,6 +1512,16 @@
                 // Skip non-alert messages (e.g. incident broadcasts)
                 if (ev.type === "incident") return;
 
+                // ── 신규 기기 감지 알림 처리 ─────────────────────────────
+                if (ev.engine === "asset_inventory") {
+                    var meta = ev.metadata || {};
+                    var mac  = ev.source_mac || "";
+                    var body = mac ? mac + (meta.vendor && meta.vendor !== "알 수 없음" ? "  (" + meta.vendor + ")" : "") : "";
+                    showToast(ev.title || "New Device Detected", body, "warning");
+                    loadDevices();   // 목록 + 요약 카드 갱신
+                    return;
+                }
+
                 // Check if event matches current filters
                 var sevFilter = $filterSeverity.value;
                 var engFilter = $filterEngine.value;
@@ -1582,7 +1748,7 @@
     $btnExportCsv.addEventListener("click", function () { exportEvents("csv"); });
     $btnExportJson.addEventListener("click", function () { exportEvents("json"); });
 
-    // Device search
+    // Device search and filters
     var devSearchTimer = null;
     $devicesSearch.addEventListener("input", function () {
         clearTimeout(devSearchTimer);
@@ -1591,6 +1757,27 @@
             renderDevicesPage(0);
         }, 300);
     });
+    if ($devicesFilterType) {
+        $devicesFilterType.addEventListener("change", function () {
+            // 타입 카드의 active 상태 동기화
+            var el = document.getElementById("inv-summary");
+            if (el) {
+                el.querySelectorAll(".inv-type-card").forEach(function (c) { c.classList.remove("active"); });
+                if ($devicesFilterType.value) {
+                    var card = el.querySelector('.inv-type-card[data-type="' + $devicesFilterType.value + '"]');
+                    if (card) card.classList.add("active");
+                }
+            }
+            filterDevices();
+            renderDevicesPage(0);
+        });
+    }
+    if ($devicesFilterKnown) {
+        $devicesFilterKnown.addEventListener("change", function () {
+            filterDevices();
+            renderDevicesPage(0);
+        });
+    }
 
     // Blocklist filters
     $blFilterType.addEventListener("change", function () { loadBlocklist(0); });

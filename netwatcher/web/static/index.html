@@ -142,7 +142,24 @@
 
         <!-- Devices Tab -->
         <section id="tab-devices" class="tab-content">
+            <div id="inv-summary" class="inv-summary"></div>
             <div class="toolbar">
+                <select id="devices-filter-type">
+                    <option value="">All Types</option>
+                    <option value="pc">PC</option>
+                    <option value="mobile">Mobile</option>
+                    <option value="printer">Printer</option>
+                    <option value="router">Router</option>
+                    <option value="nas">NAS</option>
+                    <option value="server">Server</option>
+                    <option value="iot">IoT</option>
+                    <option value="unknown">Unknown</option>
+                </select>
+                <select id="devices-filter-known">
+                    <option value="">All Devices</option>
+                    <option value="known">Registered</option>
+                    <option value="unregistered">Unregistered</option>
+                </select>
                 <input type="text" id="devices-search" class="input-search" placeholder="Search devices..." />
                 <button id="btn-register-device" class="btn btn-accent">Register Device</button>
             </div>
@@ -150,6 +167,7 @@
                 <table id="devices-table">
                     <thead>
                         <tr>
+                            <th>Type</th>
                             <th>Nickname</th>
                             <th>MAC Address</th>
                             <th>Vendor</th>
@@ -316,6 +334,7 @@
         </div>
     </div>
 
+    <div id="toast-container" class="toast-container"></div>
     <script src="/js/app.js"></script>
 </body>
 </html>
