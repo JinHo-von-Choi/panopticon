@@ -95,10 +95,10 @@ class RansomwareLateralEngine(DetectionEngine):
         # ── 허니팟 접근 즉시 탐지 ──────────────────────────────────────────
         honeypot_hit = (
             (dst_ip in self._honeypot_ips and src_ip != dst_ip)
-            or (src_ip in self._honeypot_ips)
+            or (src_ip in self._honeypot_ips and src_ip != dst_ip)
         )
         if honeypot_hit:
-            attacker_ip = src_ip if dst_ip in self._honeypot_ips else dst_ip
+            attacker_ip = src_ip  # 항상 src_ip가 이상 행위의 주체
             now = time.time()
             last = self._honeypot_alerted.get(attacker_ip, 0.0)
             if now - last < self._cooldown:

@@ -46,7 +46,7 @@ class TestHoneypotDetection:
         alert = self.engine.analyze(pkt)
         assert alert is not None
         assert alert.severity == Severity.CRITICAL
-        assert "honeypot" in alert.title.lower() or "Honeypot" in alert.title
+        assert "honeypot" in alert.title.lower()
 
     def test_normal_traffic_no_alert(self):
         pkt = make_syn("192.168.1.10", "192.168.1.20", 445)
@@ -58,6 +58,7 @@ class TestHoneypotDetection:
         alert = self.engine.analyze(pkt)
         assert alert is not None
         assert alert.severity == Severity.CRITICAL
+        assert alert.source_ip == "10.0.0.99"  # 허니팟 IP가 공격 주체로 기록
 
     def test_honeypot_cooldown_suppresses_duplicate(self):
         """동일 소스에서 쿨다운 내 재접근은 알림을 중복 발생시키지 않는다."""
