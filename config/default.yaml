@@ -7,6 +7,21 @@ netwatcher:
   bpf_filter: ""   # additional BPF filter
   promiscuous: true
 
+  netflow:
+    enabled: false           # true로 설정 시 NetFlow/IPFIX 수신 활성화
+    host: "0.0.0.0"          # 수신 바인딩 주소
+    port: 2055               # 표준 NetFlow UDP 포트 (2055, 또는 9995/9996)
+    engines:
+      flow_port_scan:
+        enabled: true
+        window_seconds: 60
+        threshold: 15        # 고유 목적지 포트 수 임계값
+        cooldown_seconds: 300
+      flow_data_exfil:
+        enabled: true
+        byte_threshold: 104857600  # 100MB
+        window_seconds: 3600
+
   postgresql:
     enabled: true
     host: "localhost"
