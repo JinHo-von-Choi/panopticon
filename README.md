@@ -716,6 +716,34 @@ netwatcher:
   promiscuous: true        # 프로미스큐어스 모드 활성화
 ```
 
+### NetFlow/IPFIX 수신기
+
+SPAN/TAP 없는 환경에서 라우터가 NetFlow를 내보내도록 설정하면
+플로우 기반 탐지를 활성화할 수 있다.
+
+```yaml
+netflow:
+  enabled: true       # 기본 false. 활성화 시 UDP 2055 포트 열림
+  host: "0.0.0.0"
+  port: 2055          # 표준 NetFlow 포트. 일부 라우터는 9995/9996 사용
+  engines:
+    flow_port_scan:
+      enabled: true
+      threshold: 15   # 고유 목적지 포트 수
+    flow_data_exfil:
+      enabled: true
+      byte_threshold: 104857600  # 100MB
+```
+
+**라우터별 NetFlow 내보내기 설정:**
+
+| 라우터 | 설정 방법 |
+|--------|----------|
+| MikroTik RouterOS | `/ip traffic-flow set enabled=yes targets=<panopticon-ip>:2055` |
+| OpenWrt (softflowd) | `opkg install softflowd`, softflowd.conf에 수신 IP/포트 지정 |
+| Cisco IOS | `ip flow-export destination <ip> 2055`, `ip flow-export version 5` |
+| pfSense/OPNsense | System → Advanced → Netflow → Enable Netflow |
+
 ### 데이터베이스
 
 ```yaml

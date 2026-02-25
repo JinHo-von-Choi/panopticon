@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from netwatcher.alerts.dispatcher import AlertDispatcher
     from netwatcher.capture.sniffer import PacketSniffer
     from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.netflow.processor import FlowProcessor
 
 logger = logging.getLogger("netwatcher.services.tick_service")
 
@@ -26,14 +27,19 @@ class TickService:
         sniffer: PacketSniffer | None = None,
     ) -> None:
         """틱 서비스를 초기화한다. 엔진 레지스트리, 디스패처, 스니퍼를 주입받는다."""
-        self.registry   = registry
-        self.dispatcher = dispatcher
-        self.sniffer    = sniffer
+        self.registry        = registry
+        self.dispatcher      = dispatcher
+        self.sniffer         = sniffer
+        self._flow_processor: "FlowProcessor | None" = None
         self._task: asyncio.Task | None = None
 
     def set_sniffer(self, sniffer: PacketSniffer) -> None:
         """스니퍼 인스턴스를 나중에 주입한다."""
         self.sniffer = sniffer
+
+    def set_flow_processor(self, processor: "FlowProcessor") -> None:
+        """FlowProcessor 인스턴스를 나중에 주입한다."""
+        self._flow_processor = processor
 
     async def start(self) -> None:
         """틱 루프 비동기 태스크를 시작한다."""
@@ -51,12 +57,19 @@ class TickService:
         while True:
             await asyncio.sleep(1.0)
 
-            # 엔진 틱
+            import time
+            now = time.time()
+
+            # 패킷 기반 탐지 엔진 틱
             alerts = self.registry.tick()
             for alert in alerts:
                 enrich_alert_metadata(alert.metadata, alert.source_ip, alert.dest_ip)
                 if self.dispatcher:
                     self.dispatcher.enqueue(alert)
+
+            # NetFlow 기반 탐지 엔진 틱
+            if self._flow_processor is not None:
+                self._flow_processor.on_tick(now)
 
             # 스니퍼 워치독 (10초마다)
             watchdog_counter += 1
