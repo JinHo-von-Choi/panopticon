@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Scapy-2.6-blue" alt="Scapy" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/tests-736%20passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-853%20passed-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -39,7 +39,7 @@
 
 ## 개요
 
-**Panopticon**은 소규모~중규모 네트워크 환경을 위한 올인원 네트워크 보안 모니터링 시스템이다. Scapy 기반의 실시간 패킷 캡처부터 17개의 독립적인 탐지 엔진, 킬체인 기반 인시던트 상관분석, 자동 IP 차단(IRS), 위협 인텔리전스 피드 통합, 그리고 실시간 웹 대시보드까지 — 네트워크 보안 모니터링에 필요한 모든 것을 단일 바이너리로 제공한다.
+**Panopticon**은 소규모~중규모 네트워크 환경을 위한 올인원 네트워크 보안 모니터링 시스템이다. Scapy 기반의 실시간 패킷 캡처부터 18개의 독립적인 탐지 엔진, 킬체인 기반 인시던트 상관분석, 자동 IP 차단(IRS), 위협 인텔리전스 피드 통합, 그리고 실시간 웹 대시보드까지 — 네트워크 보안 모니터링에 필요한 모든 것을 단일 바이너리로 제공한다.
 
 ### 제작 동기
 
@@ -67,7 +67,7 @@
 - 패킷당 OS 핑거프린팅 (TTL/윈도우 크기 기반), MAC 벤더 자동 식별
 - 비동기 역방향 DNS 조회 (LRU 캐시 4,096개)
 
-### 17개 탐지 엔진
+### 18개 탐지 엔진
 
 패킷 계층(L2~L7), 통계 이상, 행위 프로파일, 위협 인텔리전스, 사용자 정의 시그니처까지 네트워크 보안의 전 영역을 커버한다. 각 엔진은 독립적으로 활성화/비활성화 및 파라미터 조정이 가능하다.
 
@@ -117,7 +117,7 @@ Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포�
                               ┌──────────┐ ┌────────────┐ ┌──────────┐
                               │  Engine  │ │   Engine   │ │  Engine  │
                               │ Registry │ │  Registry  │ │ Registry │
-                              │ (17개)   │ │  (17개)    │ │  (17개)  │
+                              │ (18개)   │ │  (18개)    │ │  (18개)  │
                               └────┬─────┘ └─────┬──────┘ └────┬─────┘
                                    │             │             │
                                    └─────────────┼─────────────┘
@@ -245,6 +245,25 @@ Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포�
 | `lateral_ports` | `[22, 445, 3389, ...]` | 감시 대상 포트 |
 | `unique_host_threshold` | 5 | 고유 내부 호스트 접근 임계값 |
 | `chain_depth_threshold` | 3 | 피벗 체인 깊이 임계값 |
+
+#### Ransomware Lateral (`ransomware_lateral`)
+> WannaCry/EternalBlue형 SMB 워드 스캔, RDP 무차별 대입, 허니팟 접근을 탐지한다.
+
+**탐지 원리**: 세 가지 독립적인 시나리오를 탐지한다.
+
+- **SMB 워드 스캔**: 내부 호스트가 슬라이딩 윈도우 내에 다수의 내부 IP의 TCP/445 포트로 SYN 패킷을 전송하면 WannaCry/EternalBlue류 웜 확산 패턴으로 판정한다. 고유 목적지 IP 수가 임계값을 초과할 때 WARNING 알림을 발생시킨다.
+- **RDP 무차별 대입**: 동일한 `src_ip → dst_ip` 쌍으로 TCP/3389 SYN이 윈도우 내에서 임계값 이상 반복되면 RDP 자격증명 무차별 대입으로 판정한다.
+- **허니팟 접근**: 설정된 허니팟 IP에 대한 모든 접근(송신 또는 수신)을 즉시 CRITICAL 알림으로 처리한다. 쿨다운이 적용되며, 정상적인 내부 트래픽에서는 절대 도달하지 않아야 하는 주소이므로 신뢰도 1.0으로 처리한다.
+
+| 파라미터 | 기본값 | 설명 |
+|----------|--------|------|
+| `smb_scan_window_seconds` | 30 | SMB 스캔 탐지 슬라이딩 윈도우 |
+| `smb_scan_threshold` | 15 | 윈도우 내 고유 445 목적지 IP 수 임계값 |
+| `rdp_brute_window_seconds` | 60 | RDP 반복 시도 탐지 슬라이딩 윈도우 |
+| `rdp_brute_threshold` | 10 | 윈도우 내 동일 src→dst 쌍의 3389 SYN 수 임계값 |
+| `alert_cooldown_seconds` | 300 | 동일 소스 재알림 쿨다운 |
+| `honeypot_ips` | `[]` | 접근 시 즉시 CRITICAL을 발생시킬 허니팟 IP 목록 |
+| `max_tracked_sources` | 10000 | 메모리에 유지하는 추적 소스 수 상한 |
 
 ---
 
@@ -380,7 +399,7 @@ rules:
 | **Traffic** | 분당 패킷 타임라인, 프로토콜 분포 파이차트, 심각도별/엔진별 알림 차트 |
 | **Devices** | 네트워크 장치 목록 (MAC, IP, 벤더, OS, 패킷 수), 장치 등록/편집 |
 | **Blocklist** | 커스텀 IP/도메인 차단 목록 관리, 피드 통계 |
-| **Engines** | 17개 탐지 엔진 활성화/비활성화 토글, 파라미터 실시간 편집 |
+| **Engines** | 18개 탐지 엔진 활성화/비활성화 토글, 파라미터 실시간 편집 |
 
 ### 실시간 기능
 
@@ -438,7 +457,7 @@ rules:
   <img src="netwatcher/web/static/img/screenshot-engines.png" alt="Detection engine management" width="100%" />
 </p>
 
-17개 탐지 엔진의 활성화/비활성화 토글과 파라미터 실시간 편집. 변경 사항은 재시작 없이 즉시 반영된다.
+18개 탐지 엔진의 활성화/비활성화 토글과 파라미터 실시간 편집. 변경 사항은 재시작 없이 즉시 반영된다.
 
 ---
 
@@ -959,7 +978,7 @@ rules:
 
 ### 테스트 구조
 
-736개 테스트는 다음 4개 레이어로 구성된다.
+853개 테스트는 다음 4개 레이어로 구성된다.
 
 | 레이어 | 디렉토리 | 내용 |
 |--------|----------|------|
