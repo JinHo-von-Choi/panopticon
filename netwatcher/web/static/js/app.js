@@ -137,7 +137,8 @@
     var devicesPage = 0;
     var devicesAll = [];
     var devicesFiltered = [];
-    var DEVICES_PER_PAGE = 50;
+    var DEVICES_PER_PAGE    = 50;
+    var devicesRiskFilter   = false;  // true = High Risk 기기만 표시
 
     // Blocklist state
     var blPage = 0;
@@ -666,6 +667,7 @@
         document.getElementById("device-modal-title").textContent = "Device: " + (dev.nickname || dev.hostname || dev.ip_address || dev.mac_address);
         var body = document.getElementById("device-modal-body");
         var html = '<div class="detail-section"><h3>Device Info</h3><div class="detail-grid">';
+        html += row("Risk", renderRiskBadge(dev.risk_level, dev.risk_score));
         html += row("Type", renderDeviceTypeChip(dev.device_type || "unknown"));
         html += row("Nickname", dev.nickname ? '<span class="nickname-tag">' + esc(dev.nickname) + '</span>' : "-");
         html += row("MAC Address", dev.mac_address);
@@ -686,6 +688,17 @@
             html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">';
             ports.forEach(function (p) { html += renderPortBadge(p); });
             html += '</div></div>';
+        }
+
+        // 위험도 요인 상세
+        var riskFactors = dev.risk_factors || [];
+        if (riskFactors.length) {
+            html += '<div class="detail-section"><h3>Risk Factors (' + (dev.risk_score || 0) + '/100)</h3>';
+            html += '<ul class="risk-factors-list">';
+            riskFactors.forEach(function (f) {
+                html += '<li><span>' + esc(f.note) + '</span><span class="risk-factor-score">+' + f.score + '</span></li>';
+            });
+            html += '</ul></div>';
         }
 
         // IP 변경 이력
@@ -814,6 +827,17 @@
     };
 
     /**
+     * 위험도 레벨과 점수를 컬러 배지 HTML로 변환한다.
+     * @param {string} level  - "low" | "medium" | "high"
+     * @param {number} score  - 0–100
+     * @returns {string} HTML 배지 문자열
+     */
+    function renderRiskBadge(level, score) {
+        var label = (score || 0) + " " + (level || "low").toUpperCase();
+        return '<span class="risk-badge risk-' + esc(level || "low") + '">' + esc(label) + '</span>';
+    }
+
+    /**
      * 포트 번호를 "포트번호 서비스명" 배지 HTML로 변환한다.
      * Telnet/RDP/FTP/SNMP 등 고위험 서비스는 주황색으로 강조한다.
      * @param {number} port - 포트 번호
@@ -860,6 +884,8 @@
             // 인가 여부 필터
             if (knownVal === "known"        &&  !d.is_known) return false;
             if (knownVal === "unregistered" && !!d.is_known) return false;
+            // 고위험 기기 필터
+            if (devicesRiskFilter && d.risk_level !== "high") return false;
             return true;
         });
     }
@@ -878,6 +904,7 @@
                 ? '<span class="nickname-tag">' + esc(d.nickname) + '</span>' + (d.is_known ? ' <span class="known-badge">R</span>' : '')
                 : (d.is_known ? '<span class="known-badge">Registered</span>' : '<span style="color:var(--text-dim)">-</span>');
             tr.innerHTML =
+                "<td>" + renderRiskBadge(d.risk_level, d.risk_score) + "</td>" +
                 "<td>" + renderDeviceTypeChip(d.device_type || "unknown") + "</td>" +
                 "<td>" + nickHtml + "</td>" +
                 "<td><code>" + esc(d.mac_address) + "</code></td>" +
@@ -907,6 +934,8 @@
             var data = await resp.json();
             devicesAll = data.devices;
             document.getElementById("stat-devices").textContent = devicesAll.length;
+            var highRiskCount = devicesAll.filter(function (d) { return d.risk_level === "high"; }).length;
+            document.getElementById("stat-highrisk").textContent = highRiskCount;
             filterDevices();
             renderDevicesPage(0);
             loadInventorySummary();
@@ -1810,6 +1839,25 @@
     }
     if ($devicesFilterKnown) {
         $devicesFilterKnown.addEventListener("change", function () {
+            filterDevices();
+            renderDevicesPage(0);
+        });
+    }
+
+    // High Risk stat card — 클릭 시 Devices 탭으로 이동하고 고위험 기기만 필터링
+    var $highriskCard = document.getElementById("stat-highrisk-card");
+    if ($highriskCard) {
+        $highriskCard.addEventListener("click", function () {
+            // Devices 탭 활성화
+            document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+            document.querySelectorAll(".tab-content").forEach(function (s) { s.classList.remove("active"); });
+            var devTab = document.querySelector('.tab[data-tab="devices"]');
+            if (devTab) devTab.classList.add("active");
+            var devSec = document.getElementById("tab-devices");
+            if (devSec) devSec.classList.add("active");
+            // 위험 필터 토글
+            devicesRiskFilter = !devicesRiskFilter;
+            $highriskCard.classList.toggle("active", devicesRiskFilter);
             filterDevices();
             renderDevicesPage(0);
         });

@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from netwatcher.inventory.risk_scorer import assess
 from netwatcher.storage.repositories import DeviceRepository
 
 _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
@@ -57,6 +58,10 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
             devices = [d for d in devices if d.get("device_type") == device_type]
         if is_known is not None:
             devices = [d for d in devices if d.get("is_known") == is_known]
+        for d in devices:
+            ra = assess(d)
+            d["risk_score"] = ra.score
+            d["risk_level"] = ra.level
         return {"devices": devices}
 
     @router.get("/devices/{mac}")
@@ -65,6 +70,13 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
         device = await device_repo.get_by_mac(mac)
         if not device:
             return JSONResponse({"error": "Device not found"}, status_code=404)
+        ra = assess(device)
+        device["risk_score"]   = ra.score
+        device["risk_level"]   = ra.level
+        device["risk_factors"] = [
+            {"name": f.name, "score": f.score, "note": f.note}
+            for f in ra.factors
+        ]
         return {"device": device}
 
     @router.post("/devices/register")

@@ -977,6 +977,54 @@ textarea.input-search {
     font-size: 11px;
 }
 
+/* Risk Score Badge */
+.risk-badge {
+    display:     inline-flex;
+    align-items: center;
+    gap:         4px;
+    padding:     2px 7px;
+    border-radius: 4px;
+    font-size:   11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.risk-badge.risk-low    { background: rgba(75, 181, 67,  0.15); color: #4bb543; }
+.risk-badge.risk-medium { background: rgba(255, 176, 0,  0.15); color: #ffb000; }
+.risk-badge.risk-high   { background: rgba(231, 76,  60, 0.18); color: var(--critical); }
+
+/* High Risk stat card */
+.stat-card.risk              { border-top: 3px solid var(--critical); cursor: pointer; }
+.stat-card.risk.active       { background: rgba(231, 76, 60, 0.12); }
+.stat-card.risk:hover:not(.active) { background: rgba(231, 76, 60, 0.06); }
+
+/* Risk factors list in device detail */
+.risk-factors-list {
+    list-style: none;
+    margin:  0;
+    padding: 0;
+}
+
+.risk-factors-list li {
+    display:         flex;
+    justify-content: space-between;
+    align-items:     center;
+    padding:         5px 0;
+    border-bottom:   1px solid var(--border);
+    font-size:       12px;
+}
+
+.risk-factors-list li:last-child { border-bottom: none; }
+
+.risk-factor-score {
+    font-family:  var(--font-mono);
+    font-weight:  600;
+    color:        var(--warning);
+    min-width:    32px;
+    text-align:   right;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     main { padding: 12px; }
