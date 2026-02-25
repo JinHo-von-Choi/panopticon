@@ -13,7 +13,7 @@
 
     /**
      * 인증 헤더가 포함된 fetch 래퍼.
-     * 401 응답 시 자동으로 로그인 화면으로 전환한다.
+     * 401/403 응답 시 토큰을 폐기하고 로그인 화면으로 전환한다.
      */
     async function authFetch(url, opts) {
         opts = opts || {};
@@ -22,7 +22,7 @@
             opts.headers["Authorization"] = "Bearer " + authToken;
         }
         var resp = await fetch(url, opts);
-        if (resp.status === 401 && authEnabled) {
+        if (resp.status === 401 || resp.status === 403) {
             localStorage.removeItem("nw_token");
             authToken = null;
             showLoginOverlay();

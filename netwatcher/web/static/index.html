@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panopticon Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -22,18 +25,18 @@
                     <input type="password" id="login-password" class="input-search" autocomplete="current-password" style="width:100%" />
                 </div>
                 <div id="login-error" class="login-error"></div>
-                <button type="submit" class="btn btn-accent" style="width:100%">Login</button>
+                <button type="submit" class="btn btn-accent" style="width:100%;margin-top:4px">Login</button>
             </form>
         </div>
     </div>
 
     <header>
         <div class="header-left">
-            <h1>Panopticon</h1>
             <span id="connection-status" class="status-dot disconnected" title="WebSocket disconnected"></span>
+            <h1>Panopticon</h1>
         </div>
         <div class="header-right">
-            <button id="btn-logout" class="btn" style="display:none">Logout</button>
+            <button id="btn-logout" class="btn" style="display:none;font-size:12px;padding:5px 12px">Logout</button>
             <span id="clock"></span>
         </div>
     </header>
@@ -42,30 +45,37 @@
         <!-- Stats Cards -->
         <section class="stats-grid">
             <div class="stat-card critical">
+                <div class="stat-icon">&#9888;</div>
                 <div class="stat-value" id="stat-critical">0</div>
                 <div class="stat-label">Critical</div>
             </div>
             <div class="stat-card warning">
+                <div class="stat-icon">&#9651;</div>
                 <div class="stat-value" id="stat-warning">0</div>
                 <div class="stat-label">Warning</div>
             </div>
             <div class="stat-card info">
+                <div class="stat-icon">&#9432;</div>
                 <div class="stat-value" id="stat-info">0</div>
                 <div class="stat-label">Info</div>
             </div>
             <div class="stat-card neutral">
+                <div class="stat-icon">&#9654;</div>
                 <div class="stat-value" id="stat-packets">0</div>
                 <div class="stat-label">Total Packets</div>
             </div>
             <div class="stat-card neutral">
+                <div class="stat-icon">&#9632;</div>
                 <div class="stat-value" id="stat-devices">0</div>
                 <div class="stat-label">Devices</div>
             </div>
             <div class="stat-card risk" id="stat-highrisk-card">
+                <div class="stat-icon">&#9760;</div>
                 <div class="stat-value" id="stat-highrisk">0</div>
                 <div class="stat-label">High Risk</div>
             </div>
-            <div class="stat-card visibility-card" id="stat-visibility-card" title="SPAN 포트가 구성된 경우 다수의 호스트 트래픽이 가시화됩니다">
+            <div class="stat-card visibility-card" id="stat-visibility-card" title="SPAN 포트 구성 시 다수 호스트 트래픽이 가시화됩니다">
+                <div class="stat-icon">&#9673;</div>
                 <div class="stat-value" id="stat-visibility">-</div>
                 <div class="stat-label">Hosts Visible</div>
             </div>
@@ -117,8 +127,7 @@
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="events-body">
-                    </tbody>
+                    <tbody id="events-body"></tbody>
                 </table>
             </div>
             <div class="pagination" id="events-pagination"></div>
@@ -189,8 +198,7 @@
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="devices-body">
-                    </tbody>
+                    <tbody id="devices-body"></tbody>
                 </table>
             </div>
             <div class="pagination" id="devices-pagination"></div>
@@ -223,8 +231,7 @@
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="blocklist-body">
-                    </tbody>
+                    <tbody id="blocklist-body"></tbody>
                 </table>
             </div>
             <div class="pagination" id="blocklist-pagination"></div>
@@ -248,8 +255,7 @@
                 <h2 id="modal-title">Event Detail</h2>
                 <button class="modal-close" id="modal-close-btn">&times;</button>
             </div>
-            <div class="modal-body" id="modal-body">
-            </div>
+            <div class="modal-body" id="modal-body"></div>
         </div>
     </div>
 
@@ -260,8 +266,7 @@
                 <h2 id="device-modal-title">Device Detail</h2>
                 <button class="modal-close" id="device-modal-close-btn">&times;</button>
             </div>
-            <div class="modal-body" id="device-modal-body">
-            </div>
+            <div class="modal-body" id="device-modal-body"></div>
         </div>
     </div>
 
