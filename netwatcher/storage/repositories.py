@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from netwatcher.inventory import device_classifier
 from netwatcher.storage.database import Database
 
 logger = logging.getLogger("netwatcher.storage.repositories")
@@ -273,12 +274,19 @@ class DeviceRepository:
                     sources: dict = info.get("hostname_sources") or {}
                     # hostname 컬럼: sources 우선순위 → 기존 역방향DNS hostname 순
                     best_hostname = _best_hostname_from_sources(sources) or info.get("hostname")
+                    # 기기 타입 추론
+                    inferred_type = device_classifier.classify(
+                        vendor=info.get("vendor"),
+                        os_hint=info.get("os_hint"),
+                        hostname=best_hostname,
+                        hostname_sources=sources,
+                    )
                     await conn.execute(
                         """INSERT INTO devices
                                (mac_address, ip_address, hostname, vendor,
                                 first_seen, last_seen, total_packets, total_bytes,
-                                os_hint, hostname_sources)
-                           VALUES ($1::macaddr, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                os_hint, hostname_sources, device_type)
+                           VALUES ($1::macaddr, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                            ON CONFLICT(mac_address) DO UPDATE SET
                                ip_address = COALESCE(EXCLUDED.ip_address, devices.ip_address),
                                hostname   = COALESCE(EXCLUDED.hostname,   devices.hostname),
@@ -288,6 +296,10 @@ class DeviceRepository:
                                total_packets  = devices.total_packets + EXCLUDED.total_packets,
                                total_bytes    = devices.total_bytes   + EXCLUDED.total_bytes,
                                hostname_sources = devices.hostname_sources || EXCLUDED.hostname_sources,
+                               device_type = CASE
+                                   WHEN EXCLUDED.device_type = 'unknown' THEN devices.device_type
+                                   ELSE EXCLUDED.device_type
+                               END,
                                ip_history = CASE
                                    WHEN EXCLUDED.ip_address IS NOT NULL
                                         AND devices.ip_address IS NOT NULL
@@ -316,6 +328,7 @@ class DeviceRepository:
                         info.get("bytes", 0),
                         info.get("os_hint"),
                         sources,
+                        inferred_type,
                     )
 
     async def update_open_ports(self, mac_address: str, ports: list[int]) -> None:
@@ -344,6 +357,48 @@ class DeviceRepository:
     async def count(self) -> int:
         """등록된 디바이스 총 수를 반환한다."""
         return await self._db.pool.fetchval("SELECT COUNT(*) FROM devices")
+
+    async def get_all_macs(self) -> set[str]:
+        """DB에 등록된 모든 디바이스의 MAC 주소 집합을 반환한다.
+
+        PacketProcessor가 새 기기 감지용 캐시를 초기화할 때 사용한다.
+        """
+        rows = await self._db.pool.fetch("SELECT mac_address FROM devices")
+        return {str(row["mac_address"]) for row in rows}
+
+    async def inventory_summary(self) -> dict:
+        """기기 타입별 집계, 인가/미인가 카운트, 오늘 신규 기기 수를 반환한다."""
+        rows = await self._db.pool.fetch(
+            """
+            SELECT
+                device_type,
+                COUNT(*)                                              AS cnt,
+                COUNT(*) FILTER (WHERE is_known = TRUE)               AS known_cnt,
+                COUNT(*) FILTER (WHERE is_known = FALSE)              AS unknown_cnt,
+                COUNT(*) FILTER (
+                    WHERE first_seen >= NOW() - INTERVAL '24 hours'
+                )                                                     AS new_today
+            FROM devices
+            GROUP BY device_type
+            ORDER BY cnt DESC
+            """
+        )
+        by_type: dict[str, int] = {}
+        total = known = unknown = new_today = 0
+        for row in rows:
+            dt = row["device_type"] or "unknown"
+            by_type[dt] = row["cnt"]
+            total    += row["cnt"]
+            known    += row["known_cnt"]
+            unknown  += row["unknown_cnt"]
+            new_today += row["new_today"]
+        return {
+            "total":     total,
+            "known":     known,
+            "unknown":   unknown,
+            "new_today": new_today,
+            "by_type":   by_type,
+        }
 
     async def get_known_macs(self) -> set[str]:
         """등록된(is_known=TRUE) 디바이스의 MAC 주소 집합을 반환한다."""

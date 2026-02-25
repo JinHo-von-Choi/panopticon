@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from scapy.all import ARP, DNS, TCP, UDP, Packet
 
+from netwatcher.detection.models import Alert, Severity
 from netwatcher.detection.utils import get_ip_addrs
 from netwatcher.inventory import hostname_resolver
 from netwatcher.utils.geoip import enrich_alert_metadata
@@ -60,6 +61,19 @@ class PacketProcessor:
         # 디바이스 배치 버퍼
         self._device_buffer: dict[str, dict] = {}
 
+        # 신규 기기 감지 캐시 — app.py 기동 시 init_seen_macs()로 초기화
+        self._seen_macs: set[str] = set()
+
+    async def init_seen_macs(self, device_repo: object) -> None:
+        """DB에 이미 존재하는 MAC 주소를 캐시에 로드한다.
+
+        최초 실행 시 기존 디바이스를 '새 기기'로 잘못 알리지 않도록
+        app.py의 run()에서 PacketProcessor 생성 직후 호출해야 한다.
+        """
+        macs = await device_repo.get_all_macs()  # type: ignore[attr-defined]
+        self._seen_macs.update(macs)
+        logger.info("Loaded %d existing MACs into seen-macs cache", len(macs))
+
     def on_packet(self, packet: Packet) -> None:
         """스니퍼 스레드의 콜백, call_soon_threadsafe를 통해 디스패치된다."""
         # 트래픽 카운터 업데이트
@@ -111,6 +125,11 @@ class PacketProcessor:
             buf["bytes"]   += pkt_len
             buf["packets"] += 1
 
+            # 신규 기기 감지
+            if src_mac not in self._seen_macs:
+                self._seen_macs.add(src_mac)
+                self._fire_new_device_alert(src_mac, src_ip, vendor)
+
         # 패시브 호스트명 수집 (DHCP/NetBIOS/mDNS/LLMNR)
         for hit in hostname_resolver.extract(packet):
             hit_buf = self._device_buffer.setdefault(
@@ -147,6 +166,33 @@ class PacketProcessor:
         self._tcp_count = self._udp_count  = 0
         self._arp_count = self._dns_count   = 0
         return snapshot
+
+    def _fire_new_device_alert(
+        self,
+        mac: str,
+        ip: str | None,
+        vendor: str | None,
+    ) -> None:
+        """처음 관찰된 기기에 대한 알림을 디스패처에 큐잉한다."""
+        if not self.dispatcher:
+            return
+        vendor_str = vendor or "알 수 없음"
+        ip_str     = ip     or "알 수 없음"
+        alert = Alert(
+            engine      = "asset_inventory",
+            severity    = Severity.WARNING,
+            title       = "New Device Detected",
+            description = (
+                f"미등록 기기가 네트워크에 나타났습니다. "
+                f"MAC: {mac}  제조사: {vendor_str}  IP: {ip_str}. "
+                f"인가된 기기인지 확인하고 'is_known'으로 등록하세요."
+            ),
+            source_mac  = mac,
+            source_ip   = ip,
+            confidence  = 0.9,
+            metadata    = {"vendor": vendor_str, "ip": ip_str},
+        )
+        self.dispatcher.enqueue(alert)
 
     def drain_device_buffer(self) -> dict[str, dict]:
         """축적된 디바이스 버퍼를 반환하고 비운다."""

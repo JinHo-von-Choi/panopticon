@@ -146,6 +146,7 @@ class NetWatcher:
             pcap_writer=self.pcap_writer,
             dns_resolver=self._dns_resolver,
         )
+        await packet_processor.init_seen_macs(device_repo)
 
         tick_service = TickService(
             registry=self.registry,
