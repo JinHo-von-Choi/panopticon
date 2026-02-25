@@ -250,6 +250,16 @@ netwatcher:
       rules_dir: "config/rules"
       hot_reload: true
 
+    ransomware_lateral:
+      enabled: true
+      smb_scan_window_seconds: 30       # WannaCry 패턴: 30초 내 다수 호스트 445 스캔
+      smb_scan_threshold: 15            # 15개 이상 고유 내부 IP에 SYN → 탐지
+      rdp_brute_window_seconds: 60      # 60초 내 동일 src→dst 3389 반복
+      rdp_brute_threshold: 10           # 10회 이상 → 탐지
+      alert_cooldown_seconds: 300       # 5분 재알림 억제
+      honeypot_ips: []                  # 허니팟 IP 목록 (운영 환경에서 설정)
+      max_tracked_sources: 10000
+
   response:
     enabled: false
     backend: "iptables"

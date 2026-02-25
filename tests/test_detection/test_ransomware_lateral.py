@@ -220,3 +220,20 @@ class TestRdpBruteForce:
         self._send_rdp_syns("192.168.1.10", "192.168.1.20", 5)
         alerts2 = self.engine.on_tick(time.time())
         assert len([a for a in alerts2 if "RDP" in a.title]) == 0
+
+
+class TestConfigSchema:
+    def test_default_config_validates(self):
+        """config_schema 기본값으로 생성한 엔진이 경고 없이 초기화된다."""
+        default_cfg = {
+            k: v["default"]
+            for k, v in RansomwareLateralEngine.config_schema.items()
+            if isinstance(v, dict) and "default" in v
+        }
+        default_cfg["enabled"] = True
+        engine = RansomwareLateralEngine(default_cfg)
+        warnings = engine.validate_config()
+        assert warnings == []
+
+    def test_engine_name_is_ransomware_lateral(self):
+        assert RansomwareLateralEngine.name == "ransomware_lateral"
