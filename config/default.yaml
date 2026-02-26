@@ -288,7 +288,7 @@ netwatcher:
     - "arp_spoof"
 
   ai_analyzer:
-    enabled: false                 # true로 설정 시 AI 오탐 분석 활성화
+    enabled: true                  # true로 설정 시 AI 오탐 분석 활성화
     provider: "copilot"            # AI 프로바이더: copilot | claude | codex | gemini | agent
     interval_minutes: 15           # 분석 실행 주기
     lookback_minutes: 30           # 분석 대상 시간 범위 (최근 N분)
