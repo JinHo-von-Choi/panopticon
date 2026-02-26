@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS events (
     dest_mac    MACADDR,
     metadata    JSONB           NOT NULL DEFAULT '{}',
     packet_info JSONB           NOT NULL DEFAULT '{}',
-    resolved    BOOLEAN         NOT NULL DEFAULT FALSE
+    resolved    BOOLEAN         NOT NULL DEFAULT FALSE,
+    reasoning   TEXT
 );
 """
 

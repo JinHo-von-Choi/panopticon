@@ -75,6 +75,46 @@ class TestParseResponse:
         result = self._parse(text)
         assert result.verdict == "CONFIRMED_THREAT"
 
+    def test_missed_threat_verdict(self):
+        text = (
+            "VERDICT: MISSED_THREAT\n"
+            "ENGINE: dns_anomaly\n"
+            "REASON: Low-entropy DNS requests form C2 beacon pattern.\n"
+            "REASONING:\n"
+            "1. 7 requests to same subdomain in 5 minutes.\n"
+            "2. Consistent 60-second interval.\n"
+            "3. INFO severity masks the pattern.\n"
+            "ADJUST: entropy_threshold=3.2\n"
+        )
+        result = self._parse(text)
+        assert result.verdict == "MISSED_THREAT"
+        assert result.engine == "dns_anomaly"
+        assert result.adjustments == {"entropy_threshold": 3.2}
+        assert "1." in result.reasoning
+        assert "2." in result.reasoning
+
+    def test_reasoning_parsed_multiline(self):
+        text = (
+            "VERDICT: FALSE_POSITIVE\n"
+            "ENGINE: port_scan\n"
+            "REASON: Normal scan.\n"
+            "REASONING:\n"
+            "1. Source is internal CI runner.\n"
+            "2. All destination ports are known services.\n"
+        )
+        result = self._parse(text)
+        assert "1." in result.reasoning
+        assert "2." in result.reasoning
+
+    def test_no_reasoning_returns_empty_string(self):
+        text = (
+            "VERDICT: CONFIRMED_THREAT\n"
+            "ENGINE: port_scan\n"
+            "REASON: Real scan.\n"
+        )
+        result = self._parse(text)
+        assert result.reasoning == ""
+
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -300,11 +340,108 @@ class TestBuildPrompt:
         prompt = svc._build_prompt([])
         assert "ADJUST:" in prompt
 
+    def test_prompt_contains_missed_threat(self):
+        svc = self._make_service()
+        prompt = svc._build_prompt([])
+        assert "MISSED_THREAT" in prompt
+
+    def test_prompt_contains_reasoning_instruction(self):
+        svc = self._make_service()
+        prompt = svc._build_prompt([])
+        assert "REASONING:" in prompt
+
+    def test_prompt_mentions_info_events(self):
+        svc = self._make_service()
+        prompt = svc._build_prompt([])
+        assert "INFO" in prompt
+
+
+class TestTryLowerThreshold:
+    """_try_lower_threshold() 연속 카운터 및 하한 캡 검증."""
+
+    def _make_service(self, consecutive_mt_threshold: int = 2,
+                      max_decrease_pct: int = 10) -> AIAnalyzerService:
+        cfg_data = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": 2,
+            "max_threshold_increase_pct": 20,
+            "consecutive_mt_threshold": consecutive_mt_threshold,
+            "max_threshold_decrease_pct": max_decrease_pct,
+            "copilot_timeout_seconds": 60,
+        }
+        config = MagicMock()
+        config.section.return_value = cfg_data
+        svc = AIAnalyzerService(
+            config=config,
+            event_repo=AsyncMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+        return svc
+
+    def test_no_adjust_below_threshold(self):
+        svc = self._make_service(consecutive_mt_threshold=2)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        adjustments = {"threshold": 10}
+
+        svc._try_lower_threshold("port_scan", adjustments)  # 1회차
+
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        assert svc._consecutive_mt["port_scan"] == 1
+
+    def test_lowers_on_threshold_reached(self):
+        svc = self._make_service(consecutive_mt_threshold=2, max_decrease_pct=10)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        adjustments = {"threshold": 10}
+
+        svc._try_lower_threshold("port_scan", adjustments)  # 1회차
+        svc._try_lower_threshold("port_scan", adjustments)  # 2회차 → 적용
+
+        # cap: max(10, 15 * (1 - 10/100)) = max(10, 13.5) = 13.5
+        svc._yaml_editor.update_engine_config.assert_called_once_with(
+            "port_scan", {"threshold": 13.5}
+        )
+        assert svc._consecutive_mt["port_scan"] == 0
+
+    def test_cap_prevents_extreme_decrease(self):
+        """요청값이 cap보다 낮으면 cap값(덜 낮은 쪽)을 사용한다."""
+        svc = self._make_service(consecutive_mt_threshold=1, max_decrease_pct=10)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        svc._registry.reload_engine.return_value = (True, None, [])
+
+        # requested=5 (너무 낮음), cap = 15 * 0.9 = 13.5 → max(5, 13.5) = 13.5
+        svc._try_lower_threshold("port_scan", {"threshold": 5})
+
+        svc._yaml_editor.update_engine_config.assert_called_once_with(
+            "port_scan", {"threshold": 13.5}
+        )
+
+    def test_counter_resets_after_adjust(self):
+        svc = self._make_service(consecutive_mt_threshold=1)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        svc._registry.reload_engine.return_value = (True, None, [])
+
+        svc._try_lower_threshold("port_scan", {"threshold": 12})
+        assert svc._consecutive_mt.get("port_scan", 0) == 0
+
+    def test_yaml_editor_none_skips(self):
+        svc = self._make_service(consecutive_mt_threshold=1)
+        svc._yaml_editor = None
+
+        svc._try_lower_threshold("port_scan", {"threshold": 10})
+
+        svc._registry.reload_engine.assert_not_called()
+
 
 class TestAnalysisLoop:
     """_apply_result() 및 전체 루프 동작 검증."""
 
-    def _make_service(self, fp_threshold: int = 1) -> AIAnalyzerService:
+    def _make_service(self, fp_threshold: int = 1, mt_threshold: int = 1) -> AIAnalyzerService:
         cfg_data = {
             "enabled": True,
             "interval_minutes": 15,
@@ -312,6 +449,8 @@ class TestAnalysisLoop:
             "max_events": 50,
             "consecutive_fp_threshold": fp_threshold,
             "max_threshold_increase_pct": 20,
+            "consecutive_mt_threshold": mt_threshold,
+            "max_threshold_decrease_pct": 10,
             "copilot_timeout_seconds": 60,
         }
         config = MagicMock()
@@ -410,6 +549,93 @@ class TestAnalysisLoop:
         call_kwargs = svc._event_repo.insert.call_args.kwargs
         assert call_kwargs["engine"] == "ai_analyzer"
         assert call_kwargs["severity"] == "INFO"
+
+    @pytest.mark.asyncio
+    async def test_missed_threat_enqueues_critical_alert(self):
+        svc = self._make_service()
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        result = AnalysisResult(
+            verdict="MISSED_THREAT",
+            engine="dns_anomaly",
+            reason="C2 beacon pattern in INFO events.",
+            reasoning="1. Consistent 60s interval.\n2. Same subdomain repeated.",
+        )
+        await svc._apply_result(result)
+        svc._dispatcher.enqueue.assert_called_once()
+        alert_arg = svc._dispatcher.enqueue.call_args[0][0]
+        assert alert_arg.severity.value == "CRITICAL"
+        assert "미탐" in alert_arg.title
+
+    @pytest.mark.asyncio
+    async def test_missed_threat_saves_event_with_reasoning(self):
+        svc = self._make_service()
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        result = AnalysisResult(
+            verdict="MISSED_THREAT",
+            engine="dns_anomaly",
+            reason="Missed C2.",
+            reasoning="1. Reason one.\n2. Reason two.",
+        )
+        await svc._apply_result(result)
+        svc._event_repo.insert.assert_awaited()
+        # _apply_result()의 첫 번째 insert 호출 검증 (CRITICAL)
+        # _try_lower_threshold()의 WARNING insert는 create_task로 나중에 실행됨
+        first_call_kwargs = svc._event_repo.insert.call_args_list[0].kwargs
+        assert first_call_kwargs["severity"] == "CRITICAL"
+        assert first_call_kwargs["reasoning"] == result.reasoning
+
+    @pytest.mark.asyncio
+    async def test_missed_threat_calls_try_lower_threshold(self):
+        svc = self._make_service()
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        result = AnalysisResult(
+            verdict="MISSED_THREAT",
+            engine="dns_anomaly",
+            reason="Missed C2.",
+            adjustments={"entropy_threshold": 3.2},
+        )
+        await svc._apply_result(result)
+        svc._yaml_editor.update_engine_config.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_threat_saves_reasoning(self):
+        svc = self._make_service()
+        result = AnalysisResult(
+            verdict="CONFIRMED_THREAT",
+            engine="port_scan",
+            reason="Real scan.",
+            reasoning="1. 25 distinct ports.\n2. SYN only.",
+        )
+        await svc._apply_result(result)
+        call_kwargs = svc._event_repo.insert.call_args.kwargs
+        assert call_kwargs.get("reasoning") == result.reasoning
+
+    @pytest.mark.asyncio
+    async def test_fetch_recent_events_includes_info(self):
+        """_fetch_recent_events()가 INFO 이벤트를 max_events//3개 포함해야 한다."""
+        svc = self._make_service()
+
+        async def mock_list_recent(severity, since, limit):
+            if severity == "CRITICAL":
+                return [{"id": 1, "severity": "CRITICAL", "engine": "port_scan",
+                         "title": "t", "source_ip": None, "timestamp": "2026-02-27"}]
+            if severity == "WARNING":
+                return [{"id": 2, "severity": "WARNING", "engine": "dns_anomaly",
+                         "title": "t", "source_ip": None, "timestamp": "2026-02-27"}]
+            if severity == "INFO":
+                return [{"id": 3, "severity": "INFO", "engine": "traffic_anomaly",
+                         "title": "t", "source_ip": None, "timestamp": "2026-02-27"}]
+            return []
+
+        svc._event_repo.list_recent = mock_list_recent
+
+        events = await svc._fetch_recent_events()
+
+        severities = {e["severity"] for e in events}
+        assert "INFO" in severities
 
     @pytest.mark.asyncio
     async def test_adjustment_saves_event_to_db(self):

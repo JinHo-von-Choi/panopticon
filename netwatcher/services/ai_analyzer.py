@@ -37,11 +37,12 @@ logger = logging.getLogger("netwatcher.services.ai_analyzer")
 
 @dataclass
 class AnalysisResult:
-    """Copilot 응답 파싱 결과."""
+    """AI CLI 응답 파싱 결과."""
 
-    verdict:     str              # CONFIRMED_THREAT | FALSE_POSITIVE | UNCERTAIN
+    verdict:     str              # CONFIRMED_THREAT | FALSE_POSITIVE | MISSED_THREAT | UNCERTAIN
     engine:      str              # 대상 엔진 이름
     reason:      str = ""
+    reasoning:   str = ""         # 번호 목록 형식 판단 근거
     adjustments: dict[str, float] = field(default_factory=dict)
 
 
@@ -72,9 +73,9 @@ class AIAnalyzerService:
         """
         upper = text.upper()
 
-        # VERDICT — 단어 경계 매칭으로 오판 방지
+        # VERDICT — 단어 경계 매칭으로 오판 방지. MISSED_THREAT 추가
         verdict = "UNCERTAIN"
-        for candidate in ("CONFIRMED_THREAT", "FALSE_POSITIVE", "UNCERTAIN"):
+        for candidate in ("CONFIRMED_THREAT", "FALSE_POSITIVE", "MISSED_THREAT", "UNCERTAIN"):
             if re.search(rf"\b{candidate}\b", upper):
                 verdict = candidate
                 break
@@ -85,13 +86,23 @@ class AIAnalyzerService:
         if engine_match:
             engine = engine_match.group(1).strip()
 
-        # REASON
+        # REASON (한 줄)
         reason = ""
         reason_match = re.search(r"(?i)^REASON:\s*(.+)", text, re.MULTILINE)
         if reason_match:
             reason = reason_match.group(1).strip()
 
-        # ADJUST  (여러 줄 가능)
+        # REASONING (번호 목록 블록 — ADJUST: 또는 끝까지)
+        reasoning = ""
+        reasoning_match = re.search(
+            r"(?i)^REASONING:\s*\n((?:.*\n?)*?)(?=(?:ADJUST:|$))",
+            text,
+            re.MULTILINE,
+        )
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+
+        # ADJUST (여러 줄 가능)
         adjustments: dict[str, float] = {}
         for m in re.finditer(r"(?i)^ADJUST:\s*(\w+)=([\d.]+)", text, re.MULTILINE):
             key, raw = m.group(1), m.group(2)
@@ -104,6 +115,7 @@ class AIAnalyzerService:
             verdict=verdict,
             engine=engine,
             reason=reason,
+            reasoning=reasoning,
             adjustments=adjustments,
         )
 
@@ -139,8 +151,12 @@ class AIAnalyzerService:
             )
             self._provider = "copilot"
 
-        self._consecutive_fp: dict[str, int]  = {}
-        self._task: asyncio.Task | None        = None
+        self._mt_threshold:    int = int(ai_cfg.get("consecutive_mt_threshold",    2))
+        self._max_decrease_pct: int = int(ai_cfg.get("max_threshold_decrease_pct", 10))
+
+        self._consecutive_fp: dict[str, int] = {}
+        self._consecutive_mt: dict[str, int] = {}
+        self._task: asyncio.Task | None       = None
 
     # ------------------------------------------------------------------ #
     # 임계값 자동 조정                                                       #
@@ -221,6 +237,80 @@ class AIAnalyzerService:
                 )
             )
 
+    def _try_lower_threshold(
+        self, engine: str, adjustments: dict[str, float],
+    ) -> None:
+        """연속 미탐 카운터를 증가시키고, 임계값에 달하면 설정을 하향한다.
+
+        - 연속 미탐 횟수가 mt_threshold 미만이면 카운터만 증가
+        - 임계값 달성 시 cap 적용 후 YamlConfigEditor + registry.reload_engine()
+        - cap 방향: max(requested, current * (1 - pct/100)) — 너무 급격한 하향 방지
+        - yaml_editor가 None이면 WARNING 로그 후 skip
+        """
+        key = engine
+        self._consecutive_mt[key] = self._consecutive_mt.get(key, 0) + 1
+
+        if self._consecutive_mt[key] < self._mt_threshold:
+            logger.info(
+                "[ai_analyzer] %s 미탐 카운터 %d/%d",
+                engine, self._consecutive_mt[key], self._mt_threshold,
+            )
+            return
+
+        if self._yaml_editor is None:
+            logger.warning("[ai_analyzer] yaml_editor 없음 — 임계값 하향 불가")
+            return
+
+        try:
+            current_cfg = self._yaml_editor.get_engine_config(engine) or {}
+        except Exception:
+            logger.exception("[ai_analyzer] 엔진 설정 조회 실패: %s", engine)
+            return
+
+        capped: dict[str, float] = {}
+        for param, requested in adjustments.items():
+            current_val = current_cfg.get(param)
+            if current_val is None or not isinstance(current_val, (int, float)):
+                capped[param] = requested
+                continue
+            # 너무 급격한 하향 방지: requested와 cap 중 큰 값 선택
+            cap_val = current_val * (1 - self._max_decrease_pct / 100)
+            capped[param] = max(requested, cap_val)
+
+        try:
+            self._yaml_editor.update_engine_config(engine, capped)
+        except Exception:
+            logger.exception("[ai_analyzer] config 하향 업데이트 실패: %s", engine)
+            return
+
+        new_cfg = self._yaml_editor.get_engine_config(engine) or {}
+        ok, err, _ = self._registry.reload_engine(engine, new_cfg)
+        if ok:
+            logger.info("[ai_analyzer] 엔진 민감도 하향 완료: %s %s", engine, capped)
+        else:
+            logger.error("[ai_analyzer] 엔진 핫리로드 실패: %s — %s", engine, err)
+
+        self._consecutive_mt[key] = 0
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            asyncio.create_task(
+                self._event_repo.insert(
+                    engine="ai_adjustment",
+                    severity="WARNING",
+                    title=f"[AI 미탐조정] {engine} 임계값 자동 하향",
+                    description=str(capped),
+                    metadata={
+                        "engine": engine,
+                        "adjusted": capped,
+                        "provider": self._provider,
+                    },
+                )
+            )
+
     # ------------------------------------------------------------------ #
     # AI CLI 실행                                                           #
     # ------------------------------------------------------------------ #
@@ -277,15 +367,23 @@ class AIAnalyzerService:
         events_json = json.dumps(slim, ensure_ascii=False, indent=2)
 
         return (
-            f"Analyze these network security alerts from a home/office LAN monitor "
+            f"Analyze these network security events from a home/office LAN monitor "
             f"(lookback: {self._lookback_minutes} minutes). "
-            f"Determine if they represent a real attack or a false positive. "
-            f"ALERTS: {events_json} "
+            f"Events include CRITICAL, WARNING, and INFO severity levels. "
+            f"Perform TWO checks: "
+            f"(1) Are any CRITICAL/WARNING alerts actually false positives? "
+            f"(2) Do any INFO/low-confidence events indicate a more serious missed threat? "
+            f"Return the single most important finding. "
+            f"EVENTS: {events_json} "
             f"Respond ONLY in this exact format: "
-            f"VERDICT: CONFIRMED_THREAT | FALSE_POSITIVE | UNCERTAIN "
+            f"VERDICT: CONFIRMED_THREAT | FALSE_POSITIVE | MISSED_THREAT | UNCERTAIN "
             f"ENGINE: <engine_name> "
             f"REASON: <one sentence> "
-            f"ADJUST: <param>=<numeric_value> (only if FALSE_POSITIVE, can repeat)"
+            f"REASONING: "
+            f"1. <reason 1> "
+            f"2. <reason 2> "
+            f"3. <reason 3> "
+            f"ADJUST: <param>=<numeric_value> (FALSE_POSITIVE: raise value, MISSED_THREAT: lower value, can repeat)"
         )
 
     # ------------------------------------------------------------------ #
@@ -310,6 +408,7 @@ class AIAnalyzerService:
                 severity="CRITICAL",
                 title=f"[AI 확인] {result.engine} — 실제 위협",
                 description=result.reason,
+                reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "CONFIRMED_THREAT",
                     "original_engine": result.engine,
@@ -331,6 +430,7 @@ class AIAnalyzerService:
                 severity="WARNING",
                 title=f"[AI 오탐] {result.engine} — 오탐 판정",
                 description=result.reason,
+                reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "FALSE_POSITIVE",
                     "original_engine": result.engine,
@@ -339,6 +439,35 @@ class AIAnalyzerService:
                 },
             )
             self._try_adjust_threshold(result.engine, result.adjustments)
+
+        elif result.verdict == "MISSED_THREAT":
+            from netwatcher.detection.models import Alert, Severity
+            alert = Alert(
+                engine="ai_analyzer",
+                severity=Severity.CRITICAL,
+                title=f"[AI 미탐] {result.engine} — 탐지 누락 의심",
+                description=result.reason,
+                confidence=0.8,
+                metadata={"missed_threat": True, "original_engine": result.engine},
+            )
+            self._dispatcher.enqueue(alert)
+            await self._event_repo.insert(
+                engine="ai_analyzer",
+                severity="CRITICAL",
+                title=f"[AI 미탐] {result.engine} — 탐지 누락 의심",
+                description=result.reason,
+                reasoning=result.reasoning or None,
+                metadata={
+                    "verdict": "MISSED_THREAT",
+                    "original_engine": result.engine,
+                    "provider": self._provider,
+                },
+            )
+            logger.warning(
+                "[ai_analyzer] MISSED_THREAT: engine=%s reason=%s",
+                result.engine, result.reason,
+            )
+            self._try_lower_threshold(result.engine, result.adjustments)
 
         else:  # UNCERTAIN
             logger.info(
@@ -350,6 +479,7 @@ class AIAnalyzerService:
                 severity="INFO",
                 title=f"[AI 불확실] {result.engine} — 판단 불가",
                 description=result.reason,
+                reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "UNCERTAIN",
                     "original_engine": result.engine,
@@ -362,9 +492,9 @@ class AIAnalyzerService:
     # ------------------------------------------------------------------ #
 
     async def _fetch_recent_events(self) -> list[dict]:
-        """최근 lookback_minutes 내 CRITICAL/WARNING 이벤트를 조회한다.
+        """최근 lookback_minutes 내 CRITICAL/WARNING/INFO 이벤트를 조회한다.
 
-        EventRepository.list_recent()가 단일 severity만 지원하므로 두 번 호출 후 병합한다.
+        CRITICAL + WARNING은 각 max_events // 2개, INFO는 max_events // 3개.
         """
         from datetime import datetime, timedelta, timezone
         since = (
@@ -372,6 +502,7 @@ class AIAnalyzerService:
         ).isoformat()
 
         half = self._max_events // 2
+        info_limit = self._max_events // 3
         try:
             criticals = await self._event_repo.list_recent(
                 severity="CRITICAL", since=since, limit=half,
@@ -379,11 +510,14 @@ class AIAnalyzerService:
             warnings = await self._event_repo.list_recent(
                 severity="WARNING", since=since, limit=half,
             )
+            info_events = await self._event_repo.list_recent(
+                severity="INFO", since=since, limit=info_limit,
+            )
         except Exception:
             logger.exception("[ai_analyzer] 이벤트 조회 실패")
             return []
 
-        merged = criticals + warnings
+        merged = criticals + warnings + info_events
         merged.sort(key=lambda e: str(e.get("timestamp", "")), reverse=True)
         return merged[: self._max_events]
 

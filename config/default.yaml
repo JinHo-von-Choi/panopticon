@@ -295,6 +295,8 @@ netwatcher:
     max_events: 50                 # AI에 전달할 최대 이벤트 수
     consecutive_fp_threshold: 2    # 연속 오탐 판정 횟수 → 임계값 조정
     max_threshold_increase_pct: 20 # 임계값 자동 상향 최대 폭 (%)
+    consecutive_mt_threshold: 2    # 연속 미탐 판정 횟수 → 임계값 하향
+    max_threshold_decrease_pct: 10 # 임계값 자동 하향 최대 폭 (%)
     copilot_timeout_seconds: 60    # AI CLI 응답 타임아웃
 
   daily_report:
