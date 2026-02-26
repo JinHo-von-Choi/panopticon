@@ -265,3 +265,72 @@ class TestBuildPrompt:
         svc = self._make_service()
         prompt = svc._build_prompt([])
         assert "ADJUST:" in prompt
+
+
+class TestAnalysisLoop:
+    """_apply_result() 및 전체 루프 동작 검증."""
+
+    def _make_service(self, fp_threshold: int = 1) -> AIAnalyzerService:
+        cfg_data = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": fp_threshold,
+            "max_threshold_increase_pct": 20,
+            "copilot_timeout_seconds": 60,
+        }
+        config = MagicMock()
+        config.section.return_value = cfg_data
+        return AIAnalyzerService(
+            config=config,
+            event_repo=MagicMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_confirmed_threat_enqueues_alert(self):
+        svc = self._make_service()
+        result = AnalysisResult(
+            verdict="CONFIRMED_THREAT",
+            engine="port_scan",
+            reason="Real port scan detected.",
+        )
+        await svc._apply_result(result)
+        svc._dispatcher.enqueue.assert_called_once()
+        alert_arg = svc._dispatcher.enqueue.call_args[0][0]
+        assert alert_arg.engine == "ai_analyzer"
+        assert alert_arg.severity.value == "CRITICAL"
+
+    @pytest.mark.asyncio
+    async def test_false_positive_calls_try_adjust(self):
+        svc = self._make_service()
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        result = AnalysisResult(
+            verdict="FALSE_POSITIVE",
+            engine="port_scan",
+            reason="Normal scan.",
+            adjustments={"threshold": 12.0},
+        )
+        await svc._apply_result(result)
+        svc._yaml_editor.update_engine_config.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_uncertain_does_nothing(self):
+        svc = self._make_service()
+        result = AnalysisResult(verdict="UNCERTAIN", engine="dns_anomaly")
+        await svc._apply_result(result)
+        svc._dispatcher.enqueue.assert_not_called()
+        svc._yaml_editor.update_engine_config.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_stop_lifecycle(self):
+        svc = self._make_service()
+        await svc.start()
+        assert svc._task is not None
+        assert not svc._task.done()
+        await svc.stop()
+        assert svc._task.done()

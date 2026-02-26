@@ -235,3 +235,120 @@ class AIAnalyzerService:
             f"REASON: <one sentence> "
             f"ADJUST: <param>=<numeric_value> (only if FALSE_POSITIVE, can repeat)"
         )
+
+    # ------------------------------------------------------------------ #
+    # 분석 결과 적용                                                        #
+    # ------------------------------------------------------------------ #
+
+    async def _apply_result(self, result: AnalysisResult) -> None:
+        """파싱된 분석 결과에 따라 알림 재전송 또는 임계값 조정을 수행한다."""
+        if result.verdict == "CONFIRMED_THREAT":
+            from netwatcher.detection.models import Alert, Severity
+            alert = Alert(
+                engine="ai_analyzer",
+                severity=Severity.CRITICAL,
+                title=f"[AI 확인] {result.engine} — 실제 위협",
+                description=result.reason,
+                confidence=1.0,
+                metadata={"ai_confirmed": True, "original_engine": result.engine},
+            )
+            self._dispatcher.enqueue(alert)
+            logger.warning(
+                "[ai_analyzer] CONFIRMED_THREAT: engine=%s reason=%s",
+                result.engine, result.reason,
+            )
+
+        elif result.verdict == "FALSE_POSITIVE":
+            logger.info(
+                "[ai_analyzer] FALSE_POSITIVE: engine=%s adjustments=%s",
+                result.engine, result.adjustments,
+            )
+            self._try_adjust_threshold(result.engine, result.adjustments)
+
+        else:  # UNCERTAIN
+            logger.info(
+                "[ai_analyzer] UNCERTAIN: engine=%s reason=%s",
+                result.engine, result.reason,
+            )
+
+    # ------------------------------------------------------------------ #
+    # 이벤트 조회                                                           #
+    # ------------------------------------------------------------------ #
+
+    async def _fetch_recent_events(self) -> list[dict]:
+        """최근 lookback_minutes 내 CRITICAL/WARNING 이벤트를 조회한다.
+
+        EventRepository.list_recent()가 단일 severity만 지원하므로 두 번 호출 후 병합한다.
+        """
+        from datetime import datetime, timedelta, timezone
+        since = (
+            datetime.now(timezone.utc) - timedelta(minutes=self._lookback_minutes)
+        ).isoformat()
+
+        half = self._max_events // 2
+        try:
+            criticals = await self._event_repo.list_recent(
+                severity="CRITICAL", since=since, limit=half,
+            )
+            warnings = await self._event_repo.list_recent(
+                severity="WARNING", since=since, limit=half,
+            )
+        except Exception:
+            logger.exception("[ai_analyzer] 이벤트 조회 실패")
+            return []
+
+        merged = criticals + warnings
+        merged.sort(key=lambda e: str(e.get("timestamp", "")), reverse=True)
+        return merged[: self._max_events]
+
+    # ------------------------------------------------------------------ #
+    # 분석 루프                                                            #
+    # ------------------------------------------------------------------ #
+
+    async def _run_once(self) -> None:
+        """단일 분석 사이클: 이벤트 조회 → Copilot 실행 → 결과 적용."""
+        events = await self._fetch_recent_events()
+        if not events:
+            logger.debug("[ai_analyzer] 분석 대상 이벤트 없음")
+            return
+
+        prompt = self._build_prompt(events)
+        raw    = await self._run_copilot(prompt)
+        if not raw:
+            return
+
+        result = self._parse_response(raw)
+        logger.info(
+            "[ai_analyzer] 분석 완료: verdict=%s engine=%s",
+            result.verdict, result.engine,
+        )
+        await self._apply_result(result)
+
+    async def _analysis_loop(self) -> None:
+        """interval_seconds마다 _run_once()를 호출하는 백그라운드 루프."""
+        logger.info("[ai_analyzer] 분석 루프 시작 (interval=%ds)", self._interval_seconds)
+        while True:
+            try:
+                await self._run_once()
+            except Exception:
+                logger.exception("[ai_analyzer] 분석 루프 오류")
+            await asyncio.sleep(self._interval_seconds)
+
+    # ------------------------------------------------------------------ #
+    # 라이프사이클                                                          #
+    # ------------------------------------------------------------------ #
+
+    async def start(self) -> None:
+        """백그라운드 분석 루프를 시작한다."""
+        self._task = asyncio.create_task(self._analysis_loop())
+        logger.info("AIAnalyzerService started")
+
+    async def stop(self) -> None:
+        """백그라운드 루프를 취소하고 정리한다."""
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("AIAnalyzerService stopped")
