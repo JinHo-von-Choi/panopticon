@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Scapy-2.6-blue" alt="Scapy" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/tests-853%20passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-918%20passed-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -41,7 +41,7 @@
 
 ## 개요
 
-**Panopticon**은 소규모~중규모 네트워크 환경을 위한 올인원 네트워크 보안 모니터링 시스템이다. Scapy 기반의 실시간 패킷 캡처부터 18개의 패킷 기반 탐지 엔진 + 2개의 NetFlow 기반 탐지 엔진, 킬체인 기반 인시던트 상관분석, 자동 IP 차단(IRS), 위협 인텔리전스 피드 통합, 그리고 실시간 웹 대시보드까지 — 네트워크 보안 모니터링에 필요한 모든 것을 단일 바이너리로 제공한다.
+**Panopticon**은 소규모~중규모 네트워크 환경을 위한 올인원 네트워크 보안 모니터링 시스템이다. Scapy 기반의 실시간 패킷 캡처부터 18개의 패킷 기반 탐지 엔진 + 2개의 NetFlow 기반 탐지 엔진, 킬체인 기반 인시던트 상관분석, 자동 IP 차단(IRS), 위협 인텔리전스 피드 통합, AI 기반 오탐 자동 감소(AIAnalyzer), 그리고 실시간 웹 대시보드까지 — 네트워크 보안 모니터링에 필요한 모든 것을 단일 바이너리로 제공한다.
 
 ### 제작 동기
 
@@ -92,6 +92,17 @@ Chart.js 기반 트래픽 시각화, WebSocket 실시간 이벤트 스트리밍,
 ### 다채널 알림
 
 Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포트를 지원한다. 슬라이딩 윈도우 기반 속도 제한으로 알림 폭주를 방지한다.
+
+### AI 기반 오탐 자동 감소 (AIAnalyzer)
+
+주기적으로 최근 CRITICAL/WARNING 이벤트를 AI CLI(GitHub Copilot / Claude / Gemini 등)로 배치 분석하여 오탐을 자동 처리한다.
+
+- **CONFIRMED_THREAT**: 실제 위협으로 확인되면 알림 재전송 (rate limit 우회)
+- **FALSE_POSITIVE**: 오탐으로 판정되면 해당 엔진의 임계값을 자동 상향 + 핫 리로드
+- **UNCERTAIN**: 판단 불가 시 로그만 기록
+
+분석 결과는 모두 이벤트 DB에 저장되며, 대시보드 **AI Analyzer** 탭에서 조회할 수 있다.
+지원 AI 프로바이더: `copilot` (기본) · `claude` · `codex` · `gemini` · `agent`
 
 ### Prometheus 메트릭
 
@@ -156,6 +167,7 @@ Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포�
 | `TickService` | 1초 | 엔진 `on_tick()` 호출 (시간 윈도우 기반 탐지), 스니퍼 워치독 |
 | `StatsFlushService` | 60초 | 트래픽 카운터/디바이스 버퍼를 DB에 배치 플러시, Prometheus 메트릭 업데이트 |
 | `MaintenanceService` | 6시간 | 데이터 보존 정책 적용, 위협 피드 갱신, 만료 차단 정리 |
+| `AIAnalyzerService` | 설정값 (기본 15분) | 최근 이벤트 AI 배치 분석 → 오탐 임계값 자동 조정, 실제 위협 재알림 |
 
 ---
 
@@ -585,6 +597,7 @@ SPAN 구성 방법, 배포 토폴로지 옵션(관리형 스위치 / 라우터 �
 | **Devices** | 네트워크 장치 목록 (MAC, IP, 벤더, OS, 패킷 수), 장치 등록/편집 |
 | **Blocklist** | 커스텀 IP/도메인 차단 목록 관리, 피드 통계 |
 | **Engines** | 18개 탐지 엔진 활성화/비활성화 토글, 파라미터 실시간 편집 |
+| **AI Analyzer** | AI 오탐 분석 이력 조회 (verdict 필터, 임계값 조정 이력), 서비스 상태 표시. `ai_analyzer.enabled: true` 시에만 탭 표시 |
 
 ### 실시간 기능
 
@@ -839,6 +852,33 @@ netflow:
         webhook_url: ""
         min_severity: "WARNING"
 ```
+
+### AI 오탐 분석기 (AIAnalyzer)
+
+AI CLI를 통해 주기적으로 최근 이벤트를 분석하고 오탐률을 자동으로 낮춘다.
+
+```yaml
+  ai_analyzer:
+    enabled: true                  # true로 설정 시 AI 오탐 분석 활성화
+    provider: "copilot"            # AI 프로바이더: copilot | claude | codex | gemini | agent
+    interval_minutes: 15           # 분석 실행 주기
+    lookback_minutes: 30           # 분석 대상 시간 범위 (최근 N분)
+    max_events: 50                 # AI에 전달할 최대 이벤트 수
+    consecutive_fp_threshold: 2    # 연속 오탐 판정 횟수 → 임계값 조정
+    max_threshold_increase_pct: 20 # 임계값 자동 상향 최대 폭 (%)
+    copilot_timeout_seconds: 60    # AI CLI 응답 타임아웃
+```
+
+**프로바이더별 사전 조건:**
+
+| 프로바이더 | 필요 도구 | 설치 방법 |
+|-----------|----------|----------|
+| `copilot` (기본) | GitHub CLI + Copilot 구독 | `gh auth login` |
+| `claude` | Claude CLI | `npm i -g @anthropic-ai/claude-code` |
+| `gemini` | Gemini CLI | `npm i -g @google/gemini-cli` |
+| `codex` | OpenAI Codex CLI | `npm i -g @openai/codex` |
+
+AI CLI가 설치되지 않았거나 타임아웃이 발생하면 해당 사이클은 건너뛰고 다음 주기를 기다린다 (비치명적).
 
 ### 자동 응답 (IRS)
 
@@ -1101,6 +1141,12 @@ GeoIP 파일이 없으면 IP 지리 정보 없이 정상 동작하며, 탐지 �
 | `DELETE` | `/api/whitelist/domain` | 도메인 화이트리스트 제거 |
 | `POST` | `/api/whitelist/ip_range` | IP 대역(CIDR) 화이트리스트 추가 |
 
+### AI Analyzer
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/ai-analyzer/status` | AI Analyzer 상태 조회 (활성화 여부, 프로바이더, 설정값, 연속 오탐 카운터). `ai_analyzer.enabled: false` 시 404 반환 |
+
 ### 운영
 
 | 메서드 | 경로 | 설명 |
@@ -1202,7 +1248,7 @@ rules:
 
 ### 테스트 구조
 
-853개 테스트는 다음 4개 레이어로 구성된다.
+918개 테스트는 다음 4개 레이어로 구성된다.
 
 | 레이어 | 디렉토리 | 내용 |
 |--------|----------|------|
