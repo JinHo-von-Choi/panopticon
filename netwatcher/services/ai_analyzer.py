@@ -1,9 +1,16 @@
-"""AIAnalyzerService — GitHub Copilot CLI 기반 오탐률 자동 감소 서비스.
+"""AIAnalyzerService — AI CLI 기반 오탐률 자동 감소 서비스.
 
 주기적으로 CRITICAL/WARNING 이벤트를 배치 분석하여:
 - CONFIRMED_THREAT: 알림 재전송 (rate limit 우회)
 - FALSE_POSITIVE:   엔진 임계값 자동 상향 + 핫리로드
 - UNCERTAIN:        로그 기록만
+
+지원 프로바이더 (config ai_analyzer.provider):
+  copilot  — gh copilot explain <prompt>    (기본값)
+  claude   — claude -p <prompt>
+  codex    — codex <prompt>
+  gemini   — gemini <prompt>
+  agent    — claude --agent <prompt>        (실험적)
 
 작성자: 최진호
 작성일: 2026-02-27
@@ -39,7 +46,19 @@ class AnalysisResult:
 
 
 class AIAnalyzerService:
-    """GitHub Copilot CLI 기반 오탐률 자동 감소 서비스."""
+    """AI CLI 기반 오탐률 자동 감소 서비스.
+
+    config의 ``ai_analyzer.provider`` 값으로 CLI 백엔드를 선택한다.
+    """
+
+    # provider → CLI 커맨드 프리픽스. 프롬프트는 항상 마지막 인자로 추가된다.
+    _PROVIDER_COMMANDS: dict[str, list[str]] = {
+        "copilot": ["gh",     "copilot", "explain"],
+        "claude":  ["claude", "-p"],
+        "codex":   ["codex"],
+        "gemini":  ["gemini"],
+        "agent":   ["claude", "--agent"],
+    }
 
     # ------------------------------------------------------------------ #
     # 파싱                                                                  #
@@ -105,12 +124,20 @@ class AIAnalyzerService:
         self._dispatcher  = dispatcher
         self._yaml_editor = yaml_editor
 
+        self._provider:         str = str(ai_cfg.get("provider", "copilot"))
         self._interval_seconds: int = int(ai_cfg.get("interval_minutes",  15)) * 60
         self._lookback_minutes: int = int(ai_cfg.get("lookback_minutes",  30))
         self._max_events:       int = int(ai_cfg.get("max_events",        50))
         self._fp_threshold:     int = int(ai_cfg.get("consecutive_fp_threshold", 2))
         self._max_pct:          int = int(ai_cfg.get("max_threshold_increase_pct", 20))
         self._timeout:          int = int(ai_cfg.get("copilot_timeout_seconds", 60))
+
+        if self._provider not in self._PROVIDER_COMMANDS:
+            logger.warning(
+                "[ai_analyzer] 알 수 없는 프로바이더 '%s' — 'copilot'으로 폴백",
+                self._provider,
+            )
+            self._provider = "copilot"
 
         self._consecutive_fp: dict[str, int]  = {}
         self._task: asyncio.Task | None        = None
@@ -175,17 +202,18 @@ class AIAnalyzerService:
         self._consecutive_fp[key] = 0
 
     # ------------------------------------------------------------------ #
-    # Copilot CLI 실행                                                      #
+    # AI CLI 실행                                                           #
     # ------------------------------------------------------------------ #
 
-    async def _run_copilot(self, prompt: str) -> str:
-        """gh copilot explain을 서브프로세스로 실행하고 stdout을 반환한다.
+    async def _run_ai(self, prompt: str) -> str:
+        """설정된 AI 프로바이더 CLI를 서브프로세스로 실행하고 stdout을 반환한다.
 
-        타임아웃, FileNotFoundError(gh 미설치), 기타 예외 시 빈 문자열을 반환한다.
+        타임아웃, FileNotFoundError(CLI 미설치), 기타 예외 시 빈 문자열을 반환한다.
         """
+        cmd = self._PROVIDER_COMMANDS[self._provider] + [prompt]
         try:
             proc = await asyncio.create_subprocess_exec(
-                "gh", "copilot", "explain", prompt,
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -196,14 +224,18 @@ class AIAnalyzerService:
                 )
             except asyncio.TimeoutError:
                 proc.kill()
-                logger.warning("[ai_analyzer] Copilot CLI 타임아웃 (%ds)", self._timeout)
+                logger.warning(
+                    "[ai_analyzer] %s CLI 타임아웃 (%ds)", self._provider, self._timeout,
+                )
                 return ""
             return stdout.decode("utf-8", errors="replace")
         except FileNotFoundError:
-            logger.error("[ai_analyzer] gh CLI를 찾을 수 없음 — Copilot 분석 불가")
+            logger.error(
+                "[ai_analyzer] %s CLI를 찾을 수 없음 — 분석 불가", self._provider,
+            )
             return ""
         except Exception:
-            logger.exception("[ai_analyzer] Copilot 실행 오류")
+            logger.exception("[ai_analyzer] %s 실행 오류", self._provider)
             return ""
 
     # ------------------------------------------------------------------ #
@@ -306,14 +338,14 @@ class AIAnalyzerService:
     # ------------------------------------------------------------------ #
 
     async def _run_once(self) -> None:
-        """단일 분석 사이클: 이벤트 조회 → Copilot 실행 → 결과 적용."""
+        """단일 분석 사이클: 이벤트 조회 → AI CLI 실행 → 결과 적용."""
         events = await self._fetch_recent_events()
         if not events:
             logger.debug("[ai_analyzer] 분석 대상 이벤트 없음")
             return
 
         prompt = self._build_prompt(events)
-        raw    = await self._run_copilot(prompt)
+        raw    = await self._run_ai(prompt)
         if not raw:
             return
 

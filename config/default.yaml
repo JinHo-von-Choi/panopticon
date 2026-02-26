@@ -287,6 +287,16 @@ netwatcher:
     - "port_scan"
     - "arp_spoof"
 
+  ai_analyzer:
+    enabled: false                 # true로 설정 시 AI 오탐 분석 활성화
+    provider: "copilot"            # AI 프로바이더: copilot | claude | codex | gemini | agent
+    interval_minutes: 15           # 분석 실행 주기
+    lookback_minutes: 30           # 분석 대상 시간 범위 (최근 N분)
+    max_events: 50                 # AI에 전달할 최대 이벤트 수
+    consecutive_fp_threshold: 2    # 연속 오탐 판정 횟수 → 임계값 조정
+    max_threshold_increase_pct: 20 # 임계값 자동 상향 최대 폭 (%)
+    copilot_timeout_seconds: 60    # AI CLI 응답 타임아웃
+
   daily_report:
     enabled: true
     report_hour: 12  # KST noon

@@ -160,12 +160,13 @@ class TestTryAdjustThreshold:
         svc._registry.reload_engine.assert_not_called()
 
 
-class TestRunCopilot:
-    """_run_copilot() subprocess 실행 검증."""
+class TestRunAI:
+    """_run_ai() subprocess 실행 및 프로바이더 디스패치 검증."""
 
-    def _make_service(self) -> AIAnalyzerService:
+    def _make_service(self, provider: str = "copilot") -> AIAnalyzerService:
         cfg_data = {
             "enabled": True,
+            "provider": provider,
             "interval_minutes": 15,
             "lookback_minutes": 30,
             "max_events": 50,
@@ -184,14 +185,14 @@ class TestRunCopilot:
         )
 
     @pytest.mark.asyncio
-    async def test_returns_stdout(self):
-        svc = self._make_service()
+    async def test_copilot_uses_gh_command(self):
+        svc = self._make_service(provider="copilot")
         mock_proc = AsyncMock()
         mock_proc.communicate.return_value = (b"VERDICT: CONFIRMED_THREAT\n", b"")
         mock_proc.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
-            result = await svc._run_copilot("some prompt")
+            result = await svc._run_ai("some prompt")
 
         assert result == "VERDICT: CONFIRMED_THREAT\n"
         mock_exec.assert_called_once()
@@ -199,6 +200,34 @@ class TestRunCopilot:
         assert args[0] == "gh"
         assert args[1] == "copilot"
         assert args[2] == "explain"
+        assert args[3] == "some prompt"
+
+    @pytest.mark.asyncio
+    async def test_claude_uses_claude_command(self):
+        svc = self._make_service(provider="claude")
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"VERDICT: UNCERTAIN\n", b"")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await svc._run_ai("prompt")
+
+        args = mock_exec.call_args[0]
+        assert args[0] == "claude"
+        assert args[1] == "-p"
+        assert args[2] == "prompt"
+
+    @pytest.mark.asyncio
+    async def test_gemini_uses_gemini_command(self):
+        svc = self._make_service(provider="gemini")
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"VERDICT: UNCERTAIN\n", b"")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await svc._run_ai("prompt")
+
+        args = mock_exec.call_args[0]
+        assert args[0] == "gemini"
+        assert args[1] == "prompt"
 
     @pytest.mark.asyncio
     async def test_timeout_returns_empty(self):
@@ -213,16 +242,21 @@ class TestRunCopilot:
         mock_proc.kill = MagicMock()
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            result = await svc._run_copilot("prompt")
+            result = await svc._run_ai("prompt")
 
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_copilot_not_found_returns_empty(self):
+    async def test_cli_not_found_returns_empty(self):
         svc = self._make_service()
         with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("gh not found")):
-            result = await svc._run_copilot("prompt")
+            result = await svc._run_ai("prompt")
         assert result == ""
+
+    def test_unknown_provider_falls_back_to_copilot(self):
+        """알 수 없는 프로바이더는 'copilot'으로 폴백한다."""
+        svc = self._make_service(provider="unknown_provider")
+        assert svc._provider == "copilot"
 
 
 class TestBuildPrompt:
