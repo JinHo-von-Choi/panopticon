@@ -76,7 +76,8 @@ class TestParseResponse:
         assert result.verdict == "CONFIRMED_THREAT"
 
 
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestTryAdjustThreshold:
@@ -157,3 +158,110 @@ class TestTryAdjustThreshold:
         svc._try_adjust_threshold("port_scan", {"threshold": 12})
 
         svc._registry.reload_engine.assert_not_called()
+
+
+class TestRunCopilot:
+    """_run_copilot() subprocess 실행 검증."""
+
+    def _make_service(self) -> AIAnalyzerService:
+        cfg_data = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": 2,
+            "max_threshold_increase_pct": 20,
+            "copilot_timeout_seconds": 5,
+        }
+        config = MagicMock()
+        config.section.return_value = cfg_data
+        return AIAnalyzerService(
+            config=config,
+            event_repo=MagicMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_stdout(self):
+        svc = self._make_service()
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"VERDICT: CONFIRMED_THREAT\n", b"")
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            result = await svc._run_copilot("some prompt")
+
+        assert result == "VERDICT: CONFIRMED_THREAT\n"
+        mock_exec.assert_called_once()
+        args = mock_exec.call_args[0]
+        assert args[0] == "gh"
+        assert args[1] == "copilot"
+        assert args[2] == "explain"
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_empty(self):
+        svc = self._make_service()
+
+        async def slow_communicate():
+            await asyncio.sleep(10)
+            return b"", b""
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = slow_communicate
+        mock_proc.kill = MagicMock()
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await svc._run_copilot("prompt")
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_copilot_not_found_returns_empty(self):
+        svc = self._make_service()
+        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("gh not found")):
+            result = await svc._run_copilot("prompt")
+        assert result == ""
+
+
+class TestBuildPrompt:
+    """_build_prompt() 프롬프트 구조 검증."""
+
+    def _make_service(self) -> AIAnalyzerService:
+        cfg_data = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": 2,
+            "max_threshold_increase_pct": 20,
+            "copilot_timeout_seconds": 60,
+        }
+        config = MagicMock()
+        config.section.return_value = cfg_data
+        return AIAnalyzerService(
+            config=config,
+            event_repo=MagicMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+
+    def test_prompt_contains_verdict_instruction(self):
+        svc = self._make_service()
+        events = [
+            {"id": 1, "engine": "port_scan", "severity": "CRITICAL",
+             "title": "Port scan detected", "source_ip": "192.168.1.100",
+             "timestamp": "2026-02-27T12:00:00"}
+        ]
+        prompt = svc._build_prompt(events)
+        assert "VERDICT:" in prompt
+        assert "CONFIRMED_THREAT" in prompt
+        assert "FALSE_POSITIVE" in prompt
+        assert "port_scan" in prompt
+
+    def test_prompt_contains_adjust_instruction(self):
+        svc = self._make_service()
+        prompt = svc._build_prompt([])
+        assert "ADJUST:" in prompt

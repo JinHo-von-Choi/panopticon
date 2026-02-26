@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -172,3 +173,65 @@ class AIAnalyzerService:
             logger.error("[ai_analyzer] 엔진 핫리로드 실패: %s — %s", engine, err)
 
         self._consecutive_fp[key] = 0
+
+    # ------------------------------------------------------------------ #
+    # Copilot CLI 실행                                                      #
+    # ------------------------------------------------------------------ #
+
+    async def _run_copilot(self, prompt: str) -> str:
+        """gh copilot explain을 서브프로세스로 실행하고 stdout을 반환한다.
+
+        타임아웃, FileNotFoundError(gh 미설치), 기타 예외 시 빈 문자열을 반환한다.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "gh", "copilot", "explain", prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=float(self._timeout),
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                logger.warning("[ai_analyzer] Copilot CLI 타임아웃 (%ds)", self._timeout)
+                return ""
+            return stdout.decode("utf-8", errors="replace")
+        except FileNotFoundError:
+            logger.error("[ai_analyzer] gh CLI를 찾을 수 없음 — Copilot 분석 불가")
+            return ""
+        except Exception:
+            logger.exception("[ai_analyzer] Copilot 실행 오류")
+            return ""
+
+    # ------------------------------------------------------------------ #
+    # 프롬프트 구성                                                         #
+    # ------------------------------------------------------------------ #
+
+    def _build_prompt(self, events: list[dict]) -> str:
+        """분석 대상 이벤트를 구조화된 Copilot 프롬프트로 변환한다."""
+        slim = [
+            {
+                "engine":    e.get("engine", ""),
+                "severity":  e.get("severity", ""),
+                "title":     e.get("title", ""),
+                "source_ip": str(e.get("source_ip", "")),
+                "timestamp": str(e.get("timestamp", "")),
+            }
+            for e in events
+        ]
+        events_json = json.dumps(slim, ensure_ascii=False, indent=2)
+
+        return (
+            f"Analyze these network security alerts from a home/office LAN monitor "
+            f"(lookback: {self._lookback_minutes} minutes). "
+            f"Determine if they represent a real attack or a false positive. "
+            f"ALERTS: {events_json} "
+            f"Respond ONLY in this exact format: "
+            f"VERDICT: CONFIRMED_THREAT | FALSE_POSITIVE | UNCERTAIN "
+            f"ENGINE: <engine_name> "
+            f"REASON: <one sentence> "
+            f"ADJUST: <param>=<numeric_value> (only if FALSE_POSITIVE, can repeat)"
+        )
