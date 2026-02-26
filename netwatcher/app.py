@@ -288,6 +288,25 @@ class NetWatcher:
             )
             await asset_monitor.start()
 
+        # ── AI 오탐 분석기 ────────────────────────────────────────────────
+        ai_analyzer = None
+        ai_analyzer_cfg = self.config.section("ai_analyzer") or {}
+        if ai_analyzer_cfg.get("enabled"):
+            from netwatcher.services.ai_analyzer import AIAnalyzerService
+            ai_analyzer = AIAnalyzerService(
+                config=self.config,
+                event_repo=event_repo,
+                registry=self.registry,
+                dispatcher=dispatcher,
+                yaml_editor=self._yaml_editor,
+            )
+            await ai_analyzer.start()
+            logger.info(
+                "AIAnalyzerService started (provider=%s, interval=%dmin)",
+                ai_analyzer_cfg.get("provider", "copilot"),
+                ai_analyzer_cfg.get("interval_minutes", 15),
+            )
+
         # ── DNS 리졸버 & 스니퍼 ──────────────────────────────────────────
         await self._dns_resolver.start()
 
@@ -333,6 +352,8 @@ class NetWatcher:
             await daily_reporter.stop()
         if asset_monitor:
             await asset_monitor.stop()
+        if ai_analyzer:
+            await ai_analyzer.stop()
         server.should_exit = True
         await server_task
         await dispatcher.stop()
