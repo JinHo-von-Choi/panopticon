@@ -74,3 +74,86 @@ class TestParseResponse:
         )
         result = self._parse(text)
         assert result.verdict == "CONFIRMED_THREAT"
+
+
+from unittest.mock import MagicMock
+
+
+class TestTryAdjustThreshold:
+    """_try_adjust_threshold() 연속 카운터 및 상한 캡 검증."""
+
+    def _make_service(self, consecutive_fp_threshold: int = 2,
+                      max_pct: int = 20) -> AIAnalyzerService:
+        cfg_data = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": consecutive_fp_threshold,
+            "max_threshold_increase_pct": max_pct,
+            "copilot_timeout_seconds": 60,
+        }
+        config = MagicMock()
+        config.section.return_value = cfg_data
+        svc = AIAnalyzerService(
+            config=config,
+            event_repo=MagicMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+        return svc
+
+    def test_no_adjust_below_threshold(self):
+        svc = self._make_service(consecutive_fp_threshold=2)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        adjustments = {"threshold": 15}
+
+        svc._try_adjust_threshold("port_scan", adjustments)  # 1회차
+
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        svc._registry.reload_engine.assert_not_called()
+        assert svc._consecutive_fp["port_scan"] == 1
+
+    def test_adjusts_on_threshold_reached(self):
+        svc = self._make_service(consecutive_fp_threshold=2)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        adjustments = {"threshold": 15}
+
+        svc._try_adjust_threshold("port_scan", adjustments)  # 1회차
+        svc._try_adjust_threshold("port_scan", adjustments)  # 2회차 → 적용
+
+        svc._yaml_editor.update_engine_config.assert_called_once_with(
+            "port_scan", {"threshold": 12.0}  # 10 * 1.2 = 12 (캡: +20%)
+        )
+        assert svc._consecutive_fp["port_scan"] == 0
+
+    def test_cap_applied(self):
+        """requested value가 cap보다 낮으면 requested value 그대로."""
+        svc = self._make_service(consecutive_fp_threshold=1, max_pct=50)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        svc._registry.reload_engine.return_value = (True, None, [])
+
+        svc._try_adjust_threshold("port_scan", {"threshold": 14})  # 14 < 10*1.5=15
+
+        svc._yaml_editor.update_engine_config.assert_called_once_with(
+            "port_scan", {"threshold": 14}
+        )
+
+    def test_counter_resets_after_adjust(self):
+        svc = self._make_service(consecutive_fp_threshold=1)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        svc._registry.reload_engine.return_value = (True, None, [])
+
+        svc._try_adjust_threshold("port_scan", {"threshold": 12})
+        assert svc._consecutive_fp.get("port_scan", 0) == 0
+
+    def test_yaml_editor_none_skips_adjust(self):
+        """yaml_editor가 None이면 조정 없이 경고만."""
+        svc = self._make_service(consecutive_fp_threshold=1)
+        svc._yaml_editor = None
+
+        svc._try_adjust_threshold("port_scan", {"threshold": 12})
+
+        svc._registry.reload_engine.assert_not_called()
