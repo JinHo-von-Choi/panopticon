@@ -232,6 +232,7 @@ class NetWatcher:
             registry=self.registry,
             yaml_editor=self._yaml_editor,
             flow_processor=flow_processor,
+            ai_analyzer=ai_analyzer,
         )
 
         import uvicorn

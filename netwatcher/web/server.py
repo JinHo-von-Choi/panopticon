@@ -286,6 +286,7 @@ def _register_routers_and_static(
     registry,
     yaml_editor,
     flow_processor=None,
+    ai_analyzer=None,
 ) -> None:
     """API 라우터, 정적 에셋, 루트 경로를 등록한다."""
 
@@ -320,6 +321,10 @@ def _register_routers_and_static(
             prefix="/api",
         )
 
+    if ai_analyzer is not None:
+        from netwatcher.web.routes.ai_analyzer import create_ai_analyzer_router
+        app.include_router(create_ai_analyzer_router(ai_analyzer), prefix="/api")
+
     # 정적 에셋 마운트 (API 라우터 등록 후)
     app.mount("/css", StaticFiles(directory=str(static_dir / "css")), name="css")
     app.mount("/js",  StaticFiles(directory=str(static_dir / "js")),  name="js")
@@ -350,6 +355,7 @@ def create_app(
     registry=None,
     yaml_editor=None,
     flow_processor=None,
+    ai_analyzer=None,
 ) -> FastAPI:
     """FastAPI 애플리케이션을 생성하고 구성한다."""
     enable_docs = config.get("web.enable_docs", False)
@@ -373,6 +379,7 @@ def create_app(
         correlator, whitelist, blocklist_repo, feed_manager,
         block_manager, signature_engine, registry, yaml_editor,
         flow_processor=flow_processor,
+        ai_analyzer=ai_analyzer,
     )
 
     return app
