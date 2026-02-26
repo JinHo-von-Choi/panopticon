@@ -215,6 +215,19 @@ class NetWatcher:
         else:
             logger.info("NetFlow collector disabled (netflow.enabled: false)")
 
+        # ── AI 오탐 분석기 (create_app 전 초기화 필수) ───────────────────
+        ai_analyzer = None
+        ai_analyzer_cfg = self.config.section("ai_analyzer") or {}
+        if ai_analyzer_cfg.get("enabled"):
+            from netwatcher.services.ai_analyzer import AIAnalyzerService
+            ai_analyzer = AIAnalyzerService(
+                config=self.config,
+                event_repo=event_repo,
+                registry=self.registry,
+                dispatcher=dispatcher,
+                yaml_editor=self._yaml_editor,
+            )
+
         # ── 웹 서버 ───────────────────────────────────────────────────────
         app = create_app(
             config=self.config,
@@ -289,18 +302,8 @@ class NetWatcher:
             )
             await asset_monitor.start()
 
-        # ── AI 오탐 분석기 ────────────────────────────────────────────────
-        ai_analyzer = None
-        ai_analyzer_cfg = self.config.section("ai_analyzer") or {}
-        if ai_analyzer_cfg.get("enabled"):
-            from netwatcher.services.ai_analyzer import AIAnalyzerService
-            ai_analyzer = AIAnalyzerService(
-                config=self.config,
-                event_repo=event_repo,
-                registry=self.registry,
-                dispatcher=dispatcher,
-                yaml_editor=self._yaml_editor,
-            )
+        # ── AI 오탐 분석기 시작 ──────────────────────────────────────────
+        if ai_analyzer is not None:
             await ai_analyzer.start()
             logger.info(
                 "AIAnalyzerService started (provider=%s, interval=%dmin)",
