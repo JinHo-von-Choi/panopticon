@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Scapy-2.6-blue" alt="Scapy" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/tests-918%20passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-934%20passed-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -99,9 +99,10 @@ Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포�
 
 - **CONFIRMED_THREAT**: 실제 위협으로 확인되면 알림 재전송 (rate limit 우회)
 - **FALSE_POSITIVE**: 오탐으로 판정되면 해당 엔진의 임계값을 자동 상향 + 핫 리로드
+- **MISSED_THREAT**: 탐지 엔진이 놓친 실제 위협을 INFO 이벤트에서 발견하면 CRITICAL 알림 + 임계값 자동 하향
 - **UNCERTAIN**: 판단 불가 시 로그만 기록
 
-분석 결과는 모두 이벤트 DB에 저장되며, 대시보드 **AI Analyzer** 탭에서 조회할 수 있다.
+AI 판단 근거(reasoning)는 이벤트 DB에 함께 저장되며, 대시보드 **AI Analyzer** 탭에서 조회할 수 있다.
 지원 AI 프로바이더: `copilot` (기본) · `claude` · `codex` · `gemini` · `agent`
 
 ### Prometheus 메트릭
@@ -167,7 +168,7 @@ Slack, Telegram, Discord 웹훅을 통한 즉시 알림과 일일 보안 리포�
 | `TickService` | 1초 | 엔진 `on_tick()` 호출 (시간 윈도우 기반 탐지), 스니퍼 워치독 |
 | `StatsFlushService` | 60초 | 트래픽 카운터/디바이스 버퍼를 DB에 배치 플러시, Prometheus 메트릭 업데이트 |
 | `MaintenanceService` | 6시간 | 데이터 보존 정책 적용, 위협 피드 갱신, 만료 차단 정리 |
-| `AIAnalyzerService` | 설정값 (기본 15분) | 최근 이벤트 AI 배치 분석 → 오탐 임계값 자동 조정, 실제 위협 재알림 |
+| `AIAnalyzerService` | 설정값 (기본 15분) | 최근 이벤트 AI 배치 분석 → 오탐 임계값 자동 조정, 실제 위협 재알림, 미탐 위협 CRITICAL 알림 + 임계값 하향 |
 
 ---
 
@@ -866,6 +867,8 @@ AI CLI를 통해 주기적으로 최근 이벤트를 분석하고 오탐률을 �
     max_events: 50                 # AI에 전달할 최대 이벤트 수
     consecutive_fp_threshold: 2    # 연속 오탐 판정 횟수 → 임계값 조정
     max_threshold_increase_pct: 20 # 임계값 자동 상향 최대 폭 (%)
+    consecutive_mt_threshold: 2    # 연속 미탐 판정 횟수 → 임계값 하향
+    max_threshold_decrease_pct: 10 # 임계값 자동 하향 최대 폭 (%)
     copilot_timeout_seconds: 60    # AI CLI 응답 타임아웃
 ```
 
