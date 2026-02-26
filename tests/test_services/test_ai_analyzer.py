@@ -98,7 +98,7 @@ class TestTryAdjustThreshold:
         config.section.return_value = cfg_data
         svc = AIAnalyzerService(
             config=config,
-            event_repo=MagicMock(),
+            event_repo=AsyncMock(),
             registry=MagicMock(),
             dispatcher=MagicMock(),
             yaml_editor=MagicMock(),
@@ -318,7 +318,7 @@ class TestAnalysisLoop:
         config.section.return_value = cfg_data
         return AIAnalyzerService(
             config=config,
-            event_repo=MagicMock(),
+            event_repo=AsyncMock(),
             registry=MagicMock(),
             dispatcher=MagicMock(),
             yaml_editor=MagicMock(),
@@ -368,3 +368,59 @@ class TestAnalysisLoop:
         assert not svc._task.done()
         await svc.stop()
         assert svc._task.done()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_threat_saves_event_to_db(self):
+        svc = self._make_service()
+        result = AnalysisResult(
+            verdict="CONFIRMED_THREAT",
+            engine="port_scan",
+            reason="Real port scan.",
+        )
+        await svc._apply_result(result)
+        svc._event_repo.insert.assert_awaited_once()
+        call_kwargs = svc._event_repo.insert.call_args.kwargs
+        assert call_kwargs["engine"] == "ai_analyzer"
+        assert call_kwargs["severity"] == "CRITICAL"
+
+    @pytest.mark.asyncio
+    async def test_false_positive_saves_event_to_db(self):
+        svc = self._make_service()
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        result = AnalysisResult(
+            verdict="FALSE_POSITIVE",
+            engine="port_scan",
+            reason="Normal traffic.",
+            adjustments={"threshold": 12.0},
+        )
+        await svc._apply_result(result)
+        svc._event_repo.insert.assert_awaited()
+        # _apply_result()의 첫 번째 insert 호출 (ai_analyzer) 검증
+        first_call_kwargs = svc._event_repo.insert.call_args_list[0].kwargs
+        assert first_call_kwargs["engine"] == "ai_analyzer"
+        assert first_call_kwargs["severity"] == "WARNING"
+
+    @pytest.mark.asyncio
+    async def test_uncertain_saves_event_to_db(self):
+        svc = self._make_service()
+        result = AnalysisResult(verdict="UNCERTAIN", engine="dns_anomaly", reason="Unclear.")
+        await svc._apply_result(result)
+        svc._event_repo.insert.assert_awaited_once()
+        call_kwargs = svc._event_repo.insert.call_args.kwargs
+        assert call_kwargs["engine"] == "ai_analyzer"
+        assert call_kwargs["severity"] == "INFO"
+
+    @pytest.mark.asyncio
+    async def test_adjustment_saves_event_to_db(self):
+        svc = self._make_service(fp_threshold=1)
+        svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
+        svc._registry.reload_engine.return_value = (True, None, [])
+        svc._try_adjust_threshold("port_scan", {"threshold": 12.0})
+        # asyncio.create_task를 쓰므로 잠시 대기 후 확인
+        import asyncio
+        await asyncio.sleep(0)
+        svc._event_repo.insert.assert_awaited_once()
+        call_kwargs = svc._event_repo.insert.call_args.kwargs
+        assert call_kwargs["engine"] == "ai_adjustment"
+        assert call_kwargs["severity"] == "INFO"

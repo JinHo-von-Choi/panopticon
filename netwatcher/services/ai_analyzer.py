@@ -201,6 +201,26 @@ class AIAnalyzerService:
 
         self._consecutive_fp[key] = 0
 
+        # 조정 이력 저장 (동기 컨텍스트 → asyncio.create_task로 비동기 예약)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            asyncio.create_task(
+                self._event_repo.insert(
+                    engine="ai_adjustment",
+                    severity="INFO",
+                    title=f"[AI 조정] {engine} 임계값 자동 상향",
+                    description=str(capped),
+                    metadata={
+                        "engine": engine,
+                        "adjusted": capped,
+                        "provider": self._provider,
+                    },
+                )
+            )
+
     # ------------------------------------------------------------------ #
     # AI CLI 실행                                                           #
     # ------------------------------------------------------------------ #
@@ -285,6 +305,17 @@ class AIAnalyzerService:
                 metadata={"ai_confirmed": True, "original_engine": result.engine},
             )
             self._dispatcher.enqueue(alert)
+            await self._event_repo.insert(
+                engine="ai_analyzer",
+                severity="CRITICAL",
+                title=f"[AI 확인] {result.engine} — 실제 위협",
+                description=result.reason,
+                metadata={
+                    "verdict": "CONFIRMED_THREAT",
+                    "original_engine": result.engine,
+                    "provider": self._provider,
+                },
+            )
             logger.warning(
                 "[ai_analyzer] CONFIRMED_THREAT: engine=%s reason=%s",
                 result.engine, result.reason,
@@ -295,12 +326,35 @@ class AIAnalyzerService:
                 "[ai_analyzer] FALSE_POSITIVE: engine=%s adjustments=%s",
                 result.engine, result.adjustments,
             )
+            await self._event_repo.insert(
+                engine="ai_analyzer",
+                severity="WARNING",
+                title=f"[AI 오탐] {result.engine} — 오탐 판정",
+                description=result.reason,
+                metadata={
+                    "verdict": "FALSE_POSITIVE",
+                    "original_engine": result.engine,
+                    "adjustments": result.adjustments,
+                    "provider": self._provider,
+                },
+            )
             self._try_adjust_threshold(result.engine, result.adjustments)
 
         else:  # UNCERTAIN
             logger.info(
                 "[ai_analyzer] UNCERTAIN: engine=%s reason=%s",
                 result.engine, result.reason,
+            )
+            await self._event_repo.insert(
+                engine="ai_analyzer",
+                severity="INFO",
+                title=f"[AI 불확실] {result.engine} — 판단 불가",
+                description=result.reason,
+                metadata={
+                    "verdict": "UNCERTAIN",
+                    "original_engine": result.engine,
+                    "provider": self._provider,
+                },
             )
 
     # ------------------------------------------------------------------ #
