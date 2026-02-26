@@ -145,6 +145,13 @@
     var blTotal = 0;
     var BL_PER_PAGE = 50;
 
+    // AI Analyzer state
+    var aiAnalyzerEnabled = false;
+    var aiLogsPage        = 0;
+    var aiLogsTotal       = 0;
+    var aiLogsPerPage     = 50;
+    var aiVerdictFilter   = "";
+
     // --- DOM refs ---
     var $clock = document.getElementById("clock");
     var $connStatus = document.getElementById("connection-status");
@@ -283,6 +290,7 @@
             if (tab.dataset.tab === "traffic") loadCharts();
             if (tab.dataset.tab === "blocklist") loadBlocklist(0);
             if (tab.dataset.tab === "engines") loadEngines();
+            if (tab.dataset.tab === "ai-analyzer") { loadAiAnalyzerStatus(); loadAiLogs(0); }
         });
     });
 
@@ -1559,6 +1567,93 @@
         }
     }
 
+    // === AI ANALYZER TAB ===
+
+    async function loadAiAnalyzerStatus() {
+        try {
+            var resp = await authFetch(API + "/api/ai-analyzer/status");
+            var data = await resp.json();
+            document.getElementById("ai-provider").textContent    = data.provider         || "—";
+            document.getElementById("ai-interval").textContent    = data.interval_minutes || "—";
+            document.getElementById("ai-lookback").textContent    = data.lookback_minutes || "—";
+            document.getElementById("ai-fp-threshold").textContent = data.fp_threshold    || "—";
+        } catch (e) {
+            // 비활성화된 경우 조용히 무시
+        }
+    }
+
+    async function loadAiLogs(page) {
+        page = page || 0;
+        aiLogsPage = page;
+        var limit  = aiLogsPerPage;
+        var offset = page * limit;
+
+        var engineFilter = "";
+        if (aiVerdictFilter === "adjustment") {
+            engineFilter = "ai_adjustment";
+        } else {
+            engineFilter = "ai_analyzer";
+        }
+
+        var params = new URLSearchParams();
+        params.set("limit", limit);
+        params.set("offset", offset);
+        params.set("engine", engineFilter);
+        if (aiVerdictFilter && aiVerdictFilter !== "adjustment") {
+            params.set("q", aiVerdictFilter);
+        }
+
+        try {
+            var resp = await authFetch(API + "/api/events?" + params.toString());
+            var data = await resp.json();
+            aiLogsTotal = data.total || 0;
+            renderAiLogs(data.events || []);
+            renderPagination(
+                document.getElementById("ai-logs-pagination"),
+                aiLogsPage, aiLogsTotal, aiLogsPerPage,
+                function (p) { loadAiLogs(p); }
+            );
+        } catch (e) {
+            document.getElementById("ai-logs-body").innerHTML =
+                '<tr><td colspan="6" style="text-align:center;color:var(--muted)">로그를 불러올 수 없습니다.</td></tr>';
+        }
+    }
+
+    function renderAiLogs(events) {
+        var tbody = document.getElementById("ai-logs-body");
+        if (!events.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No AI analyzer logs yet.</td></tr>';
+            return;
+        }
+        var html = "";
+        events.forEach(function (ev) {
+            var meta         = ev.metadata || {};
+            var verdict      = meta.verdict || (ev.engine === "ai_adjustment" ? "ADJUSTMENT" : "—");
+            var verdictClass = "";
+            if (verdict === "CONFIRMED_THREAT") verdictClass = "sev-critical";
+            else if (verdict === "FALSE_POSITIVE") verdictClass = "sev-warning";
+            else if (verdict === "UNCERTAIN")      verdictClass = "sev-info";
+            else if (verdict === "ADJUSTMENT")     verdictClass = "sev-info";
+
+            var adjustmentsText = "";
+            if (meta.adjusted) {
+                adjustmentsText = JSON.stringify(meta.adjusted);
+            } else if (meta.adjustments && Object.keys(meta.adjustments).length) {
+                adjustmentsText = JSON.stringify(meta.adjustments);
+            }
+
+            html += '<tr>';
+            html += '<td>' + esc(formatTime(ev.timestamp)) + '</td>';
+            html += '<td><span class="badge ' + verdictClass + '">' + esc(verdict) + '</span></td>';
+            html += '<td>' + esc(meta.original_engine || meta.engine || ev.engine || "—") + '</td>';
+            html += '<td>' + esc(ev.description || "—") + '</td>';
+            html += '<td><code style="font-size:11px">' + esc(adjustmentsText || "—") + '</code></td>';
+            html += '<td>' + esc(meta.provider || "—") + '</td>';
+            html += '</tr>';
+        });
+        tbody.innerHTML = html;
+    }
+
     // === STATS ===
     async function loadStats() {
         try {
@@ -1923,6 +2018,29 @@
         blSearchTimer = setTimeout(function () { loadBlocklist(0); }, 400);
     });
 
+    // AI Analyzer filters & refresh
+    var $aiRefreshBtn = document.getElementById("btn-ai-refresh");
+    if ($aiRefreshBtn) {
+        $aiRefreshBtn.addEventListener("click", function () {
+            loadAiAnalyzerStatus();
+            loadAiLogs(0);
+        });
+    }
+    var $aiVerdictFilter = document.getElementById("ai-filter-verdict");
+    if ($aiVerdictFilter) {
+        $aiVerdictFilter.addEventListener("change", function () {
+            aiVerdictFilter = this.value;
+            loadAiLogs(0);
+        });
+    }
+    var $aiPagesizeFilter = document.getElementById("ai-filter-pagesize");
+    if ($aiPagesizeFilter) {
+        $aiPagesizeFilter.addEventListener("change", function () {
+            aiLogsPerPage = parseInt(this.value, 10);
+            loadAiLogs(0);
+        });
+    }
+
     // === INIT ===
     var statsInterval = null;
 
@@ -1935,6 +2053,18 @@
         if (!statsInterval) {
             statsInterval = setInterval(loadStats, 30000);
         }
+
+        // AI Analyzer 탭 활성화 여부 확인
+        authFetch(API + "/api/ai-analyzer/status")
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data && data.enabled) {
+                    aiAnalyzerEnabled = true;
+                    var tabBtn = document.getElementById("tab-btn-ai-analyzer");
+                    if (tabBtn) tabBtn.style.display = "";
+                }
+            })
+            .catch(function () {});   // 404 = disabled, 탭 숨김 유지
     }
 
     // 인증 확인 후 앱 초기화
