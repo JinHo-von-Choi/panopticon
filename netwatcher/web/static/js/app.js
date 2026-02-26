@@ -2067,7 +2067,10 @@
 
         // AI Analyzer 탭 활성화 여부 확인
         authFetch(API + "/api/ai-analyzer/status")
-            .then(function (resp) { return resp.json(); })
+            .then(function (resp) {
+                if (!resp.ok) return null;
+                return resp.json();
+            })
             .then(function (data) {
                 if (data && data.enabled) {
                     aiAnalyzerEnabled = true;
