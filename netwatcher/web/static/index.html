@@ -88,6 +88,7 @@
             <button class="tab" data-tab="devices">Devices</button>
             <button class="tab" data-tab="blocklist">Blocklist</button>
             <button class="tab" data-tab="engines">Engines</button>
+            <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none">AI Analyzer</button>
         </nav>
 
         <!-- Events Tab -->
@@ -245,6 +246,46 @@
                     <div class="engine-detail-empty">Select an engine to configure</div>
                 </div>
             </div>
+        </section>
+
+        <!-- AI Analyzer Tab -->
+        <section id="tab-ai-analyzer" class="tab-content">
+            <div id="ai-analyzer-status-bar" class="toolbar" style="align-items:center;gap:16px;flex-wrap:wrap;">
+                <span>Provider: <strong id="ai-provider">—</strong></span>
+                <span>Interval: <strong id="ai-interval">—</strong> min</span>
+                <span>Lookback: <strong id="ai-lookback">—</strong> min</span>
+                <span>FP Threshold: <strong id="ai-fp-threshold">—</strong></span>
+            </div>
+            <div class="toolbar" style="margin-top:8px">
+                <select id="ai-filter-verdict">
+                    <option value="">All Verdicts</option>
+                    <option value="CONFIRMED_THREAT">Confirmed Threat</option>
+                    <option value="FALSE_POSITIVE">False Positive</option>
+                    <option value="UNCERTAIN">Uncertain</option>
+                    <option value="adjustment">Adjustment</option>
+                </select>
+                <select id="ai-filter-pagesize">
+                    <option value="50" selected>50 / page</option>
+                    <option value="100">100 / page</option>
+                </select>
+                <button id="btn-ai-refresh" class="btn">Refresh</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="ai-logs-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Verdict</th>
+                            <th>Engine</th>
+                            <th>Reason</th>
+                            <th>Adjustments</th>
+                            <th>Provider</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ai-logs-body"></tbody>
+                </table>
+            </div>
+            <div class="pagination" id="ai-logs-pagination"></div>
         </section>
     </main>
 
