@@ -1572,6 +1572,7 @@
     async function loadAiAnalyzerStatus() {
         try {
             var resp = await authFetch(API + "/api/ai-analyzer/status");
+            if (!resp.ok) return;
             var data = await resp.json();
             document.getElementById("ai-provider").textContent    = data.provider         || "—";
             document.getElementById("ai-interval").textContent    = data.interval_minutes || "—";
@@ -1588,23 +1589,33 @@
         var limit  = aiLogsPerPage;
         var offset = page * limit;
 
-        var engineFilter = "";
+        // verdict 필터에 따른 engine 및 검색어 결정
+        var engineFilter, searchTerm;
         if (aiVerdictFilter === "adjustment") {
             engineFilter = "ai_adjustment";
+            searchTerm   = "";
         } else {
             engineFilter = "ai_analyzer";
+            var verdictSearchMap = {
+                "CONFIRMED_THREAT": "AI 확인",
+                "FALSE_POSITIVE":   "AI 오탐",
+                "UNCERTAIN":        "AI 불확실",
+            };
+            searchTerm = verdictSearchMap[aiVerdictFilter] || "";
         }
 
-        var params = new URLSearchParams();
-        params.set("limit", limit);
-        params.set("offset", offset);
-        params.set("engine", engineFilter);
-        if (aiVerdictFilter && aiVerdictFilter !== "adjustment") {
-            params.set("q", aiVerdictFilter);
+        var params = new URLSearchParams({
+            limit:  limit,
+            offset: offset,
+            engine: engineFilter,
+        });
+        if (searchTerm) {
+            params.set("q", searchTerm);
         }
 
         try {
             var resp = await authFetch(API + "/api/events?" + params.toString());
+            if (!resp.ok) { throw new Error("HTTP " + resp.status); }
             var data = await resp.json();
             aiLogsTotal = data.total || 0;
             renderAiLogs(data.events || []);
