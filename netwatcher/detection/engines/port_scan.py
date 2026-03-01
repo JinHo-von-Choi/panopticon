@@ -1,187 +1,162 @@
-"""포트 스캔 탐지 엔진 (SYN, FIN, NULL, XMAS, ACK 스캔 탐지)."""
+"""포트 스캔 탐지: TCP SYN/FIN/NULL/XMAS 스캔."""
 
 from __future__ import annotations
 
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 from scapy.all import IP, TCP, Packet
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.detection.utils import get_ip_addrs
+from netwatcher.utils.network import is_private_ip
 
 logger = logging.getLogger("netwatcher.detection.engines.port_scan")
 
-# TCP 플래그 상수
-_FIN = 0x01
-_SYN = 0x02
-_RST = 0x04
-_PSH = 0x08
-_ACK = 0x10
-_URG = 0x20
-
-
-def _classify_scan(flags: int) -> str | None:
-    """TCP 패킷을 스캔 유형으로 분류한다. 스캔 패턴이 아니면 None을 반환한다."""
-    if (flags & _SYN) and not (flags & _ACK):
-        return "SYN"
-    if flags == 0:
-        return "NULL"
-    if (flags & (_FIN | _PSH | _URG)) == (_FIN | _PSH | _URG):
-        return "XMAS"
-    if (flags & _FIN) and not (flags & (_SYN | _ACK | _RST)):
-        return "FIN"
-    if (flags & _ACK) and not (flags & (_SYN | _FIN | _RST | _PSH)):
-        return "ACK"
-    return None
-
 
 class PortScanEngine(DetectionEngine):
-    """포트 스캔 활동을 탐지한다 (SYN, FIN, NULL, XMAS, ACK 스캔).
+    """짧은 시간 동안 다수의 고유 포트에 접속을 시도하는 활동을 탐지한다.
 
-    시간 윈도우 내 (src_ip -> dst_ip) 쌍별 고유 목적지 포트를 추적한다.
-    임계값 초과 시 알림을 트리거한다.
+    - SYN 스캔: 일반적인 연결 시도
+    - Stealth 스캔: FIN, NULL, XMAS (비정상 플래그 조합)
     """
 
     name = "port_scan"
-    requires_span = True
-    description = "네트워크 포트 스캔 활동을 탐지합니다. SYN/FIN/NULL/Xmas 스캔 등 다양한 스캔 기법을 식별합니다."
+    description = "포트 스캔 활동을 탐지합니다. 짧은 시간 내에 다수의 포트를 조사하는 스캐너 및 공격자를 식별합니다."
+    description_key = "engines.port_scan.description"
     config_schema = {
-        "window_seconds": {
-            "type": int, "default": 60, "min": 5, "max": 600,
-            "label": "탐지 윈도우(초)",
-            "description": "포트 스캔 활동을 집계하는 시간 윈도우. "
-                           "짧으면 빠른 스캔만 탐지, 길면 느린 스텔스 스캔도 탐지.",
-        },
         "threshold": {
-            "type": int, "default": 15, "min": 3, "max": 1000,
-            "label": "포트 수 임계값",
-            "description": "윈도우 내 (출발지->목적지) 쌍에서 스캔된 고유 포트 수가 이 값을 초과하면 알림 발생. "
-                           "낮추면 민감도 증가(소규모 스캔도 탐지), 높이면 대규모 스캔만 탐지.",
+            "type": int, "default": 15, "min": 5, "max": 100,
+            "label": "포트 스캔 임계값",
+            "label_key": "engines.port_scan.threshold.label",
+            "description": "윈도우 내 고유 목적지 포트 수가 이 값을 초과하면 포트 스캔으로 판단.",
+            "description_key": "engines.port_scan.threshold.description",
         },
-        "alerted_cooldown_seconds": {
-            "type": int, "default": 300, "min": 10, "max": 3600,
-            "label": "재알림 쿨다운(초)",
-            "description": "동일 (출발지->목적지) 쌍에 대해 알림 재발송까지 대기 시간.",
+        "window_seconds": {
+            "type": int, "default": 60, "min": 10, "max": 600,
+            "label": "탐지 윈도우(초)",
+            "label_key": "engines.port_scan.window_seconds.label",
+            "description": "포트 스캔 활동을 집계하는 슬라이딩 윈도우 길이.",
+            "description_key": "engines.port_scan.window_seconds.description",
         },
-        "max_tracked_connections": {
-            "type": int, "default": 10000, "min": 100, "max": 1000000,
-            "label": "최대 추적 연결 수",
-            "description": "메모리에 유지하는 (출발지, 목적지) 쌍의 최대 수. "
-                           "대규모 네트워크에서는 증가 필요.",
+        "stealth_threshold": {
+            "type": int, "default": 3, "min": 1, "max": 20,
+            "label": "Stealth 스캔 임계값",
+            "label_key": "engines.port_scan.stealth_threshold.label",
+            "description": "비정상 TCP 플래그(NULL, XMAS 등)를 가진 패킷이 이 횟수를 초과하면 즉시 경고.",
+            "description_key": "engines.port_scan.stealth_threshold.description",
         },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:
-        """포트 스캔 엔진을 초기화한다. 윈도우, 임계값, 쿨다운 등을 설정한다."""
+        """엔진을 초기화하고 포트 추적 버퍼를 생성한다."""
         super().__init__(config)
-        self._window = config.get("window_seconds", 60)
         self._threshold = config.get("threshold", 15)
-        self._alerted_cooldown = config.get("alerted_cooldown_seconds", 300)
-        self._max_connections = config.get("max_tracked_connections", 10000)
+        self._window = config.get("window_seconds", 60)
+        self._stealth_threshold = config.get("stealth_threshold", 3)
 
-        # (src_ip, dst_ip) -> (timestamp, port, scan_type) 리스트
-        self._connections: dict[tuple[str, str], list[tuple[float, int, str]]] = defaultdict(list)
-        # (src_ip, dst_ip) -> 마지막 알림 타임스탬프 (쿨다운 기반)
-        self._alerted: dict[tuple[str, str], float] = {}
+        # source_ip -> deque of (timestamp, dst_port)
+        self._scans: dict[str, deque[tuple[float, int]]] = defaultdict(deque)
+        # source_ip -> stealth_packet_count
+        self._stealth_counts: dict[str, int] = defaultdict(int)
+        self._alerted: dict[str, float] = {}
 
     def analyze(self, packet: Packet) -> Alert | None:
-        """TCP 패킷에서 스캔 유형을 분류하고 연결 정보를 기록한다."""
-        if not packet.haslayer(TCP):
+        """TCP 패킷에서 비정상 플래그 또는 대량의 포트 접속 시도를 탐지한다."""
+        if not packet.haslayer(TCP) or not packet.haslayer(IP):
             return None
 
-        src_ip, dst_ip = get_ip_addrs(packet)
-        if not src_ip or not dst_ip:
-            return None
-
-        tcp = packet[TCP]
-        scan_type = _classify_scan(int(tcp.flags))
-        if scan_type is None:
-            return None
-
-        dst_port = tcp.dport
+        src_ip = packet[IP].src
+        dst_port = packet[TCP].dport
+        flags = packet[TCP].flags
         now = time.time()
 
-        key = (src_ip, dst_ip)
+        # Stealth 스캔 탐지 (NULL, XMAS 등)
+        # NULL: 0, XMAS: FIN+PSH+URG (0x29)
+        is_stealth = False
+        if flags == 0:  # NULL Scan
+            is_stealth = True
+        elif int(flags) == 0x29:  # XMAS Scan
+            is_stealth = True
+        elif flags == "F":  # FIN Scan (연결 없이 FIN만 전송)
+            is_stealth = True
 
-        # 메모리 소진 방지를 위한 최대 추적 연결 수 제한
-        if key not in self._connections and len(self._connections) >= self._max_connections:
-            # 가장 오래된 항목 제거
-            oldest_key = min(
-                self._connections,
-                key=lambda k: self._connections[k][0][0] if self._connections[k] else float('inf'),
-            )
-            del self._connections[oldest_key]
+        if is_stealth:
+            self._stealth_counts[src_ip] += 1
+            if self._stealth_counts[src_ip] >= self._stealth_threshold:
+                if now - self._alerted.get(f"{src_ip}:stealth", 0) > self._window:
+                    self._alerted[f"{src_ip}:stealth"] = now
+                    return Alert(
+                        engine=self.name,
+                        severity=Severity.CRITICAL,
+                        title="Stealth Port Scan Detected",
+                        title_key="engines.port_scan.alerts.stealth.title",
+                        description=(
+                            f"Abnormal TCP flags ({flags}) from {src_ip}. "
+                            "Indicates a stealth port scan attempt (NULL/XMAS/FIN)."
+                        ),
+                        description_key="engines.port_scan.alerts.stealth.description",
+                        source_ip=src_ip,
+                        confidence=0.9,
+                        metadata={"flags": str(flags), "count": self._stealth_counts[src_ip]},
+                    )
 
-        self._connections[key].append((now, dst_port, scan_type))
-
-        return None  # 분석은 on_tick에서 수행
+        # 일반 포트 스캔 추적
+        self._scans[src_ip].append((now, dst_port))
+        return None
 
     def on_tick(self, timestamp: float) -> list[Alert]:
-        """윈도우 내 고유 포트 수를 검사하여 포트 스캔 알림을 생성한다."""
+        """주기적으로 윈도우 내 고유 포트 수를 확인하여 포트 스캔 알림을 생성한다."""
         alerts = []
         now = time.time()
         cutoff = now - self._window
 
-        keys_to_delete = []
-        for key, entries in self._connections.items():
-            # 오래된 항목 제거
-            entries[:] = [(ts, port, st) for ts, port, st in entries if ts > cutoff]
+        for src_ip, attempts in list(self._scans.items()):
+            # 윈도우 밖 항목 제거
+            while attempts and attempts[0][0] < cutoff:
+                attempts.popleft()
 
-            if not entries:
-                keys_to_delete.append(key)
+            if not attempts:
                 continue
 
-            unique_ports = set(port for _, port, _ in entries)
-            scan_types   = sorted(set(st for _, _, st in entries))
-            src_ip, dst_ip = key
+            unique_ports = set(p for _, p in attempts)
+            
+            # 내부망 간 통신 여부 확인
+            is_internal = is_private_ip(src_ip)
+            effective_threshold = self._threshold * 3 if is_internal else self._threshold
 
-            # 영구 집합 대신 쿨다운 검사
-            last_alert = self._alerted.get(key, 0)
-            if (
-                len(unique_ports) >= self._threshold
-                and now - last_alert > self._alerted_cooldown
-            ):
-                self._alerted[key] = now
-                port_list = sorted(unique_ports)[:20]
-                confidence = min(1.0, len(unique_ports) / (self._threshold * 2))
-                scan_label = "/".join(scan_types)
-                alerts.append(Alert(
-                    engine=self.name,
-                    severity=Severity.CRITICAL,
-                    title=f"Port Scan Detected ({scan_label})",
-                    description=(
-                        f"{src_ip} scanned {len(unique_ports)} ports on {dst_ip} "
-                        f"in {self._window}s ({scan_label} scan). Ports: {port_list}"
-                    ),
-                    source_ip=src_ip,
-                    dest_ip=dst_ip,
-                    metadata={
-                        "unique_ports": len(unique_ports),
-                        "sample_ports": port_list,
-                        "scan_types": scan_types,
-                        "window_seconds": self._window,
-                        "confidence": round(confidence, 2),
-                    },
-                ))
-
-        for key in keys_to_delete:
-            del self._connections[key]
-
-        # 만료된 쿨다운 제거
-        expired = [
-            k for k, ts in self._alerted.items()
-            if now - ts > self._alerted_cooldown
-        ]
-        for k in expired:
-            del self._alerted[k]
+            if len(unique_ports) >= effective_threshold:
+                if now - self._alerted.get(src_ip, 0) > self._window:
+                    self._alerted[src_ip] = now
+                    confidence = min(1.0, 0.6 + (len(unique_ports) / 100))
+                    title = "Port Scan Detected" + (" (Internal)" if is_internal else "")
+                    alerts.append(Alert(
+                        engine=self.name,
+                        severity=Severity.WARNING,
+                        title=title,
+                        title_key="engines.port_scan.alerts.scan.title",
+                        description=(
+                            f"{src_ip} scanned {len(unique_ports)} unique ports "
+                            f"in {self._window}s. Possible reconnaissance."
+                        ),
+                        description_key="engines.port_scan.alerts.scan.description",
+                        source_ip=src_ip,
+                        confidence=confidence,
+                        metadata={
+                            "unique_ports": len(unique_ports),
+                            "count": len(unique_ports),
+                            "window_seconds": self._window,
+                            "sample_ports": list(unique_ports)[:10],
+                            "is_internal": is_internal,
+                        },
+                    ))
 
         return alerts
 
     def shutdown(self) -> None:
-        """엔진 종료 시 추적 데이터를 정리한다."""
-        self._connections.clear()
+        """엔진 데이터를 초기화한다."""
+        self._scans.clear()
+        self._stealth_counts.clear()
         self._alerted.clear()

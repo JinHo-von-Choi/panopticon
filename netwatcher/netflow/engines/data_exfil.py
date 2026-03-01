@@ -1,104 +1,84 @@
-"""플로우 기반 데이터 유출 탐지 엔진."""
+"""NetFlow 기반 데이터 유출 탐지."""
 
 from __future__ import annotations
 
-import ipaddress
-import logging
 import time
 from collections import defaultdict
 from typing import Any
 
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.netflow.base import FlowEngine
-from netwatcher.netflow.models import FlowRecord
+from netwatcher.netflow.base import NetFlowEngine
+from netwatcher.netflow.models import NetFlowV5Record
+from netwatcher.utils.network import is_private_ip
 
-logger = logging.getLogger("netwatcher.netflow.engines.data_exfil")
+class FlowDataExfilEngine(NetFlowEngine):
+    """NetFlow 데이터를 기반으로 대량의 외부 전송을 탐지한다."""
 
-_RFC1918 = [
-    ipaddress.IPv4Network("10.0.0.0/8"),
-    ipaddress.IPv4Network("172.16.0.0/12"),
-    ipaddress.IPv4Network("192.168.0.0/16"),
-    ipaddress.IPv4Network("127.0.0.0/8"),
-]
-
-
-def _is_internal(ip: str) -> bool:
-    """IP 주소가 RFC 1918 사설망 대역인지 확인한다."""
-    try:
-        addr = ipaddress.IPv4Address(ip)
-        return any(addr in net for net in _RFC1918)
-    except ValueError:
-        return False
-
-
-class FlowDataExfilEngine(FlowEngine):
-    """NetFlow 플로우에서 대용량 외부 전송(데이터 유출)을 탐지한다.
-
-    내부 IP에서 외부 IP로의 전송 바이트를 시간 윈도우별로 누적한다.
-    임계값 초과 시 알림 발생.
-    """
-
-    name        = "flow_data_exfil"
-    description = "NetFlow 기반 대용량 외부 전송 탐지 — SPAN 없는 환경에서도 동작."
-
-    config_schema: dict[str, Any] = {
-        "byte_threshold": {"type": int, "default": 104857600, "min": 1048576},  # 100MB
-        "window_seconds": {"type": int, "default": 3600,      "min": 60},
+    name = "flow_data_exfil"
+    description = "NetFlow 데이터를 기반으로 데이터 유출을 탐지합니다. 외부 IP로의 대량 전송 활동을 식별합니다."
+    description_key = "engines.flow_data_exfil.description"
+    config_schema = {
+        "outbound_threshold_mb": {
+            "type": int, "default": 100, "min": 10, "max": 2000,
+            "label": "외부 전송 임계값(MB)",
+            "label_key": "engines.flow_data_exfil.outbound_threshold_mb.label",
+            "description": "윈도우 내 외부 IP로 전송된 데이터가 이 값을 초과하면 유출 의심.",
+            "description_key": "engines.flow_data_exfil.outbound_threshold_mb.description",
+        },
+        "window_seconds": {
+            "type": int, "default": 300, "min": 60, "max": 3600,
+            "label": "집계 윈도우(초)",
+            "label_key": "engines.flow_data_exfil.window_seconds.label",
+            "description": "전송량을 합산하는 시간 단위.",
+            "description_key": "engines.flow_data_exfil.window_seconds.description",
+        },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._threshold = config.get("byte_threshold", 104_857_600)  # 100MB
-        self._window    = config.get("window_seconds",  3600)
+        self._threshold_bytes = config.get("outbound_threshold_mb", 100) * 1024 * 1024
+        self._window = config.get("window_seconds", 300)
+        # (src_ip, dst_ip) -> total_bytes
+        self._outbound_bytes: dict[tuple[str, str], int] = defaultdict(int)
+        self._last_reset = time.time()
+        self._alerted: dict[tuple[str, str], float] = {}
 
-        # (src_ip, dst_ip) → list[(bytes, timestamp)]
-        self._transfer_log: dict[tuple[str, str], list[tuple[int, float]]] = (
-            defaultdict(list)
-        )
+    def analyze_flow(self, flow: NetFlowV5Record) -> Alert | None:
+        """NetFlow 레코드에서 외부 전송량을 합산한다."""
+        src_ip = flow.src_ip
+        dst_ip = flow.dst_ip
+        size = flow.bytes
+        
+        if is_private_ip(src_ip) and not is_private_ip(dst_ip):
+            self._outbound_bytes[(src_ip, dst_ip)] += size
+        return None
 
-    def analyze_flow(self, flow: FlowRecord) -> Alert | None:
-        """플로우를 받아 내부→외부 전송이면 누적 집계 후 임계값 초과 시 알림."""
-        if not _is_internal(flow.src_ip) or _is_internal(flow.dst_ip):
-            return None
-
+    def on_tick(self, timestamp: float) -> list[Alert]:
+        alerts = []
         now = time.time()
-        key = (flow.src_ip, flow.dst_ip)
 
-        # 현재 플로우 추가
-        self._transfer_log[key].append((flow.bytes_count, now))
+        for (src_ip, dst_ip), total in self._outbound_bytes.items():
+            if total >= self._threshold_bytes:
+                last_alert = self._alerted.get((src_ip, dst_ip), 0)
+                if now - last_alert > self._window:
+                    self._alerted[(src_ip, dst_ip)] = now
+                    mb = total / (1024 * 1024)
+                    alerts.append(Alert(
+                        engine=self.name,
+                        severity=Severity.CRITICAL,
+                        title="Massive Data Exfiltration (NetFlow)",
+                        title_key="engines.flow_data_exfil.alerts.massive_transfer.title",
+                        description=(
+                            f"Host {src_ip} sent {mb:.1f} MB to {dst_ip} via NetFlow."
+                        ),
+                        description_key="engines.flow_data_exfil.alerts.massive_transfer.description",
+                        source_ip=src_ip,
+                        dest_ip=dst_ip,
+                        confidence=0.8,
+                        metadata={"megabytes": round(mb, 1), "window_seconds": self._window},
+                    ))
 
-        # 윈도우 밖 항목 제거
-        cutoff = now - self._window
-        self._transfer_log[key] = [
-            (b, t) for b, t in self._transfer_log[key] if t >= cutoff
-        ]
-
-        total_bytes = sum(b for b, _ in self._transfer_log[key])
-        if total_bytes < self._threshold:
-            return None
-
-        # AlertDispatcher의 자체 rate limiting에 중복 억제를 위임한다.
-        mb           = total_bytes / 1024 / 1024
-        threshold_mb = self._threshold / 1024 / 1024
-
-        return Alert(
-            engine      = self.name,
-            severity    = Severity.WARNING,
-            title       = "Flow Data Exfiltration Detected",
-            description = (
-                f"{flow.src_ip} → {flow.dst_ip}: {mb:.1f}MB 외부 전송 "
-                f"({self._window}초 내, 임계값 {threshold_mb:.0f}MB)"
-            ),
-            source_ip   = flow.src_ip,
-            dest_ip     = flow.dst_ip,
-            confidence  = 0.65,
-            metadata    = {
-                "total_bytes":     total_bytes,
-                "threshold_bytes": self._threshold,
-                "window_seconds":  self._window,
-                "source":          "netflow_v5",
-            },
-        )
-
-    def shutdown(self) -> None:
-        self._transfer_log.clear()
+        if now - self._last_reset >= self._window:
+            self._outbound_bytes.clear()
+            self._last_reset = now
+        return alerts

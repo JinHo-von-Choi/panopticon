@@ -40,25 +40,32 @@ class DHCPSpoofEngine(DetectionEngine):
 
     name = "dhcp_spoof"
     description = "비인가 DHCP 서버를 탐지합니다. 공격자가 위조 DHCP 응답으로 네트워크 설정을 조작하는 것을 방지합니다."
+    description_key = "engines.dhcp_spoof.description"
     config_schema = {
         "starvation_threshold": {
             "type": int, "default": 50, "min": 5, "max": 1000,
             "label": "DHCP Starvation 임계값",
+            "label_key": "engines.dhcp_spoof.starvation_threshold.label",
             "description": "윈도우 내 DHCP DISCOVER 패킷 수가 이 값을 초과하면 "
                            "DHCP 고갈 공격(Starvation) 알림 발생. "
                            "공격자가 모든 IP를 소진시키려는 시도 탐지.",
+            "description_key": "engines.dhcp_spoof.starvation_threshold.description",
         },
         "starvation_window_seconds": {
             "type": int, "default": 60, "min": 10, "max": 600,
             "label": "Starvation 윈도우(초)",
+            "label_key": "engines.dhcp_spoof.starvation_window_seconds.label",
             "description": "DHCP Starvation 활동을 집계하는 시간 윈도우.",
+            "description_key": "engines.dhcp_spoof.starvation_window_seconds.description",
         },
         "known_servers": {
             "type": list, "default": [],
             "label": "정상 DHCP 서버 IP 목록",
+            "label_key": "engines.dhcp_spoof.known_servers.label",
             "description": "정상 DHCP 서버의 IP 주소 목록 (쉼표 구분). "
                            "비어있으면 처음 관측된 서버를 자동 학습. "
                            "목록에 없는 서버가 DHCP OFFER를 보내면 Rogue DHCP 알림.",
+            "description_key": "engines.dhcp_spoof.known_servers.description",
         },
     }
 
@@ -102,18 +109,21 @@ class DHCPSpoofEngine(DetectionEngine):
                     engine=self.name,
                     severity=Severity.CRITICAL,
                     title="Rogue DHCP Server Detected",
+                    title_key="engines.dhcp_spoof.alerts.rogue_server.title",
                     description=(
                         f"DHCP {msg_type} from unknown server {src_ip} "
                         f"(MAC: {src_mac}). Known servers: "
                         f"{', '.join(self._known_servers)}. "
                         "This may be a rogue DHCP server attack."
                     ),
+                    description_key="engines.dhcp_spoof.alerts.rogue_server.description",
                     source_ip=src_ip,
                     source_mac=src_mac,
                     confidence=0.9,
                     metadata={
                         "dhcp_type": msg_type,
                         "known_servers": list(self._known_servers),
+                        "known_servers_str": ", ".join(self._known_servers),
                     },
                 )
 
@@ -145,13 +155,16 @@ class DHCPSpoofEngine(DetectionEngine):
                 engine=self.name,
                 severity=Severity.CRITICAL,
                 title="DHCP Starvation Attack Detected",
+                title_key="engines.dhcp_spoof.alerts.starvation.title",
                 description=(
                     f"{len(unique_macs)} unique MAC addresses sent DHCP DISCOVER "
                     f"in {self._starvation_window}s. Possible DHCP starvation attack."
                 ),
+                description_key="engines.dhcp_spoof.alerts.starvation.description",
                 confidence=0.8,
                 metadata={
                     "unique_macs": len(unique_macs),
+                    "count": len(unique_macs),
                     "window_seconds": self._starvation_window,
                     "sample_macs": sorted(unique_macs)[:10],
                 },

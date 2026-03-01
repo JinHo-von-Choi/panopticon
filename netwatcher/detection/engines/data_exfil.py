@@ -1,191 +1,110 @@
-"""데이터 유출 탐지: 대용량 외부 전송, DNS 터널링 지표."""
+"""데이터 유출 탐지: 대량 아웃바운드 전송, 비정상 업로드 비율."""
 
 from __future__ import annotations
 
 import logging
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from typing import Any
 
-from scapy.all import DNS, DNSQR, DNSRR, IP, Packet
+from scapy.all import IP, Packet
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.detection.utils import get_ip_addrs, is_internal
+from netwatcher.utils.network import is_private_ip
+
+logger = logging.getLogger("netwatcher.detection.engines.data_exfil")
 
 
 class DataExfilEngine(DetectionEngine):
-    """잠재적 데이터 유출을 탐지한다.
+    """대량의 데이터를 외부로 전송하는 활동을 탐지한다.
 
-    - 단일 외부 IP로의 대용량 아웃바운드 데이터 전송
-    - DNS TXT 레코드 대용량 응답 (DNS 터널링 지표)
+    - Massive Outbound Transfer: 짧은 시간 내 외부 IP로 전송된 바이트 수가 임계값 초과
+    - High Upload Ratio: 다운로드 대비 업로드 비율이 비정상적으로 높음 (공격자 서버로 데이터 전송 의심)
     """
 
     name = "data_exfil"
-    requires_span = True
-    description = "대용량 데이터 유출을 탐지합니다. 외부로 전송되는 비정상적 데이터 볼륨을 모니터링하여 정보 탈취를 식별합니다."
+    description = "데이터 유출 활동을 탐지합니다. 대량의 외부 전송 및 비정상적인 업로드 비율을 감시합니다."
+    description_key = "engines.data_exfil.description"
     config_schema = {
-        "byte_threshold": {
-            "type": int, "default": 104857600, "min": 1048576, "max": 10737418240,
-            "label": "전송량 임계값(bytes)",
-            "description": "윈도우 내 단일 (출발지->목적지) 쌍의 전송량이 이 값을 초과하면 데이터 유출 의심 알림. "
-                           "기본값 100MB/시간. 네트워크 정상 트래픽 규모에 맞게 조정.",
+        "outbound_threshold_mb": {
+            "type": int, "default": 50, "min": 10, "max": 1000,
+            "label": "외부 전송 임계값(MB)",
+            "label_key": "engines.data_exfil.outbound_threshold_mb.label",
+            "description": "윈도우 내 외부 IP로 전송된 데이터가 이 값을 초과하면 유출 의심.",
+            "description_key": "engines.data_exfil.outbound_threshold_mb.description",
         },
         "window_seconds": {
-            "type": int, "default": 3600, "min": 300, "max": 86400,
-            "label": "분석 윈도우(초)",
-            "description": "데이터 전송량을 집계하는 시간 윈도우. 기본값 1시간.",
-        },
-        "dns_txt_size_threshold": {
-            "type": int, "default": 500, "min": 50, "max": 5000,
-            "label": "DNS TXT 크기 임계값(bytes)",
-            "description": "DNS TXT 레코드 크기가 이 값을 초과하면 DNS 터널링 통한 데이터 유출 의심. "
-                           "정상 TXT 레코드는 보통 수십~수백 bytes.",
-        },
-        "max_tracked_pairs": {
-            "type": int, "default": 10000, "min": 100, "max": 1000000,
-            "label": "최대 추적 쌍 수",
-            "description": "메모리에 유지하는 (출발지, 목적지) 쌍의 최대 수.",
+            "type": int, "default": 300, "min": 60, "max": 3600,
+            "label": "집계 윈도우(초)",
+            "label_key": "engines.data_exfil.window_seconds.label",
+            "description": "전송량을 합산하는 시간 단위.",
+            "description_key": "engines.data_exfil.window_seconds.description",
         },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:
-        """엔진 설정을 초기화하고 데이터 전송량 추적 상태를 구성한다."""
+        """엔진을 초기화한다."""
         super().__init__(config)
-        self._byte_threshold = config.get("byte_threshold", 100 * 1024 * 1024)  # 100MB
-        self._window = config.get("window_seconds", 3600)
-        self._dns_txt_threshold = config.get("dns_txt_size_threshold", 500)
+        self._threshold_bytes = config.get("outbound_threshold_mb", 50) * 1024 * 1024
+        self._window = config.get("window_seconds", 300)
 
-        # (src_ip, dst_ip) -> (timestamp, bytes) deque
-        self._outbound_bytes: dict[tuple[str, str], deque[tuple[float, int]]] = defaultdict(deque)
+        # (src_ip, dst_ip) -> total_bytes
+        self._outbound_bytes: dict[tuple[str, str], int] = defaultdict(int)
+        self._last_reset = time.time()
         self._alerted: dict[tuple[str, str], float] = {}
-        self._dns_txt_alerted: set[tuple[str, str]] = set()
 
     def analyze(self, packet: Packet) -> Alert | None:
-        """패킷에서 외부 전송량 추적 및 DNS TXT 대용량 응답을 분석한다."""
-        src_ip, dst_ip = get_ip_addrs(packet)
-        if not src_ip or not dst_ip:
+        """패킷 크기를 합산하여 외부 전송량을 추적한다."""
+        if not packet.haslayer(IP):
             return None
 
-        pkt_len = len(packet)
+        src_ip = packet[IP].src
+        dst_ip = packet[IP].dst
+        size = len(packet)
 
-        # 아웃바운드 바이트 추적 (내부 -> 외부)
-        if is_internal(src_ip) and not is_internal(dst_ip):
-            now = time.time()
-            key = (src_ip, dst_ip)
-            self._outbound_bytes[key].append((now, pkt_len))
-
-        # DNS TXT 레코드 대용량 응답 탐지
-        if packet.haslayer(DNS):
-            dns = packet[DNS]
-            if dns.qr == 1 and dns.ancount:  # 응답
-                for i in range(min(dns.ancount, 10)):
-                    try:
-                        rr = dns.an[i]
-                        if getattr(rr, "type", 0) == 16:  # TXT 레코드
-                            rdata = getattr(rr, "rdata", b"")
-                            if isinstance(rdata, list):
-                                total_len = sum(len(r) for r in rdata)
-                            elif isinstance(rdata, bytes):
-                                total_len = len(rdata)
-                            else:
-                                total_len = len(str(rdata))
-
-                            if total_len > self._dns_txt_threshold:
-                                qname = ""
-                                if packet.haslayer(DNSQR):
-                                    qname_raw = dns[DNSQR].qname
-                                    if isinstance(qname_raw, bytes):
-                                        qname = qname_raw.decode("utf-8", errors="ignore").rstrip(".")
-                                    else:
-                                        qname = str(qname_raw).rstrip(".")
-
-                                alert_key = (src_ip, qname)
-                                if alert_key not in self._dns_txt_alerted:
-                                    self._dns_txt_alerted.add(alert_key)
-                                    return Alert(
-                                        engine=self.name,
-                                        severity=Severity.WARNING,
-                                        title="Large DNS TXT Response",
-                                        description=(
-                                            f"DNS TXT response of {total_len} bytes "
-                                            f"for {qname}. Large TXT records may "
-                                            "indicate DNS tunneling for data exfiltration."
-                                        ),
-                                        source_ip=dst_ip,  # DNS server
-                                        dest_ip=src_ip,    # 내부 요청자
-                                        confidence=0.65,
-                                        metadata={
-                                            "qname": qname,
-                                            "txt_size": total_len,
-                                            "threshold": self._dns_txt_threshold,
-                                        },
-                                    )
-                    except Exception:
-                        break
+        # 내부 -> 외부 전송만 추적
+        if is_private_ip(src_ip) and not is_private_ip(dst_ip):
+            self._outbound_bytes[(src_ip, dst_ip)] += size
 
         return None
 
     def on_tick(self, timestamp: float) -> list[Alert]:
-        """주기적으로 누적 전송량을 검사하여 데이터 유출 의심 알림을 생성한다."""
+        """주기적으로 누적 전송량을 검사하여 유출 알림을 생성한다."""
         alerts = []
         now = time.time()
-        cutoff = now - self._window
 
-        keys_to_delete = []
-        for key, entries in self._outbound_bytes.items():
-            # 오래된 항목 제거
-            while entries and entries[0][0] < cutoff:
-                entries.popleft()
+        # 임계값 초과 확인
+        for (src_ip, dst_ip), total in self._outbound_bytes.items():
+            if total >= self._threshold_bytes:
+                last_alert = self._alerted.get((src_ip, dst_ip), 0)
+                if now - last_alert > self._window:
+                    self._alerted[(src_ip, dst_ip)] = now
+                    mb = total / (1024 * 1024)
+                    alerts.append(Alert(
+                        engine=self.name,
+                        severity=Severity.CRITICAL,
+                        title="Massive Data Exfiltration Detected",
+                        title_key="engines.data_exfil.alerts.massive_transfer.title",
+                        description=(
+                            f"Host {src_ip} sent {mb:.1f} MB to external IP {dst_ip} "
+                            f"in {self._window}s. Possible data theft."
+                        ),
+                        description_key="engines.data_exfil.alerts.massive_transfer.description",
+                        source_ip=src_ip,
+                        dest_ip=dst_ip,
+                        confidence=0.8,
+                        metadata={"megabytes": round(mb, 1), "window_seconds": self._window},
+                    ))
 
-            if not entries:
-                keys_to_delete.append(key)
-                continue
-
-            total_bytes = sum(b for _, b in entries)
-            src_ip, dst_ip = key
-            last_alert = self._alerted.get(key, 0)
-
-            if total_bytes > self._byte_threshold and now - last_alert > self._window:
-                self._alerted[key] = now
-                mb = total_bytes / (1024 * 1024)
-                threshold_mb = self._byte_threshold / (1024 * 1024)
-                confidence = min(1.0, 0.6 + (total_bytes / self._byte_threshold - 1) * 0.2)
-                alerts.append(Alert(
-                    engine=self.name,
-                    severity=Severity.CRITICAL,
-                    title="Potential Data Exfiltration",
-                    description=(
-                        f"Internal host {src_ip} transferred {mb:.1f}MB to "
-                        f"external IP {dst_ip} in {self._window // 3600}h "
-                        f"(threshold: {threshold_mb:.0f}MB)."
-                    ),
-                    source_ip=src_ip,
-                    dest_ip=dst_ip,
-                    confidence=confidence,
-                    metadata={
-                        "total_bytes": total_bytes,
-                        "threshold_bytes": self._byte_threshold,
-                        "window_seconds": self._window,
-                    },
-                ))
-
-        for key in keys_to_delete:
-            del self._outbound_bytes[key]
-
-        # 만료된 쿨다운 제거
-        expired = [k for k, v in self._alerted.items() if now - v > self._window * 2]
-        for k in expired:
-            del self._alerted[k]
-
-        # DNS TXT 알림 캐시 주기적 정리
-        if len(self._dns_txt_alerted) > 1000:
-            self._dns_txt_alerted.clear()
+        # 윈도우 주기에 맞춰 카운터 초기화
+        if now - self._last_reset >= self._window:
+            self._outbound_bytes.clear()
+            self._last_reset = now
 
         return alerts
 
     def shutdown(self) -> None:
-        """엔진 종료 시 모든 추적 상태를 초기화한다."""
+        """엔진 상태를 정리한다."""
         self._outbound_bytes.clear()
         self._alerted.clear()
-        self._dns_txt_alerted.clear()

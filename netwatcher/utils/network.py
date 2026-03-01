@@ -269,6 +269,17 @@ def validate_outbound_url(url: str) -> str | None:
     return url
 
 
+def is_private_ip(ip: str | None) -> bool:
+    """IP 주소가 사설(RFC 1918) 또는 내부 대역인지 확인한다."""
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+        return _is_internal_addr(addr)
+    except ValueError:
+        return False
+
+
 def _is_internal_addr(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """사설, 루프백, 링크-로컬, 또는 예약된 주소이면 True를 반환한다."""
     return (

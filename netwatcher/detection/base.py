@@ -17,6 +17,7 @@ class DetectionEngine(abc.ABC):
     # 서브클래스에서 반드시 설정해야 함
     name: str = ""
     description: str = ""
+    description_key: str | None = None  # i18n 번역 키
 
     # 기본 틱 간격(초) — 서브클래스에서 오버라이드 가능
     tick_interval: int = 1
@@ -40,6 +41,11 @@ class DetectionEngine(abc.ABC):
     def set_whitelist(self, whitelist: Whitelist) -> None:
         """글로벌 화이트리스트를 주입한다."""
         self._whitelist = whitelist
+
+    @property
+    def whitelist(self) -> Whitelist | None:
+        """주입된 화이트리스트 인스턴스를 반환한다."""
+        return self._whitelist
 
     def is_whitelisted(self, **kwargs: Any) -> bool:
         """식별자가 화이트리스트에 등록되어 있는지 확인한다."""

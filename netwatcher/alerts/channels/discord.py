@@ -31,6 +31,7 @@ class DiscordChannel(NotificationChannel):
             logger.warning("Discord not configured (missing webhook_url)")
             return False
 
+        title, description = self._get_translated_texts(alert)
         color_map = {
             "CRITICAL": 0xFF0000,
             "WARNING": 0xFFA500,
@@ -41,8 +42,8 @@ class DiscordChannel(NotificationChannel):
         payload = {
             "embeds": [
                 {
-                    "title": f"[{alert.severity.value}] {alert.title}",
-                    "description": alert.description,
+                    "title": f"[{alert.severity.value}] {title}",
+                    "description": description,
                     "color": color,
                     "fields": [
                         {"name": "Engine", "value": alert.engine, "inline": True},

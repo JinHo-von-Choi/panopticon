@@ -1,103 +1,81 @@
-"""플로우 기반 포트 스캔 탐지 엔진."""
+"""NetFlow 기반 포트 스캔 탐지."""
 
 from __future__ import annotations
 
-import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.netflow.base import FlowEngine
-from netwatcher.netflow.models import FlowRecord
+from netwatcher.netflow.base import NetFlowEngine
+from netwatcher.netflow.models import NetFlowV5Record
 
-logger = logging.getLogger("netwatcher.netflow.engines.port_scan")
+class FlowPortScanEngine(NetFlowEngine):
+    """NetFlow 레코드를 분석하여 포트 스캔을 탐지한다 (SPAN 없는 환경용)."""
 
-
-class FlowPortScanEngine(FlowEngine):
-    """NetFlow 플로우에서 포트 스캔을 탐지한다.
-
-    (src_ip, dst_ip) 쌍별로 시간 윈도우 내에 관찰된 고유 목적지 포트 수를 추적한다.
-    임계값 초과 시 알림 발생.
-    """
-
-    name        = "flow_port_scan"
-    description = "NetFlow 기반 포트 스캔 탐지 — SPAN 없는 환경에서도 동작."
-
-    config_schema: dict[str, Any] = {
-        "window_seconds":   {"type": int, "default": 60,  "min": 10,  "max": 3600},
-        "threshold":        {"type": int, "default": 15,  "min": 5,   "max": 1000},
-        "cooldown_seconds": {"type": int, "default": 300, "min": 30,  "max": 86400},
+    name = "flow_port_scan"
+    description = "NetFlow 데이터를 기반으로 포트 스캔을 탐지합니다. SPAN 포트 구성이 불가능한 환경에서 대안으로 사용됩니다."
+    description_key = "engines.flow_port_scan.description"
+    config_schema = {
+        "threshold": {
+            "type": int, "default": 20, "min": 5, "max": 200,
+            "label": "포트 스캔 임계값",
+            "label_key": "engines.flow_port_scan.threshold.label",
+            "description": "윈도우 내 고유 목적지 포트 수가 이 값을 초과하면 포트 스캔으로 판단.",
+            "description_key": "engines.flow_port_scan.threshold.description",
+        },
+        "window_seconds": {
+            "type": int, "default": 60, "min": 10, "max": 600,
+            "label": "탐지 윈도우(초)",
+            "label_key": "engines.flow_port_scan.window_seconds.label",
+            "description": "포트 스캔 활동을 집계하는 시간 윈도우.",
+            "description_key": "engines.flow_port_scan.window_seconds.description",
+        },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._window    = config.get("window_seconds",   60)
-        self._threshold = config.get("threshold",        15)
-        self._cooldown  = config.get("cooldown_seconds", 300)
+        self._threshold = config.get("threshold", 20)
+        self._window = config.get("window_seconds", 60)
+        # src_ip -> deque of (timestamp, dst_port)
+        self._scans: dict[str, deque[tuple[float, int]]] = defaultdict(deque)
+        self._alerted: dict[str, float] = {}
 
-        # (src_ip, dst_ip) → {dst_port: first_seen_ts}
-        self._port_table: dict[tuple[str, str], dict[int, float]] = defaultdict(dict)
-        self._alerted_at: dict[tuple[str, str], float]            = {}
-
-    def analyze_flow(self, flow: FlowRecord) -> Alert | None:
-        """플로우를 받아 포트-접근 테이블을 업데이트한다.
-
-        스캔 판정은 on_tick에서 일괄 처리하므로 analyze_flow는 None만 반환한다.
-        """
+    def analyze_flow(self, flow: NetFlowV5Record) -> Alert | None:
+        """NetFlow 레코드에서 목적지 포트를 추적한다."""
+        src_ip = flow.src_ip
+        dst_port = flow.dst_port
         now = time.time()
-        key = (flow.src_ip, flow.dst_ip)
-        self._port_table[key][flow.dst_port] = now
+        self._scans[src_ip].append((now, dst_port))
         return None
 
     def on_tick(self, timestamp: float) -> list[Alert]:
-        """만료 항목 제거 후 임계값 초과 쌍을 탐지한다."""
-        now    = timestamp
+        alerts = []
+        now = time.time()
         cutoff = now - self._window
-        alerts: list[Alert] = []
 
-        for key in list(self._port_table.keys()):
-            port_times = self._port_table[key]
-
-            # 윈도우 밖 항목 제거
-            self._port_table[key] = {
-                p: t for p, t in port_times.items() if t >= cutoff
-            }
-            if not self._port_table[key]:
-                del self._port_table[key]
+        for src_ip, attempts in list(self._scans.items()):
+            while attempts and attempts[0][0] < cutoff:
+                attempts.popleft()
+            if not attempts:
                 continue
 
-            unique_ports = len(self._port_table[key])
-            if unique_ports < self._threshold:
-                continue
-
-            # cooldown 확인
-            last_alerted = self._alerted_at.get(key, 0.0)
-            if now - last_alerted < self._cooldown:
-                continue
-
-            src_ip, dst_ip = key
-            self._alerted_at[key] = now
-            alerts.append(Alert(
-                engine      = self.name,
-                severity    = Severity.WARNING,
-                title       = "Flow Port Scan Detected",
-                description = (
-                    f"{src_ip} → {dst_ip}: {unique_ports}개 고유 포트 접근 "
-                    f"({self._window}초 내, 임계값 {self._threshold})"
-                ),
-                source_ip   = src_ip,
-                dest_ip     = dst_ip,
-                confidence  = 0.75,
-                metadata    = {
-                    "unique_ports":    unique_ports,
-                    "window_seconds":  self._window,
-                    "source":          "netflow_v5",
-                },
-            ))
-
+            unique_ports = set(p for _, p in attempts)
+            if len(unique_ports) >= self._threshold:
+                if now - self._alerted.get(src_ip, 0) > self._window:
+                    self._alerted[src_ip] = now
+                    alerts.append(Alert(
+                        engine=self.name,
+                        severity=Severity.WARNING,
+                        title="Port Scan Detected (NetFlow)",
+                        title_key="engines.flow_port_scan.alerts.scan.title",
+                        description=(
+                            f"Host {src_ip} scanned {len(unique_ports)} ports "
+                            f"via NetFlow in {self._window}s."
+                        ),
+                        description_key="engines.flow_port_scan.alerts.scan.description",
+                        source_ip=src_ip,
+                        confidence=0.7,
+                        metadata={"unique_ports": len(unique_ports), "window_seconds": self._window},
+                    ))
         return alerts
-
-    def shutdown(self) -> None:
-        self._port_table.clear()
-        self._alerted_at.clear()

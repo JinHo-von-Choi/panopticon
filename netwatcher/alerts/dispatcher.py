@@ -176,6 +176,8 @@ class AlertDispatcher:
                 severity=alert.severity.value,
                 title=alert.title,
                 description=alert.description,
+                title_key=alert.title_key,
+                description_key=alert.description_key,
                 source_ip=alert.source_ip,
                 source_mac=alert.source_mac,
                 dest_ip=alert.dest_ip,

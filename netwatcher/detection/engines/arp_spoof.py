@@ -25,30 +25,39 @@ class ARPSpoofEngine(DetectionEngine):
 
     name = "arp_spoof"
     description = "ARP 스푸핑 및 Gratuitous ARP 폭주를 탐지합니다. MAC-IP 매핑 변경을 감시하여 중간자 공격(MITM)을 식별합니다."
+    description_key = "engines.arp_spoof.description"
     config_schema = {
         "gratuitous_window_seconds": {
             "type": int, "default": 30, "min": 5, "max": 300,
             "label": "Gratuitous ARP 윈도우(초)",
+            "label_key": "engines.arp_spoof.gratuitous_window_seconds.label",
             "description": "Gratuitous ARP 패킷을 집계하는 슬라이딩 윈도우 길이. "
                            "짧게 설정하면 짧은 버스트만 탐지, 길게 설정하면 느린 스푸핑도 탐지.",
+            "description_key": "engines.arp_spoof.gratuitous_window_seconds.description",
         },
         "gratuitous_threshold": {
             "type": int, "default": 10, "min": 2, "max": 100,
             "label": "Gratuitous ARP 임계값",
+            "label_key": "engines.arp_spoof.gratuitous_threshold.label",
             "description": "윈도우 내 Gratuitous ARP 수가 이 값을 초과하면 알림 발생. "
                            "낮추면 민감도 증가(오탐 가능), 높이면 민감도 감소.",
+            "description_key": "engines.arp_spoof.gratuitous_threshold.description",
         },
         "cooldown_seconds": {
             "type": int, "default": 300, "min": 10, "max": 3600,
             "label": "재알림 쿨다운(초)",
+            "label_key": "engines.arp_spoof.cooldown_seconds.label",
             "description": "동일 호스트에 대해 알림 재발송까지 대기하는 시간. "
                            "너무 짧으면 알림 폭주, 너무 길면 지속적 공격 누락 가능.",
+            "description_key": "engines.arp_spoof.cooldown_seconds.description",
         },
         "max_tracked_hosts": {
             "type": int, "default": 10000, "min": 100, "max": 1000000,
             "label": "최대 추적 호스트 수",
+            "label_key": "engines.arp_spoof.max_tracked_hosts.label",
             "description": "메모리에 유지하는 ARP 테이블 최대 크기. "
                            "네트워크 규모에 맞게 조정. 초과 시 오래된 엔트리부터 제거.",
+            "description_key": "engines.arp_spoof.max_tracked_hosts.description",
         },
     }
 
@@ -96,11 +105,13 @@ class ARPSpoofEngine(DetectionEngine):
                     engine=self.name,
                     severity=Severity.CRITICAL,
                     title="ARP Spoofing Detected",
+                    title_key="engines.arp_spoof.alerts.spoof_detected.title",
                     description=(
                         f"IP {src_ip} was associated with MAC {known_mac}, "
                         f"but now claims to be MAC {src_mac}. "
                         "Possible ARP cache poisoning attack."
                     ),
+                    description_key="engines.arp_spoof.alerts.spoof_detected.description",
                     source_ip=src_ip,
                     source_mac=src_mac,
                     metadata={
@@ -148,12 +159,14 @@ class ARPSpoofEngine(DetectionEngine):
                         engine=self.name,
                         severity=Severity.WARNING,
                         title="Gratuitous ARP Flood",
+                        title_key="engines.arp_spoof.alerts.gratuitous_flood.title",
                         description=(
                             f"MAC {src_mac} (IP {src_ip}) sent "
                             f"{len(timestamps)}+ gratuitous ARP replies "
                             f"in {self._gratuitous_window}s. "
                             "This may indicate ARP spoofing preparation."
                         ),
+                        description_key="engines.arp_spoof.alerts.gratuitous_flood.description",
                         source_ip=src_ip,
                         source_mac=src_mac,
                         metadata={

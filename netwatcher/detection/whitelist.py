@@ -132,9 +132,9 @@ class Whitelist:
     def to_dict(self) -> dict[str, Any]:
         """화이트리스트 상태를 직렬화한다."""
         return {
-            "ips": sorted(self._ips),
-            "ip_ranges": [str(n) for n in self._ip_networks],
-            "macs": sorted(self._macs),
-            "domains": sorted(self._domains),
-            "domain_suffixes": self._domain_suffixes,
+            "ips": sorted(list(self._ips)),
+            "ip_ranges": sorted([str(n) for n in self._ip_networks]),
+            "macs": sorted(list(self._macs)),
+            "domains": sorted(list(self._domains)),
+            "domain_suffixes": sorted(self._domain_suffixes),
         }

@@ -3,6 +3,9 @@
 # NETWATCHER_DB_USER, NETWATCHER_DB_PASSWORD, NETWATCHER_SLACK_WEBHOOK_URL,
 # NETWATCHER_SLACK_DASHBOARD_URL, NETWATCHER_JWT_SECRET (.env.example 참조)
 netwatcher:
+  language:
+    default: "ko"
+    available: ["ko", "en"]
   interface:       # null = auto-detect
   bpf_filter: ""   # additional BPF filter
   promiscuous: true
@@ -51,14 +54,11 @@ netwatcher:
       # 리버스 프록시(Nginx 등) 뒤에서 운영할 경우 false로 유지하고
       # 프록시에서 TLS 종료 처리
     trusted_proxies:           # X-Forwarded-For를 신뢰할 리버스 프록시 주소
-      - "127.0.0.1"
-      - "::1"
+    - "127.0.0.1"
+    - "::1"
     cors:
       allowed_origins:
       - "http://localhost:38585"
-    csp: "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src
-      'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net;
-      img-src 'self' data:; connect-src 'self' ws: wss: https://cdn.jsdelivr.net"
 
   auth:
     enabled: true
@@ -94,27 +94,34 @@ netwatcher:
 
   # Whitelist: suppress alerts for known-safe entities
   whitelist:
-    ips: []
+    ips:
+    - 211.58.70.14
     ip_ranges: []        # CIDR notation, e.g. "192.168.1.0/24"
-    macs: []
+    macs:
+    - 50:eb:f6:7d:0c:8c
+    - 90:09:d0:00:c5:c3
+    - b0:38:6c:4e:29:0b
+    - e8:9c:25:dc:30:d2
     domains:
-    - "github.com"
-    - "raw.githubusercontent.com"
-    - "gitlab.com"
-    - "google.com"
-    - "connectivity-check.ubuntu.com"
-    - "connectivitycheck.gstatic.com"
-    - "captive.apple.com"
-    - "www.msftconnecttest.com"
-    - "detectportal.firefox.com"
-    - "nmcheck.gnome.org"
-    domain_suffixes: [".local", ".internal"]
-
+    - captive.apple.com
+    - connectivity-check.ubuntu.com
+    - connectivitycheck.gstatic.com
+    - detectportal.firefox.com
+    - github.com
+    - gitlab.com
+    - google.com
+    - nerdvana.kr
+    - nmcheck.gnome.org
+    - raw.githubusercontent.com
+    - www.msftconnecttest.com
+    domain_suffixes:
+    - .internal
+    - .local
   engines:
     arp_spoof:
       enabled: true
-      gratuitous_window_seconds: 31    # sliding window for gratuitous ARP flood
-      gratuitous_threshold: 10         # gratuitous ARP count to trigger alert
+      gratuitous_window_seconds: 60.0  # sliding window for gratuitous ARP flood
+      gratuitous_threshold: 5.9049000000000005 # gratuitous ARP count to trigger alert
       cooldown_seconds: 300            # re-alert cooldown
 
       max_tracked_hosts: 10000
@@ -131,10 +138,11 @@ netwatcher:
     port_scan:
       enabled: true
       window_seconds: 60
-      threshold: 15
+      threshold: 51.839999999999996
       alerted_cooldown_seconds: 300    # cooldown before re-alerting same pair
       max_tracked_connections: 10000   # max (src,dst) pairs tracked
 
+      ack_scan_threshold: 100.0
     http_suspicious:
       enabled: true
       beacon_interval_tolerance: 0.15
@@ -170,10 +178,13 @@ netwatcher:
       max_domains: 10000              # max tracked domains
       max_tracked_ips: 5000           # max tracked IPs per NXDOMAIN
 
+      fastflux_threshold: 11
+      window_seconds: 300
     threat_intel:
       enabled: true
       update_interval_hours: 6
 
+      blocklist_confidence_threshold: 0.85
     icmp_anomaly:
       enabled: true
       ping_sweep_threshold: 20        # unique dest IPs per source
@@ -206,13 +217,13 @@ netwatcher:
 
     protocol_anomaly:
       enabled: true
-      ttl_change_threshold: 10        # TTL change to trigger alert
+      ttl_change_threshold: 14.399999999999999 # TTL change to trigger alert
       min_ttl_samples: 5              # min samples before TTL anomaly
 
     mac_spoof:
       enabled: true
-      max_ips_per_mac: 5              # IPs per MAC before alert
-      ip_window_seconds: 300          # window for tracking IPs per MAC
+      max_ips_per_mac: 4.05           # IPs per MAC before alert
+      ip_window_seconds: 600.0        # window for tracking IPs per MAC
       max_tracked_macs: 10000         # max tracked MACs
 
     protocol_inspect:
@@ -255,11 +266,17 @@ netwatcher:
 
     behavior_profile:
       enabled: true
-      warmup_ticks: 300             # ticks before detection activates
-      z_threshold: 3.5              # Z-score threshold for anomaly
+      warmup_ticks: 360.0           # ticks before detection activates
+      z_threshold: 7.199999999999999 # Z-score threshold for anomaly
       max_tracked_hosts: 10000      # max hosts tracked
       eviction_seconds: 86400       # evict hosts unseen for 24h
 
+      behavior_profile_threshold: 100.0
+      behavior_anomaly_threshold: 0.9
+      volume_threshold: 5.0
+      behavioral_correlation_threshold: 0.4
+      learning_period_seconds: 3600
+      deviation_threshold: 2.6
     signature:
       enabled: true
       rules_dir: "config/rules"
@@ -289,7 +306,7 @@ netwatcher:
 
   ai_analyzer:
     enabled: true                  # true로 설정 시 AI 오탐 분석 활성화
-    provider: "copilot"            # AI 프로바이더: copilot | claude | codex | gemini | agent
+    provider: "gemini"             # AI 프로바이더: copilot | claude | codex | gemini | agent
     interval_minutes: 15           # 분석 실행 주기
     lookback_minutes: 30           # 분석 대상 시간 범위 (최근 N분)
     max_events: 50                 # AI에 전달할 최대 이벤트 수
@@ -297,7 +314,7 @@ netwatcher:
     max_threshold_increase_pct: 20 # 임계값 자동 상향 최대 폭 (%)
     consecutive_mt_threshold: 2    # 연속 미탐 판정 횟수 → 임계값 하향
     max_threshold_decrease_pct: 10 # 임계값 자동 하향 최대 폭 (%)
-    copilot_timeout_seconds: 60    # AI CLI 응답 타임아웃
+    copilot_timeout_seconds: 180   # AI CLI 응답 타임아웃
 
   daily_report:
     enabled: true

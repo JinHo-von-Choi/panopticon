@@ -56,6 +56,7 @@ class SlackChannel(NotificationChannel):
 
     def _build_standard_payload(self, alert: Alert) -> dict:
         """일반 심각도 알림용 Slack attachment 페이로드를 구성한다."""
+        title, description = self._get_translated_texts(alert)
         color = {
             "CRITICAL": "#FF0000",
             "WARNING": "#FFA500",
@@ -66,8 +67,8 @@ class SlackChannel(NotificationChannel):
             "attachments": [
                 {
                     "color": color,
-                    "title": f"[{alert.severity.value}] {alert.title}",
-                    "text": alert.description,
+                    "title": f"[{alert.severity.value}] {title}",
+                    "text": description,
                     "fields": [
                         {"title": "Engine", "value": alert.engine, "short": True},
                         {"title": "Source IP", "value": alert.source_ip or "N/A", "short": True},
@@ -80,6 +81,7 @@ class SlackChannel(NotificationChannel):
 
     def _build_critical_payload(self, alert: Alert) -> dict:
         """CRITICAL 알림용 상세 Slack 메시지를 구성한다."""
+        title, description = self._get_translated_texts(alert)
         pkt = alert.packet_info or {}
 
         # 헤더 블록
@@ -88,7 +90,7 @@ class SlackChannel(NotificationChannel):
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"\u26a0\ufe0f CRITICAL: {alert.title}",
+                    "text": f"\u26a0\ufe0f CRITICAL: {title}",
                     "emoji": True,
                 },
             },
@@ -96,7 +98,7 @@ class SlackChannel(NotificationChannel):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": alert.description,
+                    "text": description,
                 },
             },
             {"type": "divider"},

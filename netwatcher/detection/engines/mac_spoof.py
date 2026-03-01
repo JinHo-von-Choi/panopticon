@@ -50,22 +50,29 @@ class MACSpoofEngine(DetectionEngine):
 
     name = "mac_spoof"
     description = "MAC 주소 위조를 탐지합니다. OUI 불일치, 랜덤 MAC, 동일 MAC의 다중 IP 사용 등 스푸핑 징후를 식별합니다."
+    description_key = "engines.mac_spoof.description"
     config_schema = {
         "max_ips_per_mac": {
             "type": int, "default": 5, "min": 2, "max": 50,
             "label": "MAC당 최대 IP 수",
+            "label_key": "engines.mac_spoof.max_ips_per_mac.label",
             "description": "단일 MAC 주소에서 윈도우 내 사용된 고유 IP 수가 이 값을 초과하면 MAC 스푸핑 의심. "
                            "DHCP 환경에서는 IP 변경이 정상이므로 적절히 조정.",
+            "description_key": "engines.mac_spoof.max_ips_per_mac.description",
         },
         "ip_window_seconds": {
             "type": int, "default": 300, "min": 60, "max": 3600,
             "label": "IP 추적 윈도우(초)",
+            "label_key": "engines.mac_spoof.ip_window_seconds.label",
             "description": "MAC-IP 바인딩을 추적하는 시간 윈도우. 기본값 5분.",
+            "description_key": "engines.mac_spoof.ip_window_seconds.description",
         },
         "max_tracked_macs": {
             "type": int, "default": 10000, "min": 100, "max": 1000000,
             "label": "최대 추적 MAC 수",
+            "label_key": "engines.mac_spoof.max_tracked_macs.label",
             "description": "메모리에 유지하는 MAC 추적 테이블 크기.",
+            "description_key": "engines.mac_spoof.max_tracked_macs.description",
         },
     }
 
@@ -108,15 +115,17 @@ class MACSpoofEngine(DetectionEngine):
                 engine=self.name,
                 severity=Severity.INFO,
                 title="Locally Administered MAC Detected",
+                title_key="engines.mac_spoof.alerts.local_admin.title",
                 description=(
                     f"MAC {src_mac} (IP: {src_ip}) has locally administered bit "
                     "set but is not from a known VM/container vendor. "
                     "This may indicate MAC spoofing."
                 ),
+                description_key="engines.mac_spoof.alerts.local_admin.description",
                 source_ip=src_ip,
                 source_mac=src_mac,
                 confidence=0.4,
-                metadata={"mac": src_mac, "ip": src_ip},
+                metadata={"mac": src_mac, "ip": src_ip, "source_mac": src_mac, "source_ip": src_ip},
             )
 
         return None
@@ -151,16 +160,19 @@ class MACSpoofEngine(DetectionEngine):
                     engine=self.name,
                     severity=Severity.WARNING,
                     title="Possible MAC Cloning",
+                    title_key="engines.mac_spoof.alerts.cloning.title",
                     description=(
                         f"MAC {mac} is associated with {len(unique_ips)} "
                         f"unique IPs in {self._ip_window}s: "
                         f"{sorted(unique_ips)[:10]}. "
                         "This may indicate MAC address cloning."
                     ),
+                    description_key="engines.mac_spoof.alerts.cloning.description",
                     source_mac=mac,
                     confidence=confidence,
                     metadata={
                         "mac": mac,
+                        "source_mac": mac,
                         "unique_ips": sorted(unique_ips),
                         "count": len(unique_ips),
                         "window_seconds": self._ip_window,

@@ -173,6 +173,7 @@ class EngineRegistry:
             return {
                 "name":          name,
                 "description":   engine_cls.description,
+                "description_key": getattr(engine_cls, "description_key", None),
                 "enabled":       True,
                 "requires_span": getattr(engine_cls, "requires_span", False),
                 "config":        dict(active.config),
@@ -186,6 +187,7 @@ class EngineRegistry:
         return {
             "name":          name,
             "description":   engine_cls.description,
+            "description_key": getattr(engine_cls, "description_key", None),
             "enabled":       False,
             "requires_span": getattr(engine_cls, "requires_span", False),
             "config":        dict(yaml_config),

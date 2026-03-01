@@ -32,12 +32,14 @@ def normalize_schema_field(key: str, spec: tuple | dict) -> dict[str, Any]:
         정규화된 필드 정의::
 
             {
-                "type":        <type>,
-                "default":     <value>,
-                "label":       <str>,
-                "description": <str>,
-                "min":         <number | None>,
-                "max":         <number | None>,
+                "type":            <type>,
+                "default":         <value>,
+                "label":           <str>,
+                "label_key":       <str | None>,
+                "description":     <str>,
+                "description_key": <str | None>,
+                "min":             <number | None>,
+                "max":             <number | None>,
             }
 
     Raises:
@@ -51,12 +53,14 @@ def normalize_schema_field(key: str, spec: tuple | dict) -> dict[str, Any]:
             )
         field_type, default = spec
         return {
-            "type":        field_type,
-            "default":     default,
-            "label":       key,
-            "description": "",
-            "min":         None,
-            "max":         None,
+            "type":            field_type,
+            "default":         default,
+            "label":           key,
+            "label_key":       None,
+            "description":     "",
+            "description_key": None,
+            "min":             None,
+            "max":             None,
         }
 
     if isinstance(spec, dict):
@@ -66,12 +70,14 @@ def normalize_schema_field(key: str, spec: tuple | dict) -> dict[str, Any]:
                     f"Dict schema spec for '{key}' missing required key '{required}'"
                 )
         return {
-            "type":        spec["type"],
-            "default":     spec["default"],
-            "label":       spec.get("label", key),
-            "description": spec.get("description", ""),
-            "min":         spec.get("min", None),
-            "max":         spec.get("max", None),
+            "type":            spec["type"],
+            "default":         spec["default"],
+            "label":           spec.get("label", key),
+            "label_key":       spec.get("label_key", None),
+            "description":     spec.get("description", ""),
+            "description_key": spec.get("description_key", None),
+            "min":             spec.get("min", None),
+            "max":             spec.get("max", None),
         }
 
     raise ValueError(
@@ -108,13 +114,15 @@ def schema_to_api(schema: dict) -> list[dict]:
 
             [
                 {
-                    "key":         "threshold",
-                    "type":        "int",
-                    "default":     15,
-                    "label":       "threshold",
-                    "description": "",
-                    "min":         None,
-                    "max":         None,
+                    "key":             "threshold",
+                    "type":            "int",
+                    "default":         15,
+                    "label":           "threshold",
+                    "label_key":       "engines.port_scan.threshold.label",
+                    "description":     "",
+                    "description_key": "engines.port_scan.threshold.description",
+                    "min":             None,
+                    "max":             None,
                 },
                 ...
             ]
@@ -125,12 +133,14 @@ def schema_to_api(schema: dict) -> list[dict]:
         field_type = field["type"]
         type_name  = _TYPE_NAMES.get(field_type, field_type.__name__)
         result.append({
-            "key":         key,
-            "type":        type_name,
-            "default":     field["default"],
-            "label":       field["label"],
-            "description": field["description"],
-            "min":         field["min"],
-            "max":         field["max"],
+            "key":             key,
+            "type":            type_name,
+            "default":         field["default"],
+            "label":           field["label"],
+            "label_key":       field["label_key"],
+            "description":     field["description"],
+            "description_key": field["description_key"],
+            "min":             field["min"],
+            "max":             field["max"],
         })
     return result

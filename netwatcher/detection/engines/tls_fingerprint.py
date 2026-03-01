@@ -422,45 +422,60 @@ class TLSFingerprintEngine(DetectionEngine):
     name = "tls_fingerprint"
     requires_span = True
     description = "TLS 핸드셰이크의 JA3/JA4 핑거프린트를 분석합니다. 알려진 악성 클라이언트, 자체서명 인증서, 의심스러운 암호화 설정을 탐지합니다."
+    description_key = "engines.tls_fingerprint.description"
     config_schema = {
         "check_ja3": {
             "type": bool, "default": True,
             "label": "JA3 핑거프린트 검사",
+            "label_key": "engines.tls_fingerprint.check_ja3.label",
             "description": "TLS Client Hello의 JA3 핑거프린트를 수집/분석. "
                            "악성 도구(Cobalt Strike 등)의 알려진 JA3 해시와 매칭.",
+            "description_key": "engines.tls_fingerprint.check_ja3.description",
         },
         "check_ja3s": {
             "type": bool, "default": True,
             "label": "JA3S 핑거프린트 검사",
+            "label_key": "engines.tls_fingerprint.check_ja3s.label",
             "description": "TLS Server Hello의 JA3S 핑거프린트를 수집/분석. "
                            "C2 서버의 특징적 TLS 응답 패턴을 탐지.",
+            "description_key": "engines.tls_fingerprint.check_ja3s.description",
         },
         "check_ja4": {
             "type": bool, "default": True,
             "label": "JA4 핑거프린트 검사",
+            "label_key": "engines.tls_fingerprint.check_ja4.label",
             "description": "차세대 TLS 핑거프린트(JA4). JA3보다 정확한 클라이언트 식별 제공.",
+            "description_key": "engines.tls_fingerprint.check_ja4.description",
         },
         "check_sni": {
             "type": bool, "default": True,
             "label": "SNI 검사",
+            "label_key": "engines.tls_fingerprint.check_sni.label",
             "description": "TLS Server Name Indication 필드를 분석. "
                            "SNI 누락 또는 IP 직접 접속 시 알림(정상 HTTPS는 SNI 포함).",
+            "description_key": "engines.tls_fingerprint.check_sni.description",
         },
         "check_cert": {
             "type": bool, "default": True,
             "label": "인증서 검사",
+            "label_key": "engines.tls_fingerprint.check_cert.label",
             "description": "TLS 인증서의 유효기간, 자체서명 여부, Subject 이상 등을 분석.",
+            "description_key": "engines.tls_fingerprint.check_cert.description",
         },
         "detect_tunnels": {
             "type": bool, "default": True,
             "label": "TLS 터널 탐지",
+            "label_key": "engines.tls_fingerprint.detect_tunnels.label",
             "description": "TLS 트래픽 패턴으로 VPN/터널 사용을 탐지. "
                            "패킷 크기 분포의 변동계수(CV)가 낮으면 터널 의심.",
+            "description_key": "engines.tls_fingerprint.detect_tunnels.description",
         },
         "tunnel_min_packets": {
             "type": int, "default": 30, "min": 10, "max": 500,
             "label": "터널 탐지 최소 패킷 수",
+            "label_key": "engines.tls_fingerprint.tunnel_min_packets.label",
             "description": "터널 분석에 필요한 최소 패킷 수. 충분한 샘플이 있어야 정확한 판정 가능.",
+            "description_key": "engines.tls_fingerprint.tunnel_min_packets.description",
         },
         "tunnel_cv_threshold": {
             "type": float, "default": 0.05, "min": 0.01, "max": 0.5,
@@ -616,10 +631,12 @@ class TLSFingerprintEngine(DetectionEngine):
                     engine=self.name,
                     severity=Severity.CRITICAL,
                     title="Malicious TLS Fingerprint (JA3 Match)",
+                    title_key="engines.tls_fingerprint.alerts.ja3_match.title",
                     description=(
                         f"TLS ClientHello matches known malware JA3 fingerprint: "
                         f"{ja3_hash} (malware: {malware_name})"
                     ),
+                    description_key="engines.tls_fingerprint.alerts.ja3_match.description",
                     source_ip=src_ip,
                     dest_ip=dst_ip,
                     confidence=0.90,
@@ -635,10 +652,12 @@ class TLSFingerprintEngine(DetectionEngine):
                 engine=self.name,
                 severity=Severity.CRITICAL,
                 title="Malicious TLS Fingerprint (JA4 Match)",
+                title_key="engines.tls_fingerprint.alerts.ja4_match.title",
                 description=(
                     f"TLS ClientHello matches known malware JA4 fingerprint: "
                     f"{ja4_hash} (malware: {malware_name})"
                 ),
+                description_key="engines.tls_fingerprint.alerts.ja4_match.description",
                 source_ip=src_ip,
                 dest_ip=dst_ip,
                 confidence=0.92,
@@ -673,10 +692,12 @@ class TLSFingerprintEngine(DetectionEngine):
                             engine=self.name,
                             severity=Severity.CRITICAL,
                             title="TLS Connection to Blocklisted Domain (SNI)",
+                            title_key="engines.tls_fingerprint.alerts.sni_blocked.title",
                             description=(
                                 f"TLS handshake to known malicious domain: {sni}"
                                 + (f" (feed: {feed_name})" if feed_name else "")
                             ),
+                            description_key="engines.tls_fingerprint.alerts.sni_blocked.description",
                             source_ip=src_ip,
                             dest_ip=dst_ip,
                             confidence=0.95,

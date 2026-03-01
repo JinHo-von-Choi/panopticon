@@ -65,6 +65,14 @@ class NetWatcher:
         self.loop = asyncio.get_running_loop()
 
         setup_logging(self.config)
+        
+        # i18n 초기화
+        from pathlib import Path
+        from netwatcher.utils.i18n import i18n
+        locales_dir = Path(__file__).parent / "web" / "static" / "locales"
+        default_lang = self.config.get("netwatcher.language.default", "ko")
+        i18n.init(locales_dir, default_lang)
+        
         logger.info("NetWatcher starting...")
 
         # ── 데이터베이스 & 리포지토리 ──────────────────────────────────
@@ -226,15 +234,20 @@ class NetWatcher:
                 registry=self.registry,
                 dispatcher=dispatcher,
                 yaml_editor=self._yaml_editor,
+                whitelist=self.registry.whitelist,
             )
 
         # ── 웹 서버 ───────────────────────────────────────────────────────
+        from netwatcher.web.auth import AuthManager
+        auth_manager = AuthManager(self.config)
+
         app = create_app(
             config=self.config,
             event_repo=event_repo,
             device_repo=device_repo,
             stats_repo=stats_repo,
             dispatcher=dispatcher,
+            auth_manager=auth_manager,
             correlator=self.correlator,
             whitelist=self.registry.whitelist,
             blocklist_repo=blocklist_repo,

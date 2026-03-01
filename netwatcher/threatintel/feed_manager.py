@@ -86,6 +86,20 @@ class FeedManager:
         """도메인이 로드된 피드를 반환한다."""
         return self._domain_to_feed.get(domain)
 
+    def match_ip(self, ip: str) -> dict[str, str] | None:
+        """IP가 차단 목록에 있는지 확인하고 피드 정보를 반환한다."""
+        feed = self._ip_to_feed.get(ip)
+        if feed:
+            return {"source": feed, "category": "malware"}
+        return None
+
+    def match_domain(self, domain: str) -> dict[str, str] | None:
+        """도메인이 차단 목록에 있는지 확인하고 피드 정보를 반환한다."""
+        feed = self._domain_to_feed.get(domain)
+        if feed:
+            return {"source": feed, "category": "malware"}
+        return None
+
     def load_custom_entries(self, ips: set[str], domains: set[str]) -> None:
         """시작 시 DB에서 커스텀 항목을 로드하고 라이브 집합에 병합한다."""
         self._custom_ips = set(ips)
@@ -138,11 +152,11 @@ class FeedManager:
 
         if entry_type != "domain":
             for ip, feed in self._ip_to_feed.items():
-                entries.append({"entry_type": "ip", "value": ip, "source": feed})
+                entries.append({"type": "ip", "value": ip, "source": feed})
 
         if entry_type != "ip":
             for domain, feed in self._domain_to_feed.items():
-                entries.append({"entry_type": "domain", "value": domain, "source": feed})
+                entries.append({"type": "domain", "value": domain, "source": feed})
 
         # 소스별 필터링
         if source == "custom":
@@ -156,7 +170,7 @@ class FeedManager:
             entries = [e for e in entries if s in e["value"].lower()]
 
         total = len(entries)
-        entries.sort(key=lambda e: (e["source"] != "Custom", e["entry_type"], e["value"]))
+        entries.sort(key=lambda e: (e["source"] != "Custom", e["type"], e["value"]))
         return entries[offset:offset + limit], total
 
     async def update_all(self) -> None:

@@ -52,6 +52,8 @@ class Alert:
     severity: Severity
     title: str
     description: str = ""
+    title_key: str | None = None        # i18n title key
+    description_key: str | None = None  # i18n description key
     source_ip: str | None = None
     source_mac: str | None = None
     dest_ip: str | None = None
@@ -83,6 +85,8 @@ class Alert:
             "severity": self.severity.value,
             "title": self.title,
             "description": self.description,
+            "title_key": self.title_key,
+            "description_key": self.description_key,
             "source_ip": self.source_ip,
             "source_mac": self.source_mac,
             "dest_ip": self.dest_ip,
