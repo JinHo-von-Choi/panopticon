@@ -87,7 +87,7 @@ Periodically downloads external threat feeds (IP/Domain/JA3 blocklists) and cros
 
 ### Real-time Web Dashboard
 
-Provides a single-page dashboard integrating Chart.js-based traffic visualization, WebSocket real-time event streaming, device management, engine configuration, and blocklist management.
+Provides a single-page dashboard integrating Chart.js-based traffic visualization, WebSocket real-time event streaming, device management, engine configuration, and blocklist/whitelist management. The frontend is built with ES modules and supports Korean/English i18n.
 
 ### Multi-channel Notifications
 
@@ -297,12 +297,16 @@ The **Hosts Visible** card on the dashboard indicates the visibility level in re
 The dashboard displays visibility as `none` / `partial` / `full` based on unique MACs observed.
 
 ### Tabs
-- **Events**: List of detected events with filtering, pagination, and CSV/JSON export.
-- **Traffic**: Packet timeline, protocol distribution, and alert charts.
-- **Devices**: List of network devices (MAC, IP, Vendor, OS, Packet count).
-- **Blocklist**: Management of custom IP/Domain blocklists and feed statistics.
-- **Engines**: Real-time toggling and parameter editing for 18 detection engines.
-- **AI Analyzer**: History of AI-based false positive analysis and threshold adjustments.
+
+| Tab | Description |
+|-----|-------------|
+| **Events** | Detected event list with severity/engine/date/keyword filters, pagination, CSV/JSON export |
+| **Traffic** | Packets-per-minute timeline, protocol distribution pie chart, severity/engine alert charts |
+| **Devices** | Network device list (MAC, IP, vendor, OS, packet count), device registration and editing |
+| **Blocklist** | Custom IP/domain blocklist management, threat feed statistics |
+| **Whitelist** | Allowlist management — add/remove IP, MAC, domain, IP Range entries; type filter and search. Whitelist entries are included in the AI analysis prompt to improve false positive detection |
+| **Engines** | Enable/disable toggle and real-time parameter editing for 18 detection engines |
+| **AI Analyzer** | AI false positive analysis history (verdict filter, threshold adjustment history), service status. Tab is only shown when `ai_analyzer.enabled: true` |
 
 ---
 
