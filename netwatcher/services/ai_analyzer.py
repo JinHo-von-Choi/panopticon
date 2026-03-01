@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from netwatcher.alerts.dispatcher import AlertDispatcher
     from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.detection.whitelist import Whitelist
     from netwatcher.storage.repositories import EventRepository
     from netwatcher.utils.config import Config
     from netwatcher.utils.yaml_editor import YamlConfigEditor
@@ -57,7 +58,7 @@ class AIAnalyzerService:
         "copilot": ["gh",     "copilot", "explain"],
         "claude":  ["claude", "-p"],
         "codex":   ["codex"],
-        "gemini":  ["gemini"],
+        "gemini":  ["gemini", "-p"],
         "agent":   ["claude", "--agent"],
     }
 
@@ -126,6 +127,7 @@ class AIAnalyzerService:
         registry: "EngineRegistry",
         dispatcher: "AlertDispatcher",
         yaml_editor: "YamlConfigEditor | None",
+        whitelist: "Whitelist | None" = None,
     ) -> None:
         """서비스 의존성을 주입받아 초기화한다."""
         ai_cfg = config.section("ai_analyzer") or {}
@@ -135,6 +137,7 @@ class AIAnalyzerService:
         self._registry    = registry
         self._dispatcher  = dispatcher
         self._yaml_editor = yaml_editor
+        self._whitelist   = whitelist
 
         self._provider:         str = str(ai_cfg.get("provider", "copilot"))
         self._interval_seconds: int = int(ai_cfg.get("interval_minutes",  15)) * 60
@@ -365,10 +368,30 @@ class AIAnalyzerService:
             for e in events
         ]
         events_json = json.dumps(slim, ensure_ascii=False, indent=2)
+        
+        # 기본 언어 설정 가져오기
+        lang = self._config.get("netwatcher.language.default", "ko")
+        lang_instruction = f"Respond in Korean." if lang == "ko" else "Respond in English."
+
+        # 화이트리스트 문맥 정보 구성
+        whitelist_info = ""
+        if self._whitelist:
+            wl = self._whitelist.to_dict()
+            whitelist_info = (
+                f"\nWHITELIST CONTEXT:\n"
+                f"- IPs: {', '.join(wl.get('ips', [])) or 'None'}\n"
+                f"- IP Ranges: {', '.join(wl.get('ip_ranges', [])) or 'None'}\n"
+                f"- MACs: {', '.join(wl.get('macs', [])) or 'None'}\n"
+                f"- Domains: {', '.join(wl.get('domains', [])) or 'None'}\n"
+                f"- Domain Suffixes: {', '.join(wl.get('domain_suffixes', [])) or 'None'}\n"
+                f"Trusted entities in the whitelist should be treated as very likely FALSE POSITIVES unless their behavior is clearly malicious."
+            )
 
         return (
             f"Analyze these network security events from a home/office LAN monitor "
-            f"(lookback: {self._lookback_minutes} minutes). "
+            f"(lookback: {self._lookback_minutes} minutes). {lang_instruction} "
+            f"Note: This is a private home/office environment where some local scanning (printers, NAS) may occur. "
+            f"{whitelist_info} "
             f"Events include CRITICAL, WARNING, and INFO severity levels. "
             f"Perform TWO checks: "
             f"(1) Are any CRITICAL/WARNING alerts actually false positives? "
@@ -378,9 +401,9 @@ class AIAnalyzerService:
             f"Respond ONLY in this exact format: "
             f"VERDICT: CONFIRMED_THREAT | FALSE_POSITIVE | MISSED_THREAT | UNCERTAIN "
             f"ENGINE: <engine_name> "
-            f"REASON: <one sentence> "
+            f"REASON: <one sentence in {('Korean' if lang == 'ko' else 'English')}> "
             f"REASONING: "
-            f"1. <reason 1> "
+            f"1. <reason 1 in {('Korean' if lang == 'ko' else 'English')}> "
             f"2. <reason 2> "
             f"3. <reason 3> "
             f"ADJUST: <param>=<numeric_value> (FALSE_POSITIVE: raise value, MISSED_THREAT: lower value, can repeat)"
@@ -398,20 +421,23 @@ class AIAnalyzerService:
                 engine="ai_analyzer",
                 severity=Severity.CRITICAL,
                 title=f"[AI 확인] {result.engine} — 실제 위협",
+                title_key="ai_analyzer.verdicts.confirmed.title",
                 description=result.reason,
                 confidence=1.0,
-                metadata={"ai_confirmed": True, "original_engine": result.engine},
+                metadata={"ai_confirmed": True, "original_engine": result.engine, "engine_name": result.engine},
             )
             self._dispatcher.enqueue(alert)
             await self._event_repo.insert(
                 engine="ai_analyzer",
                 severity="CRITICAL",
                 title=f"[AI 확인] {result.engine} — 실제 위협",
+                title_key="ai_analyzer.verdicts.confirmed.title",
                 description=result.reason,
                 reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "CONFIRMED_THREAT",
                     "original_engine": result.engine,
+                    "engine_name": result.engine,
                     "provider": self._provider,
                 },
             )
@@ -429,11 +455,13 @@ class AIAnalyzerService:
                 engine="ai_analyzer",
                 severity="WARNING",
                 title=f"[AI 오탐] {result.engine} — 오탐 판정",
+                title_key="ai_analyzer.verdicts.false_positive.title",
                 description=result.reason,
                 reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "FALSE_POSITIVE",
                     "original_engine": result.engine,
+                    "engine_name": result.engine,
                     "adjustments": result.adjustments,
                     "provider": self._provider,
                 },
@@ -446,20 +474,23 @@ class AIAnalyzerService:
                 engine="ai_analyzer",
                 severity=Severity.CRITICAL,
                 title=f"[AI 미탐] {result.engine} — 탐지 누락 의심",
+                title_key="ai_analyzer.verdicts.missed_threat.title",
                 description=result.reason,
                 confidence=0.8,
-                metadata={"missed_threat": True, "original_engine": result.engine},
+                metadata={"missed_threat": True, "original_engine": result.engine, "engine_name": result.engine},
             )
             self._dispatcher.enqueue(alert)
             await self._event_repo.insert(
                 engine="ai_analyzer",
                 severity="CRITICAL",
                 title=f"[AI 미탐] {result.engine} — 탐지 누락 의심",
+                title_key="ai_analyzer.verdicts.missed_threat.title",
                 description=result.reason,
                 reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "MISSED_THREAT",
                     "original_engine": result.engine,
+                    "engine_name": result.engine,
                     "provider": self._provider,
                 },
             )
@@ -478,11 +509,13 @@ class AIAnalyzerService:
                 engine="ai_analyzer",
                 severity="INFO",
                 title=f"[AI 불확실] {result.engine} — 판단 불가",
+                title_key="ai_analyzer.verdicts.uncertain.title",
                 description=result.reason,
                 reasoning=result.reasoning or None,
                 metadata={
                     "verdict": "UNCERTAIN",
                     "original_engine": result.engine,
+                    "engine_name": result.engine,
                     "provider": self._provider,
                 },
             )

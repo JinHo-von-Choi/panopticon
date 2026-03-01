@@ -44,18 +44,7 @@ class YamlConfigEditor:
         return dict(engine_section)
 
     def update_engine_config(self, engine_name: str, updates: dict[str, Any]) -> None:
-        """지정된 엔진의 설정을 부분 업데이트한다.
-
-        업데이트 전 .bak 백업 파일을 생성한다. 지정된 키만 변경하며,
-        나머지 키와 주석/포맷팅은 보존된다.
-
-        Args:
-            engine_name: 엔진 이름
-            updates: 업데이트할 키-값 쌍
-
-        Raises:
-            KeyError: 엔진이 YAML에 존재하지 않는 경우
-        """
+        """지정된 엔진의 설정을 부분 업데이트한다."""
         shutil.copy2(str(self._path), str(self._path) + ".bak")
 
         data = self._load()
@@ -66,6 +55,30 @@ class YamlConfigEditor:
 
         for key, value in updates.items():
             engine_section[key] = value
+
+        self._save(data)
+
+    def update_whitelist_config(self, updates: dict[str, Any]) -> None:
+        """화이트리스트 설정을 업데이트한다.
+
+        Args:
+            updates: 업데이트할 화이트리스트 딕셔너리 (ips, macs, domains 등)
+        """
+        shutil.copy2(str(self._path), str(self._path) + ".bak")
+
+        data = self._load()
+        # netwatcher.whitelist 섹션 직접 접근
+        netwatcher_sec = data.get("netwatcher", {})
+        if "whitelist" not in netwatcher_sec:
+            netwatcher_sec["whitelist"] = {}
+
+        whitelist_sec = netwatcher_sec["whitelist"]
+        for key, value in updates.items():
+            if isinstance(value, list):
+                # 모든 항목을 문자열로 변환하여 ruamel.yaml의 정렬 오류 방지
+                whitelist_sec[key] = [str(v) for v in value]
+            else:
+                whitelist_sec[key] = value
 
         self._save(data)
 

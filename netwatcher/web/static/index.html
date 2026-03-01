@@ -9,6 +9,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/i18next@23.10.0/dist/umd/i18next.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/i18next-http-backend@2.5.0/i18nextHttpBackend.min.js"></script>
 </head>
 <body>
     <!-- Login Overlay -->
@@ -17,26 +19,30 @@
             <img src="/img/panopticon.png" alt="Panopticon" class="login-logo" />
             <form id="login-form">
                 <div class="form-group">
-                    <label for="login-username">Username</label>
+                    <label for="login-username" data-i18n="login.username">Username</label>
                     <input type="text" id="login-username" class="input-search" autocomplete="username" style="width:100%" />
                 </div>
                 <div class="form-group">
-                    <label for="login-password">Password</label>
+                    <label for="login-password" data-i18n="login.password">Password</label>
                     <input type="password" id="login-password" class="input-search" autocomplete="current-password" style="width:100%" />
                 </div>
                 <div id="login-error" class="login-error"></div>
-                <button type="submit" class="btn btn-accent" style="width:100%;margin-top:4px">Login</button>
+                <button type="submit" class="btn btn-accent" style="width:100%;margin-top:4px" data-i18n="login.button">Login</button>
             </form>
         </div>
     </div>
 
     <header>
         <div class="header-left">
-            <span id="connection-status" class="status-dot disconnected" title="WebSocket disconnected"></span>
+            <span id="connection-status" class="status-dot disconnected" data-i18n="header.status.disconnected" title="WebSocket disconnected"></span>
             <h1>Panopticon</h1>
         </div>
         <div class="header-right">
-            <button id="btn-logout" class="btn" style="display:none;font-size:12px;padding:5px 12px">Logout</button>
+            <select id="lang-selector" class="input-search" style="font-size:12px;padding:4px 8px;margin-right:8px;background:var(--bg-card);border-color:var(--border-color)">
+                <option value="ko">🇰🇷 한국어</option>
+                <option value="en">🇺🇸 English</option>
+            </select>
+            <button id="btn-logout" class="btn" style="display:none;font-size:12px;padding:5px 12px" data-i18n="header.logout">Logout</button>
             <span id="clock"></span>
         </div>
     </header>
@@ -47,63 +53,64 @@
             <div class="stat-card critical">
                 <div class="stat-icon">&#9888;</div>
                 <div class="stat-value" id="stat-critical">0</div>
-                <div class="stat-label">Critical</div>
+                <div class="stat-label" data-i18n="stats.critical">Critical</div>
             </div>
             <div class="stat-card warning">
                 <div class="stat-icon">&#9651;</div>
                 <div class="stat-value" id="stat-warning">0</div>
-                <div class="stat-label">Warning</div>
+                <div class="stat-label" data-i18n="stats.warning">Warning</div>
             </div>
             <div class="stat-card info">
                 <div class="stat-icon">&#9432;</div>
                 <div class="stat-value" id="stat-info">0</div>
-                <div class="stat-label">Info</div>
+                <div class="stat-label" data-i18n="stats.info">Info</div>
             </div>
             <div class="stat-card neutral">
                 <div class="stat-icon">&#9654;</div>
                 <div class="stat-value" id="stat-packets">0</div>
-                <div class="stat-label">Total Packets</div>
+                <div class="stat-label" data-i18n="stats.total_packets">Total Packets</div>
             </div>
             <div class="stat-card neutral">
                 <div class="stat-icon">&#9632;</div>
                 <div class="stat-value" id="stat-devices">0</div>
-                <div class="stat-label">Devices</div>
+                <div class="stat-label" data-i18n="stats.devices">Devices</div>
             </div>
             <div class="stat-card risk" id="stat-highrisk-card">
                 <div class="stat-icon">&#9760;</div>
                 <div class="stat-value" id="stat-highrisk">0</div>
-                <div class="stat-label">High Risk</div>
+                <div class="stat-label" data-i18n="stats.high_risk">High Risk</div>
             </div>
-            <div class="stat-card visibility-card" id="stat-visibility-card" title="SPAN 포트 구성 시 다수 호스트 트래픽이 가시화됩니다">
+            <div class="stat-card visibility-card" id="stat-visibility-card" data-i18n="stats.visibility_hint" title="SPAN 포트 구성 시 다수 호스트 트래픽이 가시화됩니다">
                 <div class="stat-icon">&#9673;</div>
                 <div class="stat-value" id="stat-visibility">-</div>
-                <div class="stat-label">Hosts Visible</div>
+                <div class="stat-label" data-i18n="stats.hosts_visible">Hosts Visible</div>
             </div>
         </section>
 
         <!-- Tabs -->
         <nav class="tabs">
-            <button class="tab active" data-tab="events">Events</button>
-            <button class="tab" data-tab="traffic">Traffic</button>
-            <button class="tab" data-tab="devices">Devices</button>
-            <button class="tab" data-tab="blocklist">Blocklist</button>
-            <button class="tab" data-tab="engines">Engines</button>
-            <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none">AI Analyzer</button>
+            <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
+            <button class="tab" data-tab="traffic" data-i18n="tabs.traffic">Traffic</button>
+            <button class="tab" data-tab="devices" data-i18n="tabs.devices">Devices</button>
+            <button class="tab" data-tab="blocklist" data-i18n="tabs.blocklist">Blocklist</button>
+            <button class="tab" data-tab="whitelist" data-i18n="tabs.whitelist">Whitelist</button>
+            <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
+            <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none" data-i18n="tabs.ai_analyzer">AI Analyzer</button>
         </nav>
 
         <!-- Events Tab -->
         <section id="tab-events" class="tab-content active">
             <div class="toolbar">
                 <select id="filter-severity">
-                    <option value="">All Severities</option>
-                    <option value="CRITICAL">Critical</option>
-                    <option value="WARNING">Warning</option>
-                    <option value="INFO">Info</option>
+                    <option value="" data-i18n="toolbar.all_severities">All Severities</option>
+                    <option value="CRITICAL" data-i18n="stats.critical">Critical</option>
+                    <option value="WARNING" data-i18n="stats.warning">Warning</option>
+                    <option value="INFO" data-i18n="stats.info">Info</option>
                 </select>
                 <select id="filter-engine">
-                    <option value="">All Engines</option>
+                    <option value="" data-i18n="toolbar.all_engines">All Engines</option>
                 </select>
-                <input type="text" id="filter-search" class="input-search" placeholder="Search events..." />
+                <input type="text" id="filter-search" class="input-search" data-i18n="toolbar.search_placeholder" placeholder="Search events..." />
                 <input type="date" id="filter-since" class="input-date" title="Since" />
                 <input type="date" id="filter-until" class="input-date" title="Until" />
                 <select id="filter-pagesize">
@@ -111,21 +118,21 @@
                     <option value="100" selected>100 / page</option>
                     <option value="200">200 / page</option>
                 </select>
-                <button id="btn-refresh" class="btn">Refresh</button>
-                <button id="btn-export-csv" class="btn btn-export">Export CSV</button>
-                <button id="btn-export-json" class="btn btn-export">Export JSON</button>
+                <button id="btn-refresh" class="btn" data-i18n="toolbar.refresh">Refresh</button>
+                <button id="btn-export-csv" class="btn btn-export" data-i18n="toolbar.export_csv">Export CSV</button>
+                <button id="btn-export-json" class="btn btn-export" data-i18n="toolbar.export_json">Export JSON</button>
             </div>
             <div class="table-wrapper">
                 <table id="events-table">
                     <thead>
                         <tr>
-                            <th>Time</th>
-                            <th>Severity</th>
-                            <th>Engine</th>
-                            <th>Title</th>
-                            <th>Source</th>
-                            <th>Destination</th>
-                            <th>Actions</th>
+                            <th data-i18n="table.time">Time</th>
+                            <th data-i18n="table.severity">Severity</th>
+                            <th data-i18n="table.engine">Engine</th>
+                            <th data-i18n="table.title">Title</th>
+                            <th data-i18n="table.source">Source</th>
+                            <th data-i18n="table.destination">Destination</th>
+                            <th data-i18n="table.actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="events-body"></tbody>
@@ -236,6 +243,33 @@
                 </table>
             </div>
             <div class="pagination" id="blocklist-pagination"></div>
+        </section>
+
+        <!-- Whitelist Tab -->
+        <section id="tab-whitelist" class="tab-content">
+            <div class="toolbar">
+                <select id="wl-filter-type">
+                    <option value="">All Types</option>
+                    <option value="ip">IP</option>
+                    <option value="mac">MAC</option>
+                    <option value="domain">Domain</option>
+                    <option value="ip_range">IP Range</option>
+                </select>
+                <input type="text" id="wl-search" class="input-search" placeholder="Search whitelist..." />
+                <button id="btn-add-whitelist" class="btn btn-accent">Add Entry</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="whitelist-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Value</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="whitelist-body"></tbody>
+                </table>
+            </div>
         </section>
 
         <!-- Engines Tab -->
@@ -389,7 +423,39 @@
         </div>
     </div>
 
+    <!-- Add Whitelist Entry Modal -->
+    <div id="whitelist-form-overlay" class="modal-overlay hidden">
+        <div class="modal" style="max-width:500px">
+            <div class="modal-header">
+                <h2>Add Whitelist Entry</h2>
+                <button class="modal-close" id="whitelist-form-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="whitelist-form">
+                    <div class="form-group">
+                        <label for="wf-type">Type</label>
+                        <select id="wf-type" style="width:100%">
+                            <option value="ip">IP Address</option>
+                            <option value="mac">MAC Address</option>
+                            <option value="domain">Domain</option>
+                            <option value="ip_range">IP Range (CIDR)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="wf-value">Value</label>
+                        <input type="text" id="wf-value" class="input-search" placeholder="e.g. 192.168.0.1 or trusted.com" style="width:100%" />
+                    </div>
+                    <div id="wf-error" style="color:var(--critical);font-size:13px;margin-bottom:8px;display:none"></div>
+                    <div class="form-actions">
+                        <button type="button" class="btn" id="whitelist-form-cancel-btn">Cancel</button>
+                        <button type="submit" class="btn btn-accent">Add</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <div id="toast-container" class="toast-container"></div>
-    <script src="/js/app.js"></script>
+    <script type="module" src="/js/app.js"></script>
 </body>
 </html>

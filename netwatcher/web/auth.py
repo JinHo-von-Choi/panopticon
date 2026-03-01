@@ -144,7 +144,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
 
         # WebSocket 경로 면제 (토큰은 쿼리 파라미터로 전달)
-        if path.startswith("/ws/"):
+        if path.startswith("/ws/") or path.startswith("/api/ws/"):
             return await call_next(request)
 
         # /api/* 경로만 인증 필요

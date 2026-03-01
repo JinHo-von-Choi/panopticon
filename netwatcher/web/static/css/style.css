@@ -228,6 +228,10 @@ main {
     font-family: var(--font-mono);
     line-height: 1;
     letter-spacing: -1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .stat-card.critical .stat-value { color: var(--critical); }

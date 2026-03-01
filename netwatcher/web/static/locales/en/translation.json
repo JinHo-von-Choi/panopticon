@@ -1,0 +1,285 @@
+{
+  "title": "Panopticon Dashboard",
+  "login": {
+    "username": "Username",
+    "password": "Password",
+    "button": "Login",
+    "error": "Login Failed"
+  },
+  "header": {
+    "logout": "Logout",
+    "status": {
+      "connected": "WebSocket Connected",
+      "disconnected": "WebSocket Disconnected"
+    }
+  },
+  "stats": {
+    "critical": "Critical",
+    "warning": "Warning",
+    "info": "Info",
+    "total_packets": "Total Packets",
+    "devices": "Devices",
+    "high_risk": "High Risk",
+    "hosts_visible": "Hosts Visible",
+    "visibility_hint": "Multiple host traffic becomes visible when SPAN port is configured"
+  },
+  "tabs": {
+    "events": "Events",
+    "traffic": "Traffic",
+    "devices": "Devices",
+    "blocklist": "Blocklist",
+    "whitelist": "Whitelist",
+    "engines": "Engines",
+    "ai_analyzer": "AI Analyzer"
+  },
+  "toolbar": {
+    "all_severities": "All Severities",
+    "all_engines": "All Engines",
+    "search_placeholder": "Search events...",
+    "refresh": "Refresh",
+    "export_csv": "Export CSV",
+    "export_json": "Export JSON",
+    "page_size": "{{count}} / page"
+  },
+  "table": {
+    "time": "Time",
+    "severity": "Severity",
+    "engine": "Engine",
+    "title": "Title",
+    "source": "Source",
+    "destination": "Destination",
+    "actions": "Actions"
+  },
+  "detail": {
+    "reasoning_title": "Detection Reasoning",
+    "reason_label": "Reasoning",
+    "original_mac": "Original MAC",
+    "new_mac": "New MAC"
+  },
+  "whitelist": {
+    "management": "Whitelist Management",
+    "add_mac": "Add MAC to Whitelist",
+    "remove_mac": "Remove MAC from Whitelist",
+    "add_ip": "Add IP to Whitelist",
+    "remove_ip": "Remove IP from Whitelist",
+    "status_whitelisted": "Whitelisted"
+  },
+  "engines": {
+    "arp_spoof": {
+      "name": "ARP Spoof Detection",
+      "description": "Detects ARP spoofing and Gratuitous ARP floods. Monitors MAC-IP mapping changes to identify Man-in-the-Middle (MITM) attacks.",
+      "gratuitous_window_seconds": { "label": "Gratuitous ARP Window (s)", "description": "Sliding window length for aggregating Gratuitous ARP packets." },
+      "gratuitous_threshold": { "label": "Gratuitous ARP Threshold", "description": "Alert triggered when Gratuitous ARP count exceeds this value within the window." },
+      "cooldown_seconds": { "label": "Re-alert Cooldown (s)", "description": "Wait time before re-sending an alert for the same host." },
+      "max_tracked_hosts": { "label": "Max Tracked Hosts", "description": "Maximum size of the ARP table maintained in memory." },
+      "alerts": {
+        "spoof_detected": { "title": "ARP Spoofing Detected", "description": "IP {{source_ip}} was associated with MAC {{original_mac}}, but now claims to be MAC {{source_mac}}. Possible ARP cache poisoning attack." },
+        "gratuitous_flood": { "title": "Gratuitous ARP Flood", "description": "MAC {{source_mac}} (IP {{source_ip}}) sent {{count}}+ gratuitous ARP replies in {{window_seconds}}s. Possible ARP spoofing preparation." }
+      },
+      "reasoning": {
+        "spoof": "MAC address change detected for the same IP → Possible ARP cache poisoning",
+        "flood": "Sent {{count}} gratuitous ARP replies → Possible spoofing preparation"
+      }
+    },
+    "dhcp_spoof": {
+      "name": "DHCP Spoof Detection",
+      "description": "Detects rogue DHCP servers. Prevents attackers from manipulating network settings via forged DHCP responses.",
+      "starvation_threshold": { "label": "DHCP Starvation Threshold", "description": "Alert triggered when DHCP DISCOVER packet count exceeds this value within the window." },
+      "starvation_window_seconds": { "label": "Starvation Window (s)", "description": "Time window for aggregating DHCP starvation activity." },
+      "known_servers": { "label": "Known DHCP Servers", "description": "List of trusted DHCP server IP addresses. Auto-learns if empty." },
+      "alerts": {
+        "rogue_server": { "title": "Rogue DHCP Server Detected", "description": "DHCP response from unknown server {{source_ip}} (MAC: {{source_mac}}). Potential Rogue DHCP attack." },
+        "starvation": { "title": "DHCP Starvation Attack Detected", "description": "Bursts of DHCP DISCOVER packets from {{count}} unique MACs. Potential IP resource exhaustion attempt." }
+      }
+    },
+    "mac_spoof": {
+      "name": "MAC Spoof Detection",
+      "description": "Detects MAC address forgery. Identifies OUI mismatches, random MACs, and multiple IP usage on a single MAC.",
+      "max_ips_per_mac": { "label": "Max IPs per MAC", "description": "Suspected cloning if a single MAC uses more than this many unique IPs within the window." },
+      "ip_window_seconds": { "label": "IP Tracking Window (s)", "description": "Time window for tracking MAC-IP bindings." },
+      "max_tracked_macs": { "label": "Max Tracked MACs", "description": "Maximum size of the MAC tracking table in memory." },
+      "alerts": {
+        "local_admin": { "title": "Locally Administered MAC Detected", "description": "MAC {{source_mac}} has the locally administered bit set but is not from a known virtualization vendor. Potential forgery." },
+        "cloning": { "title": "Possible MAC Cloning", "description": "MAC {{source_mac}} associated with {{count}} unique IPs in {{window_seconds}}s. Potential MAC address cloning attack." }
+      }
+    },
+    "port_scan": {
+      "name": "Port Scan Detection",
+      "description": "Detects port scanning activity. Identifies scanners and attackers probing multiple ports in a short duration.",
+      "threshold": { "label": "Port Scan Threshold", "description": "Alert triggered when unique destination port count exceeds this value within the window." },
+      "window_seconds": { "label": "Detection Window (s)", "description": "Time window for aggregating port scan activity." },
+      "stealth_threshold": { "label": "Stealth Scan Threshold", "description": "Warning triggered when abnormal TCP flag packets exceed this count." },
+      "alerts": {
+        "stealth": { "title": "Stealth Port Scan Detected", "description": "Abnormal TCP flags ({{flags}}) observed from {{source_ip}}. Potential firewall evasion scan." },
+        "scan": { "title": "Port Scan Detected", "description": "{{source_ip}} scanned {{count}} unique ports in {{window_seconds}}s. Potential reconnaissance." }
+      }
+    },
+    "icmp_anomaly": {
+      "name": "ICMP Anomaly Detection",
+      "description": "Detects anomalies in ICMP traffic. Monitors Ping Sweeps, ICMP Floods, and uncommon ICMP types.",
+      "sweep_threshold": { "label": "Ping Sweep Threshold", "description": "Alert triggered when unique host count receiving ICMP Echo Requests exceeds this value." },
+      "flood_threshold": { "label": "ICMP Flood Threshold", "description": "Alert triggered when ICMP packet rate per second exceeds this value." },
+      "window_seconds": { "label": "Detection Window (s)", "description": "Time window for aggregating ICMP anomalies." },
+      "alerts": {
+        "suspicious_type": { "title": "Suspicious ICMP Type Detected", "description": "Uncommon ICMP type {{icmp_type}} sent from {{source_ip}} to {{dest_ip}}. Potential tunneling attempt." },
+        "sweep": { "title": "Ping Sweep Detected", "description": "{{source_ip}} sent ICMP Echo Requests to {{count}} unique hosts in {{window_seconds}}s." },
+        "flood": { "title": "ICMP Flood Detected", "description": "High ICMP packet rate ({{pps}}/s) from {{source_ip}} to {{dest_ip}}. Potential DoS attack." }
+      }
+    },
+    "protocol_anomaly": {
+      "name": "Protocol Anomaly Detection",
+      "description": "Detects packets deviating from protocol specifications. Identifies TTL tampering, abnormal TCP flags, and evasion attempts.",
+      "min_ttl": { "label": "Min TTL", "description": "Suspected tampering if packet TTL is less than this value." },
+      "detect_reserved_bits": { "label": "Check Reserved Bits", "description": "Monitors if reserved bits in IP/TCP headers are set." },
+      "alerts": {
+        "low_ttl": { "title": "Abnormally Low TTL Detected", "description": "Packet TTL from {{source_ip}} is unusually low ({{ttl}}). Potential routing manipulation or evasion attempt." },
+        "bogus_flags": { "title": "Bogus TCP Flags (SYN+FIN)", "description": "Illegal TCP packet with both SYN and FIN flags set received from {{source_ip}}." },
+        "reserved_bit": { "title": "IP Reserved Bit Set", "description": "Packet with IP Reserved bit set received from {{source_ip}}. Suspected use of specialized scanners." }
+      }
+    },
+    "dns_anomaly": {
+      "name": "DNS Anomaly Detection",
+      "description": "Detects DNS query anomalies. Identifies random domains (DGA), DNS tunneling, and massive queries.",
+      "entropy_threshold": { "label": "Entropy Threshold", "description": "Suspected DGA if domain label randomness exceeds this value." },
+      "label_length_threshold": { "label": "Max Label Length", "description": "Suspected tunneling if a DNS label exceeds this length." },
+      "query_rate_threshold": { "label": "Query Rate Threshold", "description": "Alert triggered when DNS query count per second exceeds this value." },
+      "alerts": {
+        "tunneling": { "title": "Potential DNS Tunneling", "description": "Query with abnormally long DNS label ('{{qname}}') observed from {{source_ip}}." },
+        "dga": { "title": "Potential DGA Domain", "description": "{{source_ip}} queried a high-entropy domain '{{qname}}'. Potential malware C2 communication." },
+        "flood": { "title": "DNS Query Flood Detected", "description": "Massive DNS queries ({{query_count}}/s) observed from {{source_ip}}." }
+      }
+    },
+    "dns_response": {
+      "name": "DNS Response Analysis",
+      "description": "Analyzes DNS responses. Identifies NXDOMAIN bursts (DGA indicator) and Fast-flux botnet signs.",
+      "nxdomain_threshold": { "label": "NXDOMAIN Threshold", "description": "Suspected DGA activity if NXDOMAIN response count exceeds this value." },
+      "fastflux_threshold": { "label": "Fast-flux IP Threshold", "description": "Suspected Fast-flux if unique IP count for a single domain exceeds this value." },
+      "window_seconds": { "label": "Detection Window (s)", "description": "Time window for aggregating DNS response activity." },
+      "alerts": {
+        "nxdomain_burst": { "title": "DNS NXDOMAIN Burst", "description": "Client {{source_ip}} received {{nx_count}} NXDOMAIN responses in a short duration. Suspected DGA scanning." },
+        "fast_flux": { "title": "Potential Fast-flux Domain", "description": "Domain '{{domain}}' resolved to {{ip_count}} unique IPs in a short duration. Suspected botnet." }
+      }
+    },
+    "http_suspicious": {
+      "name": "HTTP Anomaly Detection",
+      "description": "Detects HTTP traffic anomalies. Identifies security scanners and C2 beacon communication patterns.",
+      "beacon_threshold": { "label": "Beacon Access Count", "description": "Suspected beaconing if regular connections exceed this count." },
+      "max_jitter_pct": { "label": "Max Jitter Deviation", "description": "Considered regular beaconing if interval standard deviation is within this ratio." },
+      "alerts": {
+        "scanner": { "title": "Security Scanner Detected", "description": "Host {{source_ip}} is using a known security scanner ({{user_agent}})." },
+        "beacon": { "title": "HTTP Beaconing Detected", "description": "Host {{source_ip}} is regularly connecting to '{{host}}' every {{avg_interval}}s. Potential C2 communication." }
+      }
+    },
+    "traffic_anomaly": {
+      "name": "Traffic Volume Anomaly",
+      "description": "Detects statistical anomalies in traffic volume and the appearance of new devices.",
+      "zscore_threshold": { "label": "Z-score Threshold", "description": "Considered an anomaly if traffic deviation exceeds this multiple of standard deviation." },
+      "window_seconds": { "label": "Aggregation Window (s)", "description": "Time unit for calculating traffic volume." },
+      "min_data_points": { "label": "Min Data Points", "description": "Minimum observations required for statistical analysis." },
+      "alerts": {
+        "new_device": { "title": "New Network Device Detected", "description": "A device with a new MAC address {{source_mac}} (IP: {{source_ip}}) was observed for the first time." },
+        "volume": { "title": "Traffic Spike Detected", "description": "{{packets}} packets observed in {{window_seconds}}s (Z-score: {{z_score}}). Traffic is higher than usual." }
+      }
+    },
+    "data_exfil": {
+      "name": "Data Exfiltration Detection",
+      "description": "Detects data exfiltration activity. Monitors massive outbound transfers and abnormal upload ratios.",
+      "outbound_threshold_mb": { "label": "Outbound Threshold (MB)", "description": "Suspected exfiltration if data sent to external IPs exceeds this value." },
+      "window_seconds": { "label": "Aggregation Window (s)", "description": "Time unit for summing transfer volume." },
+      "alerts": {
+        "massive_transfer": { "title": "Massive Data Exfiltration Detected", "description": "Host {{source_ip}} sent {{megabytes}} MB to external IP {{dest_ip}} in {{window_seconds}}s." }
+      }
+    },
+    "lateral_movement": {
+      "name": "Lateral Movement Detection",
+      "description": "Detects lateral movement activity. Identifies sensitive port access and attack propagation signs.",
+      "access_threshold": { "label": "Sensitive Access Threshold", "description": "Suspected lateral movement if access to unique internal servers exceeds this value." },
+      "window_seconds": { "label": "Detection Window (s)", "description": "Time window for aggregating internal access activity." },
+      "alerts": {
+        "lateral_move": { "title": "Internal Lateral Movement Detected", "description": "Host {{source_ip}} accessed {{target_count}} internal server sensitive ports in a short duration." }
+      }
+    },
+    "ransomware_lateral": {
+      "name": "Ransomware Lateral Detection",
+      "description": "Detects ransomware lateral movement. Monitors SMB/RDP brute force and unauthorized honeypot access.",
+      "brute_force_threshold": { "label": "Brute Force Threshold", "description": "Considered brute force if connection attempts to a single host exceed this value." },
+      "window_seconds": { "label": "Detection Window (s)", "description": "Time window for aggregating propagation activity." },
+      "honeypot_ips": { "label": "Honeypot IP List", "description": "List of inactive IP addresses to monitor for unauthorized access." },
+      "alerts": {
+        "honeypot": { "title": "Honeypot Access Detected", "description": "Host {{source_ip}} attempted to access inactive honeypot IP {{dest_ip}} on port {{port}}." },
+        "brute_force": { "title": "{{service}} Brute Force Detected", "description": "Host {{source_ip}} attempted {{count}} {{service}} connections to {{dest_ip}} in a short duration." }
+      }
+    },
+    "threat_intel": {
+      "name": "Threat Intelligence",
+      "description": "Matches real-time traffic against external threat feeds. Identifies communication with known malicious IPs and domains.",
+      "alerts": {
+        "ip_match": { "title": "Threat IP Communication Detected", "description": "Communication with known malicious IP {{matched_ip}} detected (Source: {{feed_source}})." },
+        "domain_match": { "title": "Threat Domain Query Detected", "description": "DNS query for known malicious domain '{{domain}}' detected (Source: {{feed_source}})." }
+      }
+    },
+    "signature": {
+      "name": "Signature Detection",
+      "description": "Performs signature-based detection. Uses YARA rules and custom patterns to identify known threats.",
+      "enable_yara": { "label": "Enable YARA", "description": "Performs precise pattern matching using the YARA engine." },
+      "alerts": {
+        "yara_match": { "title": "YARA Signature Match", "description": "Packet payload matched YARA rules ({{rules}}). Suspected use of malicious tools." }
+      }
+    },
+    "tls_fingerprint": {
+      "name": "TLS Fingerprint Analysis",
+      "description": "Analyzes TLS handshakes. Detects known malicious clients, self-signed certificates, and suspicious settings.",
+      "check_ja3": { "label": "JA3 Check", "description": "Analyzes client TLS JA3 fingerprints." },
+      "check_ja3s": { "label": "JA3S Check", "description": "Analyzes server TLS JA3S fingerprints." },
+      "check_ja4": { "label": "JA4 Check", "description": "Analyzes next-generation JA4 fingerprints." },
+      "check_sni": { "label": "SNI Check", "description": "Matches TLS SNI fields against domain blocklists." },
+      "check_cert": { "label": "Certificate Check", "description": "Analyzes TLS certificate validity and security." },
+      "detect_tunnels": { "label": "TLS Tunnel Detection", "description": "Detects VPN/tunnel usage via traffic patterns." },
+      "tunnel_min_packets": { "label": "Min Packets", "description": "Minimum samples required for tunnel analysis." },
+      "alerts": {
+        "ja3_match": { "title": "Malicious TLS JA3 Detected", "description": "TLS ClientHello matches known malware JA3 ({{ja3_hash}}, malware: {{malware}})." },
+        "ja4_match": { "title": "Malicious TLS JA4 Detected", "description": "TLS ClientHello matches known malware JA4 ({{ja4_hash}}, malware: {{malware}})." },
+        "sni_blocked": { "title": "Blocklisted Domain TLS Access", "description": "TLS handshake to known malicious domain {{sni}} detected." }
+      }
+    },
+    "protocol_inspect": {
+      "name": "Deep Protocol Inspection",
+      "description": "Performs Deep Packet Inspection (DPI) on application protocols. Identifies plaintext password exposure and abnormal usage.",
+      "detect_plain_auth": { "label": "Plain Auth Detection", "description": "Monitors unencrypted credential transmission in FTP, SMTP, etc." },
+      "alerts": {
+        "plain_auth": { "title": "Plaintext Authentication Exposure", "description": "Host {{source_ip}} is transmitting unencrypted credentials via port {{port}}." },
+        "suspicious_file": { "title": "Suspicious File Request (HTTP)", "description": "Host {{source_ip}} requested an executable file (.{{extension}}) via HTTP." }
+      }
+    },
+    "flow_port_scan": {
+      "name": "Port Scan (NetFlow)",
+      "description": "Detects port scanning based on NetFlow data. Used as an alternative in environments without SPAN ports.",
+      "threshold": { "label": "Port Scan Threshold", "description": "Alert triggered when unique destination port count exceeds this value." },
+      "window_seconds": { "label": "Detection Window (s)", "description": "Time window for aggregating port scan activity." },
+      "alerts": {
+        "scan": { "title": "Port Scan Detected (NetFlow)", "description": "Host {{source_ip}} scanned {{unique_ports}} ports over NetFlow in {{window_seconds}}s." }
+      }
+    },
+    "flow_data_exfil": {
+      "name": "Data Exfiltration (NetFlow)",
+      "description": "Detects data exfiltration based on NetFlow data. Identifies massive transfer activity to external IPs.",
+      "outbound_threshold_mb": { "label": "Outbound Threshold (MB)", "description": "Suspected exfiltration if data sent to external IPs exceeds this value." },
+      "window_seconds": { "label": "Aggregation Window (s)", "description": "Time unit for summing transfer volume." },
+      "alerts": {
+        "massive_transfer": { "title": "Massive Data Exfiltration (NetFlow)", "description": "Host {{source_ip}} sent {{megabytes}} MB to external IP {{dest_ip}} over NetFlow." }
+      }
+    }
+  },
+  "ai_analyzer": {
+    "verdicts": {
+      "confirmed": { "title": "[AI Confirmed] {{engine_name}} — Real Threat" },
+      "false_positive": { "title": "[AI FP] {{engine_name}} — False Positive" },
+      "missed_threat": { "title": "[AI Missed] {{engine_name}} — Suspected Missed Threat" },
+      "uncertain": { "title": "[AI Uncertain] {{engine_name}} — Determination Impossible" }
+    },
+    "adjustments": {
+      "increase": { "title": "[AI Adjust] {{engine}} threshold automatically increased" },
+      "decrease": { "title": "[AI Adjust] {{engine}} threshold automatically decreased" }
+    }
+  }
+}

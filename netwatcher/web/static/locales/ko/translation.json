@@ -1,0 +1,285 @@
+{
+  "title": "Panopticon Dashboard",
+  "login": {
+    "username": "사용자 이름",
+    "password": "비밀번호",
+    "button": "로그인",
+    "error": "로그인 실패"
+  },
+  "header": {
+    "logout": "로그아웃",
+    "status": {
+      "connected": "WebSocket 연결됨",
+      "disconnected": "WebSocket 연결 끊김"
+    }
+  },
+  "stats": {
+    "critical": "심각",
+    "warning": "경고",
+    "info": "정보",
+    "total_packets": "전체 패킷",
+    "devices": "장치",
+    "high_risk": "고위험",
+    "hosts_visible": "가시화된 호스트",
+    "visibility_hint": "SPAN 포트 구성 시 다수 호스트 트래픽이 가시화됩니다"
+  },
+  "tabs": {
+    "events": "이벤트",
+    "traffic": "트래픽",
+    "devices": "장치",
+    "blocklist": "차단 목록",
+    "whitelist": "허용 목록",
+    "engines": "탐지 엔진",
+    "ai_analyzer": "AI 분석기"
+  },
+  "toolbar": {
+    "all_severities": "모든 심각도",
+    "all_engines": "모든 엔진",
+    "search_placeholder": "이벤트 검색...",
+    "refresh": "새로고침",
+    "export_csv": "CSV 내보내기",
+    "export_json": "JSON 내보내기",
+    "page_size": "페이지당 {{count}}개"
+  },
+  "table": {
+    "time": "시간",
+    "severity": "심각도",
+    "engine": "엔진",
+    "title": "제목",
+    "source": "출발지",
+    "destination": "목적지",
+    "actions": "작업"
+  },
+  "detail": {
+    "reasoning_title": "탐지 근거",
+    "reason_label": "판단 근거",
+    "original_mac": "기존 MAC",
+    "new_mac": "변경된 MAC"
+  },
+  "whitelist": {
+    "management": "화이트리스트 관리",
+    "add_mac": "MAC 화이트리스트 추가",
+    "remove_mac": "MAC 화이트리스트 제거",
+    "add_ip": "IP 화이트리스트 추가",
+    "remove_ip": "IP 화이트리스트 제거",
+    "status_whitelisted": "화이트리스트 등록됨"
+  },
+  "engines": {
+    "arp_spoof": {
+      "name": "ARP 스푸핑 탐지",
+      "description": "ARP 스푸핑 및 Gratuitous ARP 폭주를 탐지합니다. MAC-IP 매핑 변경을 감시하여 중간자 공격(MITM)을 식별합니다.",
+      "gratuitous_window_seconds": { "label": "Gratuitous ARP 윈도우(초)", "description": "Gratuitous ARP 패킷을 집계하는 슬라이딩 윈도우 길이." },
+      "gratuitous_threshold": { "label": "Gratuitous ARP 임계값", "description": "윈도우 내 Gratuitous ARP 수가 이 값을 초과하면 알림 발생." },
+      "cooldown_seconds": { "label": "재알림 쿨다운(초)", "description": "동일 호스트에 대해 알림 재발송까지 대기하는 시간." },
+      "max_tracked_hosts": { "label": "최대 추적 호스트 수", "description": "메모리에 유지하는 ARP 테이블 최대 크기." },
+      "alerts": {
+        "spoof_detected": { "title": "ARP 스푸핑 탐지됨", "description": "IP {{source_ip}}가 기존 MAC {{original_mac}}에서 새로운 MAC {{source_mac}}으로 변경되었습니다. ARP 캐시 포이즈닝 공격 가능성이 있습니다." },
+        "gratuitous_flood": { "title": "Gratuitous ARP 폭주", "description": "MAC {{source_mac}} (IP {{source_ip}})에서 {{window_seconds}}초 동안 {{count}}개 이상의 Gratuitous ARP 응답이 전송되었습니다. ARP 스푸핑 준비 단계일 수 있습니다." }
+      },
+      "reasoning": {
+        "spoof": "동일 IP에 대한 MAC 주소 변경 감지 → ARP 캐시 포이즈닝 의심",
+        "flood": "Gratuitous ARP {{count}}회 전송 → 스푸핑 준비 단계 의심"
+      }
+    },
+    "dhcp_spoof": {
+      "name": "DHCP 위조 탐지",
+      "description": "비인가 DHCP 서버를 탐지합니다. 공격자가 위조 DHCP 응답으로 네트워크 설정을 조작하는 것을 방지합니다.",
+      "starvation_threshold": { "label": "DHCP Starvation 임계값", "description": "윈도우 내 DHCP DISCOVER 패킷 수가 이 값을 초과하면 고갈 공격으로 판단." },
+      "starvation_window_seconds": { "label": "Starvation 윈도우(초)", "description": "DHCP 고갈 활동을 집계하는 시간 윈도우." },
+      "known_servers": { "label": "정상 DHCP 서버 IP 목록", "description": "정상 DHCP 서버의 IP 주소 목록. 미비 시 자동 학습." },
+      "alerts": {
+        "rogue_server": { "title": "비인가 DHCP 서버 탐지", "description": "알 수 없는 서버 {{source_ip}} (MAC: {{source_mac}})에서 DHCP 응답이 전송되었습니다. Rogue DHCP 공격일 수 있습니다." },
+        "starvation": { "title": "DHCP 고갈 공격 탐지", "description": "{{count}}개의 고유 MAC에서 DHCP DISCOVER 패킷이 폭주했습니다. IP 자원 고갈 시도일 수 있습니다." }
+      }
+    },
+    "mac_spoof": {
+      "name": "MAC 위조 탐지",
+      "description": "MAC 주소 위조를 탐지합니다. OUI 불일치, 랜덤 MAC, 동일 MAC의 다중 IP 사용 등 스푸핑 징후를 식별합니다.",
+      "max_ips_per_mac": { "label": "MAC당 최대 IP 수", "description": "단일 MAC에서 짧은 시간 내 사용된 고유 IP 수가 이 값을 초과하면 클로닝 의심." },
+      "ip_window_seconds": { "label": "IP 추적 윈도우(초)", "description": "MAC-IP 바인딩을 추적하는 시간 윈도우." },
+      "max_tracked_macs": { "label": "최대 추적 MAC 수", "description": "메모리에 유지하는 MAC 추적 테이블 크기." },
+      "alerts": {
+        "local_admin": { "title": "로컬 관리 MAC 탐지", "description": "MAC {{source_mac}}은 로컬 관리 비트가 설정되어 있으나 알려진 가상화 벤더가 아닙니다. 위조된 MAC일 수 있습니다." },
+        "cloning": { "title": "MAC 클로닝 의심", "description": "MAC {{source_mac}}이 {{window_seconds}}초 동안 {{count}}개의 고유 IP와 연관되었습니다. MAC 주소 복제 공격일 수 있습니다." }
+      }
+    },
+    "port_scan": {
+      "name": "포트 스캔 탐지",
+      "description": "포트 스캔 활동을 탐지합니다. 짧은 시간 내에 다수의 포트를 조사하는 스캐너 및 공격자를 식별합니다.",
+      "threshold": { "label": "포트 스캔 임계값", "description": "윈도우 내 고유 목적지 포트 수가 이 값을 초과하면 스캔으로 판단." },
+      "window_seconds": { "label": "탐지 윈도우(초)", "description": "포트 스캔 활동을 집계하는 시간 윈도우." },
+      "stealth_threshold": { "label": "Stealth 스캔 임계값", "description": "비정상 TCP 플래그 패킷이 이 횟수를 초과하면 경고." },
+      "alerts": {
+        "stealth": { "title": "Stealth 포트 스캔 탐지", "description": "{{source_ip}}로부터 비정상 TCP 플래그({{flags}}) 패킷이 관측되었습니다. 방화벽 우회 스캔 시도일 수 있습니다." },
+        "scan": { "title": "포트 스캔 탐지", "description": "{{source_ip}}가 {{window_seconds}}초 동안 {{count}}개의 고유 포트를 스캔했습니다. 정찰 활동으로 의심됩니다." }
+      }
+    },
+    "icmp_anomaly": {
+      "name": "ICMP 이상 탐지",
+      "description": "ICMP 트래픽의 이상을 탐지합니다. Ping Sweep, ICMP Flood, 잘 사용되지 않는 ICMP 타입 등을 감시합니다.",
+      "sweep_threshold": { "label": "Ping Sweep 임계값", "description": "ICMP Echo Request를 받은 고유 IP 수가 이 값을 초과하면 스캔으로 판단." },
+      "flood_threshold": { "label": "ICMP Flood 임계값", "description": "초당 ICMP 패킷 수가 이 값을 초과하면 플러딩으로 판단." },
+      "window_seconds": { "label": "탐지 윈도우(초)", "description": "이상 활동을 집계하는 시간 윈도우." },
+      "alerts": {
+        "suspicious_type": { "title": "비정상 ICMP 타입 탐지", "description": "{{source_ip}}에서 {{dest_ip}}로 흔하지 않은 ICMP 타입 {{icmp_type}} 패킷이 전송되었습니다. 터널링 시도일 수 있습니다." },
+        "sweep": { "title": "Ping Sweep 탐지", "description": "{{source_ip}}가 {{window_seconds}}초 동안 {{count}}개의 호스트로 ICMP Echo Request를 전송했습니다." },
+        "flood": { "title": "ICMP Flood 탐지", "description": "{{source_ip}}에서 {{dest_ip}}로 초당 {{pps}}개의 대량 ICMP 패킷이 전송되고 있습니다. DoS 공격일 수 있습니다." }
+      }
+    },
+    "protocol_anomaly": {
+      "name": "프로토콜 이상 탐지",
+      "description": "프로토콜 사양을 벗어나는 패킷을 탐지합니다. TTL 변조, 비정상 TCP 플래그 등 회피 공격 시도를 식별합니다.",
+      "min_ttl": { "label": "최소 TTL", "description": "패킷의 TTL이 이 값보다 작으면 변조된 것으로 의심." },
+      "detect_reserved_bits": { "label": "예약 비트 검사", "description": "IP/TCP 헤더의 예약된 비트 설정 여부를 감시." },
+      "alerts": {
+        "low_ttl": { "title": "비정상 낮은 TTL 탐지", "description": "{{source_ip}}로부터의 패킷 TTL이 너무 낮습니다({{ttl}}). 라우팅 변조나 탐지 회피 시도일 수 있습니다." },
+        "bogus_flags": { "title": "비정상 TCP 플래그 (SYN+FIN)", "description": "{{source_ip}}로부터 SYN과 FIN이 동시에 설정된 잘못된 TCP 패킷이 수신되었습니다." },
+        "reserved_bit": { "title": "IP 예약 비트 설정됨", "description": "{{source_ip}}로부터 IP Reserved 비트가 설정된 패킷이 수신되었습니다. 특수 스캐너 사용 의심." }
+      }
+    },
+    "dns_anomaly": {
+      "name": "DNS 이상 탐지",
+      "description": "DNS 쿼리의 이상을 탐지합니다. 무작위 도메인(DGA), DNS 터널링, 비정상 대량 질의 등을 식별합니다.",
+      "entropy_threshold": { "label": "Entropy 임계값", "description": "도메인 라벨의 무작위성이 이 값을 초과하면 DGA 의심." },
+      "label_length_threshold": { "label": "최대 라벨 길이", "description": "DNS 라벨 하나가 이 길이를 초과하면 터널링 의심." },
+      "query_rate_threshold": { "label": "초당 쿼리 임계값", "description": "초당 DNS 쿼리 수가 이 값을 초과하면 플러딩으로 판단." },
+      "alerts": {
+        "tunneling": { "title": "DNS 터널링 의심", "description": "{{source_ip}}로부터 비정상적으로 긴 DNS 라벨을 포함한 질의('{{qname}}')가 발생했습니다." },
+        "dga": { "title": "DGA 도메인 의심", "description": "{{source_ip}}가 무작위성이 높은 도메인 '{{qname}}'에 대해 질의했습니다. 악성코드 C2 통신일 수 있습니다." },
+        "flood": { "title": "DNS 쿼리 폭주 탐지", "description": "{{source_ip}}로부터 초당 {{query_count}}개의 대량 DNS 질의가 관측되었습니다." }
+      }
+    },
+    "dns_response": {
+      "name": "DNS 응답 분석",
+      "description": "DNS 응답을 분석합니다. 존재하지 않는 도메인(NXDOMAIN) 응답 폭주 및 Fast-flux 봇넷 징후를 식별합니다.",
+      "nxdomain_threshold": { "label": "NXDOMAIN 임계값", "description": "윈도우 내 NXDOMAIN 응답 수가 이 값을 초과하면 DGA 활동 의심." },
+      "fastflux_threshold": { "label": "Fast-flux IP 임계값", "description": "단일 도메인에 대해 반환된 고유 IP 수가 이 값을 초과하면 Fast-flux 의심." },
+      "window_seconds": { "label": "탐지 윈도우(초)", "description": "DNS 응답 활동을 집계하는 시간 윈도우." },
+      "alerts": {
+        "nxdomain_burst": { "title": "DNS NXDOMAIN 폭주", "description": "클라이언트 {{source_ip}}가 짧은 시간 내 {{nx_count}}개의 NXDOMAIN 응답을 받았습니다. DGA 스캐닝 활동 의심." },
+        "fast_flux": { "title": "Fast-flux 도메인 의심", "description": "도메인 '{{domain}}'이 짧은 시간 내 {{ip_count}}개의 고유 IP로 분석되었습니다. 봇넷 의심." }
+      }
+    },
+    "http_suspicious": {
+      "name": "HTTP 이상 탐지",
+      "description": "HTTP 트래픽의 이상을 탐지합니다. 보안 스캐너 사용 및 악성코드의 C2 비컨 통신 패턴을 식별합니다.",
+      "beacon_threshold": { "label": "비컨 접속 횟수", "description": "동일 목적지에 대해 이 횟수 이상의 규칙적인 접속이 발생하면 비컨 의심." },
+      "max_jitter_pct": { "label": "최대 지터 편차", "description": "접속 간격의 표준편차가 평균의 이 비율 이내여야 비컨으로 판단." },
+      "alerts": {
+        "scanner": { "title": "보안 스캐너 탐지", "description": "호스트 {{source_ip}}가 알려진 보안 스캐너({{user_agent}})를 사용하고 있습니다." },
+        "beacon": { "title": "HTTP 비컨 활동 탐지", "description": "호스트 {{source_ip}}가 '{{host}}'로 매 {{avg_interval}}초마다 규칙적으로 접속하고 있습니다. C2 통신 의심." }
+      }
+    },
+    "traffic_anomaly": {
+      "name": "트래픽 양 이상 탐지",
+      "description": "네트워크 트래픽 양의 통계적 이상 및 신규 장치의 등장을 탐지합니다.",
+      "zscore_threshold": { "label": "Z-score 임계값", "description": "트래픽 편차가 표준편차의 이 배수를 초과하면 이상으로 판단." },
+      "window_seconds": { "label": "집계 윈도우(초)", "description": "트래픽 양을 계산하는 시간 단위." },
+      "min_data_points": { "label": "최소 데이터 포인트", "description": "분석을 위해 필요한 최소한의 관측치 수." },
+      "alerts": {
+        "new_device": { "title": "신규 네트워크 장치 탐지", "description": "새로운 MAC 주소 {{source_mac}} (IP: {{source_ip}})를 가진 장치가 처음 관측되었습니다." },
+        "volume": { "title": "트래픽 급증 탐지", "description": "{{window_seconds}}초 동안 {{packets}}개의 패킷이 관측되었습니다 (Z-score: {{z_score}}). 평소보다 트래픽이 많습니다." }
+      }
+    },
+    "data_exfil": {
+      "name": "데이터 유출 탐지",
+      "description": "데이터 유출 활동을 탐지합니다. 대량의 외부 전송 및 비정상적인 업로드 비율을 감시합니다.",
+      "outbound_threshold_mb": { "label": "외부 전송 임계값(MB)", "description": "윈도우 내 외부 IP로 전송된 데이터가 이 값을 초과하면 유출 의심." },
+      "window_seconds": { "label": "집계 윈도우(초)", "description": "전송량을 합산하는 시간 단위." },
+      "alerts": {
+        "massive_transfer": { "title": "대량 데이터 유출 탐지", "description": "호스트 {{source_ip}}가 {{window_seconds}}초 동안 외부 IP {{dest_ip}}로 {{megabytes}}MB를 전송했습니다." }
+      }
+    },
+    "lateral_movement": {
+      "name": "측면 이동 탐지",
+      "description": "측면 이동(Lateral Movement) 활동을 탐지합니다. 내부망 내 민감 포트 접근 및 공격 확산 징후를 식별합니다.",
+      "access_threshold": { "label": "민감 접근 임계값", "description": "윈도우 내 접근한 고유 내부 서버 수가 이 값을 초과하면 의심." },
+      "window_seconds": { "label": "탐지 윈도우(초)", "description": "내부 접근 활동을 집계하는 시간 윈도우." },
+      "alerts": {
+        "lateral_move": { "title": "내부 측면 이동 탐지", "description": "호스트 {{source_ip}}가 짧은 시간 내 {{target_count}}개의 내부 서버 민감 포트에 접근했습니다." }
+      }
+    },
+    "ransomware_lateral": {
+      "name": "랜섬웨어 확산 탐지",
+      "description": "랜섬웨어의 측면 확산 활동을 탐지합니다. SMB/RDP 브루트포스 및 비인가 허니팟 접근을 감시합니다.",
+      "brute_force_threshold": { "label": "브루트포스 임계값", "description": "단일 호스트에 대해 시도된 연결 수가 이 값을 초과하면 브루트포스로 간주." },
+      "window_seconds": { "label": "탐지 윈도우(초)", "description": "확산 활동을 집계하는 시간 윈도우." },
+      "honeypot_ips": { "label": "허니팟 IP 목록", "description": "비인가 접근을 감시할 비활성 IP 주소 목록." },
+      "alerts": {
+        "honeypot": { "title": "허니팟 접근 탐지", "description": "호스트 {{source_ip}}가 비활성 허니팟 IP {{dest_ip}}의 {{port}}번 포트에 접근을 시도했습니다." },
+        "brute_force": { "title": "{{service}} 브루트포스 탐지", "description": "호스트 {{source_ip}}가 {{dest_ip}}로 짧은 시간 내 {{count}}회의 {{service}} 연결을 시도했습니다." }
+      }
+    },
+    "threat_intel": {
+      "name": "위협 인텔리전스",
+      "description": "외부 위협 피드와 실시간 트래픽을 대조합니다. 알려진 악성 IP, 도메인과의 통신을 식별합니다.",
+      "alerts": {
+        "ip_match": { "title": "위협 IP 통신 탐지", "description": "알려진 악성 IP {{matched_ip}}와의 통신이 탐지되었습니다 (출처: {{feed_source}})." },
+        "domain_match": { "title": "위협 도메인 질의 탐지", "description": "알려진 악성 도메인 '{{domain}}'에 대한 DNS 질의가 탐지되었습니다 (출처: {{feed_source}})." }
+      }
+    },
+    "signature": {
+      "name": "시그니처 탐지",
+      "description": "시그니처 기반 탐지를 수행합니다. YARA 규칙 및 사용자 정의 패턴을 사용하여 알려진 위협을 식별합니다.",
+      "enable_yara": { "label": "YARA 활성화", "description": "YARA 엔진을 사용하여 정밀한 패턴 매칭을 수행합니다." },
+      "alerts": {
+        "yara_match": { "title": "YARA 시그니처 매칭", "description": "패킷 페이로드가 YARA 규칙({{rules}})과 일치했습니다. 악성 도구 사용 의심." }
+      }
+    },
+    "tls_fingerprint": {
+      "name": "TLS 핑거프린트",
+      "description": "TLS 핸드셰이크를 분석합니다. 알려진 악성 클라이언트, 자체서명 인증서, 의심스러운 설정을 탐지합니다.",
+      "check_ja3": { "label": "JA3 검사", "description": "클라이언트의 TLS JA3 핑거프린트 분석." },
+      "check_ja3s": { "label": "JA3S 검사", "description": "서버의 TLS JA3S 핑거프린트 분석." },
+      "check_ja4": { "label": "JA4 검사", "description": "차세대 JA4 핑거프린트 분석." },
+      "check_sni": { "label": "SNI 검사", "description": "TLS SNI 필드와 도메인 차단 목록 대조." },
+      "check_cert": { "label": "인증서 검사", "description": "TLS 인증서의 유효성 및 보안성 분석." },
+      "detect_tunnels": { "label": "TLS 터널 탐지", "description": "트래픽 패턴으로 VPN/터널 사용 탐지." },
+      "tunnel_min_packets": { "label": "최소 패킷 수", "description": "터널 분석에 필요한 최소 샘플 수." },
+      "alerts": {
+        "ja3_match": { "title": "악성 TLS JA3 탐지", "description": "TLS ClientHello가 알려진 악성코드 JA3({{ja3_hash}}, malware: {{malware}})와 일치합니다." },
+        "ja4_match": { "title": "악성 TLS JA4 탐지", "description": "TLS ClientHello가 알려진 악성코드 JA4({{ja4_hash}}, malware: {{malware}})와 일치합니다." },
+        "sni_blocked": { "title": "차단 도메인 TLS 접속", "description": "알려진 악성 도메인 {{sni}}로의 TLS 핸드셰이크가 탐지되었습니다." }
+      }
+    },
+    "protocol_inspect": {
+      "name": "프로토콜 심층 분석",
+      "description": "애플리케이션 프로토콜을 심층 분석(DPI)합니다. 평문 비밀번호 노출, 비정상적인 프로토콜 사용 등을 식별합니다.",
+      "detect_plain_auth": { "label": "평문 인증 탐지", "description": "FTP, SMTP 등에서 암호화되지 않은 인증 정보 전송을 감시." },
+      "alerts": {
+        "plain_auth": { "title": "평문 인증 정보 노출", "description": "호스트 {{source_ip}}가 {{port}}번 포트를 통해 암호화되지 않은 인증 정보를 전송하고 있습니다." },
+        "suspicious_file": { "title": "의심스러운 파일 요청 (HTTP)", "description": "호스트 {{source_ip}}가 HTTP를 통해 실행 파일(.{{extension}})을 요청했습니다." }
+      }
+    },
+    "flow_port_scan": {
+      "name": "포트 스캔 (NetFlow)",
+      "description": "NetFlow 데이터를 기반으로 포트 스캔을 탐지합니다. SPAN 포트 구성이 불가능한 환경에서 대안으로 사용됩니다.",
+      "threshold": { "label": "포트 스캔 임계값", "description": "윈도우 내 고유 목적지 포트 수가 이 값을 초과하면 스캔으로 판단." },
+      "window_seconds": { "label": "탐지 윈도우(초)", "description": "포트 스캔 활동을 집계하는 시간 윈도우." },
+      "alerts": {
+        "scan": { "title": "포트 스캔 탐지 (NetFlow)", "description": "호스트 {{source_ip}}가 NetFlow 상에서 {{window_seconds}}초 동안 {{unique_ports}}개의 포트를 스캔했습니다." }
+      }
+    },
+    "flow_data_exfil": {
+      "name": "데이터 유출 (NetFlow)",
+      "description": "NetFlow 데이터를 기반으로 데이터 유출을 탐지합니다. 외부 IP로의 대량 전송 활동을 식별합니다.",
+      "outbound_threshold_mb": { "label": "외부 전송 임계값(MB)", "description": "윈도우 내 외부 IP로 전송된 데이터가 이 값을 초과하면 유출 의심." },
+      "window_seconds": { "label": "집계 윈도우(초)", "description": "전송량을 합산하는 시간 단위." },
+      "alerts": {
+        "massive_transfer": { "title": "대량 데이터 유출 (NetFlow)", "description": "호스트 {{source_ip}}가 NetFlow 상에서 외부 IP {{dest_ip}}로 {{megabytes}}MB를 전송했습니다." }
+      }
+    }
+  },
+  "ai_analyzer": {
+    "verdicts": {
+      "confirmed": { "title": "[AI 확인] {{engine_name}} — 실제 위협" },
+      "false_positive": { "title": "[AI 오탐] {{engine_name}} — 오탐 판정" },
+      "missed_threat": { "title": "[AI 미탐] {{engine_name}} — 탐지 누락 의심" },
+      "uncertain": { "title": "[AI 불확실] {{engine_name}} — 판단 불가" }
+    },
+    "adjustments": {
+      "increase": { "title": "[AI 조정] {{engine}} 임계값 자동 상향" },
+      "decrease": { "title": "[AI 미탐조정] {{engine}} 임계값 자동 하향" }
+    }
+  }
+}
