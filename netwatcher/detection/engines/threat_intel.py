@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from scapy.all import DNS, DNSQR, IP, Packet
+from scapy.all import DNS, DNSQR, IP, TCP, Packet
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity
@@ -46,32 +46,43 @@ class ThreatIntelEngine(DetectionEngine):
         src_ip = packet[IP].src
         dst_ip = packet[IP].dst
 
+        # TCP 연결 방향 판별: SYN=True면 새 연결 시도, False면 기존 연결 응답
+        is_tcp = packet.haslayer(TCP)
+        is_tcp_syn = is_tcp and bool(packet[TCP].flags & 0x02)
+
         # 1. IP 매칭 (출발지 및 목적지)
         for ip in (src_ip, dst_ip):
             match = self._feed_mgr.match_ip(ip)
-            if match:
-                if self.is_whitelisted(source_ip=src_ip, dest_ip=dst_ip):
-                    return None
-                return Alert(
-                    engine=self.name,
-                    severity=Severity.CRITICAL,
-                    title="Threat Intelligence IP Match",
-                    title_key="engines.threat_intel.alerts.ip_match.title",
-                    description=(
-                        f"Communication with known malicious IP {ip}. "
-                        f"Feed Source: {match.get('source', 'unknown')}. "
-                        f"Category: {match.get('category', 'malware')}."
-                    ),
-                    description_key="engines.threat_intel.alerts.ip_match.description",
-                    source_ip=src_ip,
-                    dest_ip=dst_ip,
-                    confidence=1.0,
-                    metadata={
-                        "matched_ip": ip,
-                        "feed_source": match.get("source"),
-                        "category": match.get("category"),
-                    },
-                )
+            if not match:
+                continue
+
+            # dst_ip가 블랙리스트인 TCP 패킷 중 SYN이 아닌 것(응답/데이터 패킷)은
+            # 수신한 공격에 대한 정상 TCP 응답이므로 무시 (오탐 방지)
+            if ip == dst_ip and is_tcp and not is_tcp_syn:
+                continue
+
+            if self.is_whitelisted(source_ip=src_ip, dest_ip=dst_ip):
+                return None
+            return Alert(
+                engine=self.name,
+                severity=Severity.CRITICAL,
+                title="Threat Intelligence IP Match",
+                title_key="engines.threat_intel.alerts.ip_match.title",
+                description=(
+                    f"Communication with known malicious IP {ip}. "
+                    f"Feed Source: {match.get('source', 'unknown')}. "
+                    f"Category: {match.get('category', 'malware')}."
+                ),
+                description_key="engines.threat_intel.alerts.ip_match.description",
+                source_ip=src_ip,
+                dest_ip=dst_ip,
+                confidence=1.0,
+                metadata={
+                    "matched_ip": ip,
+                    "feed_source": match.get("source"),
+                    "category": match.get("category"),
+                },
+            )
 
         # 2. 도메인 매칭 (DNS 쿼리)
         if packet.haslayer(DNS) and packet.haslayer(DNSQR):
