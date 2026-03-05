@@ -46,9 +46,11 @@ class ThreatIntelEngine(DetectionEngine):
         src_ip = packet[IP].src
         dst_ip = packet[IP].dst
 
-        # TCP 연결 방향 판별: SYN=True면 새 연결 시도, False면 기존 연결 응답
+        # TCP 연결 방향 판별
+        # 순수 SYN (0x02, ACK 없음): 내가 먼저 연결 개시
+        # SYN-ACK (0x12): 상대 SYN에 대한 응답 → 스킵 대상
         is_tcp = packet.haslayer(TCP)
-        is_tcp_syn = is_tcp and bool(packet[TCP].flags & 0x02)
+        is_tcp_pure_syn = is_tcp and bool(packet[TCP].flags & 0x02) and not bool(packet[TCP].flags & 0x10)
 
         # 1. IP 매칭 (출발지 및 목적지)
         for ip in (src_ip, dst_ip):
@@ -56,9 +58,9 @@ class ThreatIntelEngine(DetectionEngine):
             if not match:
                 continue
 
-            # dst_ip가 블랙리스트인 TCP 패킷 중 SYN이 아닌 것(응답/데이터 패킷)은
-            # 수신한 공격에 대한 정상 TCP 응답이므로 무시 (오탐 방지)
-            if ip == dst_ip and is_tcp and not is_tcp_syn:
+            # dst_ip가 블랙리스트인 TCP 패킷이 순수 SYN이 아니면
+            # (SYN-ACK, ACK, DATA 등) 수신한 공격에 대한 정상 응답이므로 무시 (오탐 방지)
+            if ip == dst_ip and is_tcp and not is_tcp_pure_syn:
                 continue
 
             if self.is_whitelisted(source_ip=src_ip, dest_ip=dst_ip):
