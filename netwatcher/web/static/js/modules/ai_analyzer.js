@@ -121,13 +121,22 @@ function renderAiLogs(events) {
 }
 
 export function registerAiAnalyzerListeners() {
-    const filterEl = document.getElementById("ai-verdict-filter");
+    const filterEl = document.getElementById("ai-filter-verdict");
     if (filterEl) {
         filterEl.addEventListener("change", () => {
             verdictFilter = filterEl.value;
             loadAiLogs(0);
         });
     }
+
+    document.getElementById("ai-filter-pagesize")?.addEventListener("change", () => {
+        loadAiLogs(0);
+    });
+
+    document.getElementById("btn-ai-refresh")?.addEventListener("click", () => {
+        loadAiAnalyzerStatus();
+        loadAiLogs(logsPage);
+    });
 }
 
 function _setText(id, val) {
