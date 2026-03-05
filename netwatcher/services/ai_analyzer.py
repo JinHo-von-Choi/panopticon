@@ -424,23 +424,15 @@ class AIAnalyzerService:
                 title_key="ai_analyzer.verdicts.confirmed.title",
                 description=result.reason,
                 confidence=1.0,
-                metadata={"ai_confirmed": True, "original_engine": result.engine, "engine_name": result.engine},
-            )
-            self._dispatcher.enqueue(alert)
-            await self._event_repo.insert(
-                engine="ai_analyzer",
-                severity="CRITICAL",
-                title=f"[AI 확인] {result.engine} — 실제 위협",
-                title_key="ai_analyzer.verdicts.confirmed.title",
-                description=result.reason,
-                reasoning=result.reasoning or None,
                 metadata={
-                    "verdict": "CONFIRMED_THREAT",
+                    "ai_confirmed": True,
                     "original_engine": result.engine,
                     "engine_name": result.engine,
+                    "verdict": "CONFIRMED_THREAT",
                     "provider": self._provider,
                 },
             )
+            self._dispatcher.enqueue(alert)
             logger.warning(
                 "[ai_analyzer] CONFIRMED_THREAT: engine=%s reason=%s",
                 result.engine, result.reason,
@@ -477,23 +469,15 @@ class AIAnalyzerService:
                 title_key="ai_analyzer.verdicts.missed_threat.title",
                 description=result.reason,
                 confidence=0.8,
-                metadata={"missed_threat": True, "original_engine": result.engine, "engine_name": result.engine},
-            )
-            self._dispatcher.enqueue(alert)
-            await self._event_repo.insert(
-                engine="ai_analyzer",
-                severity="CRITICAL",
-                title=f"[AI 미탐] {result.engine} — 탐지 누락 의심",
-                title_key="ai_analyzer.verdicts.missed_threat.title",
-                description=result.reason,
-                reasoning=result.reasoning or None,
                 metadata={
-                    "verdict": "MISSED_THREAT",
+                    "missed_threat": True,
                     "original_engine": result.engine,
                     "engine_name": result.engine,
+                    "verdict": "MISSED_THREAT",
                     "provider": self._provider,
                 },
             )
+            self._dispatcher.enqueue(alert)
             logger.warning(
                 "[ai_analyzer] MISSED_THREAT: engine=%s reason=%s",
                 result.engine, result.reason,
