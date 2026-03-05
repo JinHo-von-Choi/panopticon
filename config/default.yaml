@@ -138,11 +138,16 @@ netwatcher:
     port_scan:
       enabled: true
       window_seconds: 60
-      threshold: 51.839999999999996
+      threshold: 50.0
       alerted_cooldown_seconds: 300    # cooldown before re-alerting same pair
       max_tracked_connections: 10000   # max (src,dst) pairs tracked
 
       ack_scan_threshold: 100.0
+      port_scan_threshold: 4.97664
+      min_unique_ports: 20.0
+      min_ports: 20.0
+      scan_threshold: 100.0
+      scan_count_threshold: 100.0
     http_suspicious:
       enabled: true
       beacon_interval_tolerance: 0.15
@@ -180,6 +185,8 @@ netwatcher:
 
       fastflux_threshold: 11
       window_seconds: 300
+      fast_flux_threshold: 3.0
+      dns_nxdomain_threshold: 20.0
     threat_intel:
       enabled: true
       update_interval_hours: 6
@@ -226,6 +233,7 @@ netwatcher:
       ip_window_seconds: 600.0        # window for tracking IPs per MAC
       max_tracked_macs: 10000         # max tracked MACs
 
+      mac_spoof_threshold: 1.0
     protocol_inspect:
       enabled: true
       suspicious_user_agents:
@@ -291,6 +299,27 @@ netwatcher:
       alert_cooldown_seconds: 300       # suppress re-alert for same source (5 min)
       honeypot_ips: []                  # honeypot IPs: any contact triggers CRITICAL
       max_tracked_sources: 10000        # max tracked source IPs in memory
+
+    segment_violation:
+      enabled: false                    # SPAN 포트 필요 — 환경에 맞게 활성화
+      cooldown_seconds: 300
+      allowed_flows: []                 # 예: [{src_net: "10.0.0.0/24", dst_net: "10.0.1.0/24", ports: [80,443], proto: "tcp"}]
+
+    dark_ip:
+      enabled: false                    # SPAN 포트 필요 — monitored_networks 설정 후 활성화
+      monitored_networks: []            # 예: ["10.0.0.0/8"]
+      known_hosts: []                   # 정적으로 알려진 내부 호스트 IP 목록
+      learn_seconds: 300               # 번인 기간 (초)
+      cooldown_seconds: 3600
+      auto_learn: true
+
+    c2_beaconing:
+      enabled: true
+      cv_threshold: 0.3                # 분산 계수 임계값 (낮을수록 엄격)
+      min_connections: 8               # 비콘 판정에 필요한 최소 IAT 샘플 수
+      min_interval: 5.0                # 최소 비콘 주기 (초)
+      max_interval: 3600.0             # 최대 비콘 주기 (초)
+      cooldown_seconds: 3600
 
   response:
     enabled: false
