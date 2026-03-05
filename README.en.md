@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Scapy-2.6-blue" alt="Scapy" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/tests-934%20passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-939%20passed-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -41,7 +41,7 @@
 
 ## Overview
 
-**Panopticon** is an all-in-one network security monitoring system designed for small to medium-sized network environments. It provides everything needed for network security monitoring in a single package—from Scapy-based real-time packet capture to 18 packet-based detection engines, 2 NetFlow-based detection engines, Kill Chain-based incident correlation, automated IP blocking (IRS), threat intelligence feed integration, AI-driven false positive reduction (AIAnalyzer), and a real-time web dashboard.
+**Panopticon** is an all-in-one network security monitoring system designed for small to medium-sized network environments. It provides everything needed for network security monitoring in a single package—from Scapy-based real-time packet capture to 21 packet-based detection engines, 2 NetFlow-based detection engines, Kill Chain-based incident correlation, automated IP blocking (IRS), threat intelligence feed integration, AI-driven false positive reduction (AIAnalyzer), and a real-time web dashboard.
 
 ### Motivation
 
@@ -69,7 +69,7 @@ Office development networks are often isolated via VPCs and VPNs. However, withi
 - Per-packet OS fingerprinting (based on TTL/Window Size) and automatic MAC vendor identification.
 - Asynchronous reverse DNS lookups (LRU cache of 4,096 entries).
 
-### 18 Packet-based + 2 NetFlow-based Detection Engines
+### 21 Packet-based + 2 NetFlow-based Detection Engines
 
 Covers the entire spectrum of network security, including packet layers (L2~L7), statistical anomalies, behavioral profiles, threat intelligence, and custom signatures. Each engine can be independently toggled and tuned. In environments without SPAN, NetFlow-based engines (`flow_port_scan`, `flow_data_exfil`) supplement visibility at the router level.
 
@@ -131,7 +131,7 @@ Exposes operational metrics such as packet processing rate, alert generation cou
                               ┌──────────┐ ┌────────────┐ ┌──────────┐
                               │  Engine  │ │   Engine   │ │  Engine  │
                               │ Registry │ │  Registry  │ │ Registry │
-                              │ (18 units) │ │ (18 units) │ │ (18 units) │
+                              │ (21 units) │ │ (21 units) │ │ (21 units) │
                               └────┬─────┘ └─────┬──────┘ └────┬─────┘
                                    │             │             │
                                    └─────────────┼─────────────┘
@@ -184,7 +184,7 @@ Installing Panopticon in an environment with a standard consumer router and unma
 - **What is visible**: Own traffic, ARP broadcasts, DHCP, Multicast.
 - **What is NOT visible**: Any unicast traffic between other hosts.
 
-Consequently, only 3 out of 18 detection engines (ARP/DHCP/MAC Spoofing) will function effectively. The remaining 15 engines will stay dormant as packets never reach them.
+Consequently, only 3 out of 21 detection engines (ARP/DHCP/MAC Spoofing) will function effectively. The remaining 18 engines will stay dormant as packets never reach them.
 
 ### Deployment Topology Options
 
@@ -288,6 +288,16 @@ The **Hosts Visible** card on the dashboard indicates the visibility level in re
 - **Traffic Anomaly (`traffic_anomaly`)**: Detects volume anomalies using Z-scores and monitors new device arrivals.
 - **Behavior Profile (`behavior_profile`)**: Learns baselines for 6 dimensions (Bytes, Packets, Unique IPs/Ports, etc.) and detects deviations.
 - **Data Exfiltration (`data_exfil`)**: Detects large outbound transfers and DNS-based exfiltration.
+- **C2 Beaconing (`c2_beaconing`)**: Identifies C2 callback patterns by analyzing the Coefficient of Variation (CV) of Inter-Arrival Times (IAT) for each `(src_ip, dst_ip, dst_port)` tuple. A low CV (≈0) indicates machine-driven periodic communication; high CV indicates human-driven irregular traffic.
+
+### Threat Intelligence
+
+- **Threat Intel (`threat_intel`)**: Cross-validates live traffic against external feed blocklists (IPs/Domains/JA3). Source IP matches always trigger CRITICAL. Destination IP matches only trigger alerts for pure TCP SYN packets (outbound connection attempts); response packets (SYN-ACK, ACK, data) are skipped to prevent false positives on inbound attack traffic.
+
+### Segment & Dark Space Detection
+
+- **Segment Violation (`segment_violation`)**: Detects traffic that violates configured network segment isolation policies. `allowed_flows` defines permitted cross-segment flows; any traffic not matching the list triggers CRITICAL.
+- **Dark IP (`dark_ip`)**: Detects traffic directed at unknown internal IPs (dark space). Learns active hosts for `learn_seconds` after startup, then alerts on any packets destined for IPs within `monitored_networks` that were never observed during learning.
 
 ---
 
@@ -305,7 +315,7 @@ The dashboard displays visibility as `none` / `partial` / `full` based on unique
 | **Devices** | Network device list (MAC, IP, vendor, OS, packet count), device registration and editing |
 | **Blocklist** | Custom IP/domain blocklist management, threat feed statistics |
 | **Whitelist** | Allowlist management — add/remove IP, MAC, domain, IP Range entries; type filter and search. Whitelist entries are included in the AI analysis prompt to improve false positive detection |
-| **Engines** | Enable/disable toggle and real-time parameter editing for 18 detection engines |
+| **Engines** | Enable/disable toggle and real-time parameter editing for 21 detection engines |
 | **AI Analyzer** | AI false positive analysis history (verdict filter, threshold adjustment history), service status. Tab is only shown when `ai_analyzer.enabled: true` |
 
 ---
@@ -401,7 +411,7 @@ All APIs require JWT Authentication (`Authorization: Bearer <token>`).
 - **Database**: PostgreSQL 16 + asyncpg
 - **Migrations**: Alembic
 - **AI Integration**: Custom bridges for various AI CLIs.
-- **Testing**: Over 900 tests covering unit, integration, and performance layers.
+- **Testing**: 939 tests covering unit, integration, and performance layers.
 
 ---
 
