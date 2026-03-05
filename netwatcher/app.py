@@ -110,6 +110,7 @@ class NetWatcher:
         dispatcher = AlertDispatcher(
             config=self.config,
             event_repo=event_repo,
+            device_repo=device_repo,
             correlator=self.correlator,
             pcap_writer=self.pcap_writer,
             block_manager=block_manager,

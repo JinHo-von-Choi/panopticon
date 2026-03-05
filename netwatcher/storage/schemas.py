@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS devices (
     os_hint          VARCHAR(128),
     device_type      VARCHAR(32)  NOT NULL DEFAULT 'unknown',
     hostname_sources JSONB        NOT NULL DEFAULT '{}',
-    ip_history       JSONB        NOT NULL DEFAULT '[]'
+    ip_history       JSONB        NOT NULL DEFAULT '[]',
+    host_labels      JSONB        NOT NULL DEFAULT '[]'
 );
 """
 
@@ -58,6 +59,7 @@ DEVICES_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip_address) WHERE ip_address IS NOT NULL;",
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen DESC);",
     "CREATE INDEX IF NOT EXISTS idx_devices_type ON devices(device_type) WHERE device_type != 'unknown';",
+    "CREATE INDEX IF NOT EXISTS idx_devices_host_labels ON devices USING gin(host_labels) WHERE host_labels != '[]';",
 ]
 
 CUSTOM_BLOCKLIST_TABLE = """

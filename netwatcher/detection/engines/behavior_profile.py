@@ -15,6 +15,17 @@ from netwatcher.detection.models import Alert, Severity
 
 logger = logging.getLogger("netwatcher.detection.engines.behavior_profile")
 
+# 프로파일 피처명 -> 동작 레이블 매핑
+_FEATURE_LABELS: dict[str, str] = {
+    "dst_ports": "scanner",
+    "dst_ips": "lateral_movement",
+}
+
+
+def _feature_to_label(feature_name: str) -> str:
+    """프로파일 피처명을 호스트 동작 레이블로 변환한다."""
+    return _FEATURE_LABELS.get(feature_name, "anomalous")
+
 
 class BehaviorProfileEngine(DetectionEngine):
     """호스트별 정상 동작 기준을 학습하고, 이를 벗어나는 활동을 탐지한다.
@@ -90,6 +101,7 @@ class BehaviorProfileEngine(DetectionEngine):
                         if std > 0:
                             dev = (count - avg) / std
                             if dev > self._threshold:
+                                host_label = _feature_to_label(name)
                                 alerts.append(Alert(
                                     engine=self.name,
                                     severity=Severity.WARNING,
@@ -102,7 +114,13 @@ class BehaviorProfileEngine(DetectionEngine):
                                     description_key="engines.behavior_profile.alerts.deviation.description",
                                     source_ip=src_ip,
                                     confidence=0.6,
-                                    metadata={"feature": name, "value": count, "avg": round(avg, 1), "dev": round(dev, 1)},
+                                    metadata={
+                                        "feature": name,
+                                        "value": count,
+                                        "avg": round(avg, 1),
+                                        "dev": round(dev, 1),
+                                        "host_label": host_label,
+                                    },
                                 ))
                     
                     history.append(count)

@@ -501,6 +501,28 @@ class DeviceRepository:
         )
         return await self.get_by_mac(mac_address)
 
+    async def add_label_by_ip(self, ip_address: str, label: str) -> bool:
+        """IP 주소로 디바이스를 찾아 host_labels 배열에 레이블을 추가한다.
+
+        레이블이 이미 존재하면 중복 추가하지 않는다.
+        대응하는 디바이스가 없으면 False를 반환한다.
+        """
+        result = await self._db.pool.fetchrow(
+            """UPDATE devices
+               SET host_labels = (
+                   CASE
+                       WHEN host_labels @> to_jsonb($1::text)
+                       THEN host_labels
+                       ELSE host_labels || to_jsonb($1::text)
+                   END
+               )
+               WHERE ip_address = $2::inet
+               RETURNING id""",
+            label,
+            ip_address,
+        )
+        return result is not None
+
 
 class BlocklistRepository:
     """custom_blocklist 테이블에 대한 CRUD 연산."""

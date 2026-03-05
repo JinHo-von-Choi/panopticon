@@ -15,7 +15,7 @@ from netwatcher.alerts.rate_limiter import RateLimiter
 from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.detection.correlator import AlertCorrelator
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.storage.repositories import EventRepository
+from netwatcher.storage.repositories import DeviceRepository, EventRepository
 from netwatcher.utils.config import Config
 
 if TYPE_CHECKING:
@@ -41,6 +41,7 @@ class AlertDispatcher:
         self,
         config: Config,
         event_repo: EventRepository,
+        device_repo: DeviceRepository | None = None,
         correlator: AlertCorrelator | None = None,
         pcap_writer: PCAPWriter | None = None,
         block_manager: BlockManager | None = None,
@@ -48,6 +49,7 @@ class AlertDispatcher:
         """설정, 리포지토리, 알림 채널 등 의존성을 초기화한다."""
         self._config        = config
         self._event_repo    = event_repo
+        self._device_repo   = device_repo
         self._correlator    = correlator
         self._pcap_writer   = pcap_writer
         self._block_manager = block_manager
@@ -189,6 +191,14 @@ class AlertDispatcher:
             )
         except Exception:
             logger.exception("Failed to save alert to DB")
+
+        # 2b. 행동 레이블 — metadata에 host_label이 있으면 devices 테이블에 기록
+        host_label = alert.metadata.get("host_label")
+        if host_label and alert.source_ip and self._device_repo is not None:
+            try:
+                await self._device_repo.add_label_by_ip(alert.source_ip, host_label)
+            except Exception:
+                logger.debug("host_label update failed for %s", alert.source_ip)
 
         # 3. 터미널 로깅
         log_fn = {
