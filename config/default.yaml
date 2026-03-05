@@ -222,6 +222,7 @@ netwatcher:
       dns_txt_size_threshold: 500     # DNS TXT record size (bytes)
       max_tracked_pairs: 10000        # max tracked src/dst pairs
 
+      outbound_threshold_mb: 51
     protocol_anomaly:
       enabled: true
       ttl_change_threshold: 14.399999999999999 # TTL change to trigger alert
@@ -301,12 +302,12 @@ netwatcher:
       max_tracked_sources: 10000        # max tracked source IPs in memory
 
     segment_violation:
-      enabled: false                    # SPAN 포트 필요 — 환경에 맞게 활성화
+      enabled: true                     # SPAN 포트 필요 — 환경에 맞게 활성화
       cooldown_seconds: 300
       allowed_flows: []                 # 예: [{src_net: "10.0.0.0/24", dst_net: "10.0.1.0/24", ports: [80,443], proto: "tcp"}]
 
     dark_ip:
-      enabled: false                    # SPAN 포트 필요 — monitored_networks 설정 후 활성화
+      enabled: true                     # SPAN 포트 필요 — monitored_networks 설정 후 활성화
       monitored_networks: []            # 예: ["10.0.0.0/8"]
       known_hosts: []                   # 정적으로 알려진 내부 호스트 IP 목록
       learn_seconds: 300               # 번인 기간 (초)
