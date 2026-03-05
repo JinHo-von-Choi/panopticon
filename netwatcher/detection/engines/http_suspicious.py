@@ -83,6 +83,8 @@ class HTTPSuspiciousEngine(DetectionEngine):
 
         if ua_match:
             now = time.time()
+            if self.is_whitelisted(source_ip=src_ip):
+                return None
             if now - self._alerted.get(f"{src_ip}:scanner", 0) > 300:
                 self._alerted[f"{src_ip}:scanner"] = now
                 return Alert(
@@ -136,6 +138,8 @@ class HTTPSuspiciousEngine(DetectionEngine):
             
             # 지터(편차)가 매우 낮으면 규칙적인 비컨으로 판단
             if avg_interval > 5 and (std_dev / avg_interval) < self._max_jitter:
+                if self.is_whitelisted(source_ip=src_ip):
+                    continue
                 if now - self._alerted.get(f"{src_ip}:beacon:{host}", 0) > 1800:
                     self._alerted[f"{src_ip}:beacon:{host}"] = now
                     alerts.append(Alert(

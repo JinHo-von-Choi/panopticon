@@ -93,6 +93,8 @@ class DNSAnomalyEngine(DetectionEngine):
             # 라벨 길이 검사 (터널링 지표)
             if len(label) >= self._label_len_threshold:
                 if qname not in self._alerted_domains:
+                    if self.is_whitelisted(source_ip=src_ip):
+                        return None
                     self._alerted_domains.add(qname)
                     return Alert(
                         engine=self.name,
@@ -114,6 +116,8 @@ class DNSAnomalyEngine(DetectionEngine):
                 entropy = _calculate_entropy(label)
                 if entropy > self._entropy_threshold:
                     if qname not in self._alerted_domains:
+                        if self.is_whitelisted(source_ip=src_ip):
+                            return None
                         self._alerted_domains.add(qname)
                         return Alert(
                             engine=self.name,
@@ -146,6 +150,8 @@ class DNSAnomalyEngine(DetectionEngine):
                 continue
 
             if len(times) >= self._rate_threshold:
+                if self.is_whitelisted(source_ip=src_ip):
+                    continue
                 last_alert = self._flood_alerted.get(src_ip, 0)
                 if now - last_alert > 60:
                     self._flood_alerted[src_ip] = now

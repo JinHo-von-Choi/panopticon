@@ -50,6 +50,8 @@ class ThreatIntelEngine(DetectionEngine):
         for ip in (src_ip, dst_ip):
             match = self._feed_mgr.match_ip(ip)
             if match:
+                if self.is_whitelisted(source_ip=src_ip, dest_ip=dst_ip):
+                    return None
                 return Alert(
                     engine=self.name,
                     severity=Severity.CRITICAL,
@@ -76,6 +78,8 @@ class ThreatIntelEngine(DetectionEngine):
             qname = packet[DNSQR].qname.decode("utf-8", errors="ignore").rstrip(".")
             match = self._feed_mgr.match_domain(qname)
             if match:
+                if self.is_whitelisted(source_ip=src_ip, domain=qname):
+                    return None
                 return Alert(
                     engine=self.name,
                     severity=Severity.CRITICAL,

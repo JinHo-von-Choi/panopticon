@@ -74,6 +74,9 @@ class PortScanEngine(DetectionEngine):
         flags = packet[TCP].flags
         now = time.time()
 
+        if self.is_whitelisted(source_ip=src_ip):
+            return None
+
         # Stealth 스캔 탐지 (NULL, XMAS 등)
         # NULL: 0, XMAS: FIN+PSH+URG (0x29)
         is_stealth = False
@@ -129,6 +132,8 @@ class PortScanEngine(DetectionEngine):
             effective_threshold = self._threshold * 3 if is_internal else self._threshold
 
             if len(unique_ports) >= effective_threshold:
+                if self.is_whitelisted(source_ip=src_ip):
+                    continue
                 if now - self._alerted.get(src_ip, 0) > self._window:
                     self._alerted[src_ip] = now
                     confidence = min(1.0, 0.6 + (len(unique_ports) / 100))
