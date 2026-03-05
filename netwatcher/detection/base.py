@@ -26,6 +26,11 @@ class DetectionEngine(abc.ABC):
     # ARP·DHCP 브로드캐스트만으로 동작하는 엔진은 False(기본값)를 유지한다.
     requires_span: bool = False
 
+    # MITRE ATT&CK TTP ID 목록. 엔진당 복수 TTP 가능.
+    # 첫 번째 항목이 Alert.mitre_attack_id로 자동 주입된다.
+    # 엔진이 Alert에 직접 설정한 경우에는 덮어쓰지 않는다.
+    mitre_attack_ids: list[str] = []
+
     # 서브클래스에서 설정 스키마 정의: key -> (type, default) 튜플 또는 dict
     config_schema: dict[str, Any] = {}
 

@@ -26,6 +26,7 @@ class ICMPAnomalyEngine(DetectionEngine):
     name = "icmp_anomaly"
     description = "ICMP 트래픽의 이상을 탐지합니다. Ping Sweep, ICMP Flood, 잘 사용되지 않는 ICMP 타입 등을 감시합니다."
     description_key = "engines.icmp_anomaly.description"
+    mitre_attack_ids = ['T1018']
     config_schema = {
         "sweep_threshold": {
             "type": int, "default": 10, "min": 3, "max": 50,

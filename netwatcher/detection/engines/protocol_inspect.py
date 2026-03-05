@@ -25,6 +25,7 @@ class ProtocolInspectEngine(DetectionEngine):
     name = "protocol_inspect"
     description = "애플리케이션 프로토콜을 심층 분석(DPI)합니다. 평문 비밀번호 노출, 비정상적인 프로토콜 사용 등을 식별합니다."
     description_key = "engines.protocol_inspect.description"
+    mitre_attack_ids = ['T1071']
     config_schema = {
         "detect_plain_auth": {
             "type": bool, "default": True,

@@ -26,6 +26,7 @@ class SignatureEngine(DetectionEngine):
     name = "signature"
     description = "시그니처 기반 탐지를 수행합니다. YARA 규칙 및 사용자 정의 패턴을 사용하여 알려진 공격 도구 및 악성 페이로드를 식별합니다."
     description_key = "engines.signature.description"
+    mitre_attack_ids = []
     config_schema = {
         "enable_yara": {
             "type": bool, "default": True,

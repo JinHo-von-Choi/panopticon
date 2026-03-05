@@ -12,10 +12,13 @@ CREATE TABLE IF NOT EXISTS events (
     source_mac  MACADDR,
     dest_ip     INET,
     dest_mac    MACADDR,
-    metadata    JSONB           NOT NULL DEFAULT '{}',
-    packet_info JSONB           NOT NULL DEFAULT '{}',
-    resolved    BOOLEAN         NOT NULL DEFAULT FALSE,
-    reasoning   TEXT
+    title_key        TEXT,
+    description_key  TEXT,
+    metadata         JSONB           NOT NULL DEFAULT '{}',
+    packet_info      JSONB           NOT NULL DEFAULT '{}',
+    resolved         BOOLEAN         NOT NULL DEFAULT FALSE,
+    reasoning        TEXT,
+    mitre_attack_id  VARCHAR(64)
 );
 """
 
@@ -24,6 +27,7 @@ EVENTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_events_engine ON events(engine);",
     "CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);",
     "CREATE INDEX IF NOT EXISTS idx_events_source_ip ON events(source_ip) WHERE source_ip IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_events_mitre ON events(mitre_attack_id) WHERE mitre_attack_id IS NOT NULL;",
 ]
 
 DEVICES_TABLE = """

@@ -35,6 +35,7 @@ class DNSAnomalyEngine(DetectionEngine):
     name = "dns_anomaly"
     description = "DNS 쿼리의 이상을 탐지합니다. 무작위 도메인(DGA), DNS 터널링, 비정상 대량 질의 등을 식별합니다."
     description_key = "engines.dns_anomaly.description"
+    mitre_attack_ids = ['T1071.004']
     config_schema = {
         "entropy_threshold": {
             "type": float, "default": 3.8, "min": 2.0, "max": 5.0,

@@ -26,6 +26,7 @@ class ThreatIntelEngine(DetectionEngine):
     name = "threat_intel"
     description = "외부 위협 피드와 실시간 트래픽을 대조합니다. 알려진 악성 IP, 도메인과의 통신을 식별합니다."
     description_key = "engines.threat_intel.description"
+    mitre_attack_ids = ['T1590']
     config_schema = {}
 
     def __init__(self, config: dict[str, Any]) -> None:

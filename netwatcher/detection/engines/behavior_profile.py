@@ -26,6 +26,7 @@ class BehaviorProfileEngine(DetectionEngine):
     name = "behavior_profile"
     description = "호스트별 동작 프로파일링을 수행합니다. 평소와 다른 비정상적인 통신 패턴(새로운 연결지, 평소보다 많은 포트 사용 등)을 식별합니다."
     description_key = "engines.behavior_profile.description"
+    mitre_attack_ids = ["T1041"]
     config_schema = {
         "learning_period_seconds": {
             "type": int, "default": 3600, "min": 600, "max": 86400,

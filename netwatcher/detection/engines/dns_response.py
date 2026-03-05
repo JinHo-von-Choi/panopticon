@@ -25,6 +25,7 @@ class DNSResponseEngine(DetectionEngine):
     name = "dns_response"
     description = "DNS 응답을 분석합니다. 존재하지 않는 도메인(NXDOMAIN) 응답 폭주 및 Fast-flux 봇넷 징후를 식별합니다."
     description_key = "engines.dns_response.description"
+    mitre_attack_ids = ['T1071.004']
     config_schema = {
         "nxdomain_threshold": {
             "type": int, "default": 20, "min": 5, "max": 200,

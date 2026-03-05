@@ -24,6 +24,7 @@ class ProtocolAnomalyEngine(DetectionEngine):
     name = "protocol_anomaly"
     description = "프로토콜 사양을 벗어나는 패킷을 탐지합니다. TTL 변조, 비정상 TCP 플래그 등 회피 공격 시도를 식별합니다."
     description_key = "engines.protocol_anomaly.description"
+    mitre_attack_ids = ['T1071']
     config_schema = {
         "min_ttl": {
             "type": int, "default": 10, "min": 1, "max": 64,

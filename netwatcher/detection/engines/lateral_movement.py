@@ -35,6 +35,7 @@ class LateralMovementEngine(DetectionEngine):
     name = "lateral_movement"
     description = "측면 이동(Lateral Movement) 활동을 탐지합니다. 내부망 내 민감 포트 접근 및 공격 확산 징후를 식별합니다."
     description_key = "engines.lateral_movement.description"
+    mitre_attack_ids = ['T1021']
     config_schema = {
         "access_threshold": {
             "type": int, "default": 3, "min": 2, "max": 20,

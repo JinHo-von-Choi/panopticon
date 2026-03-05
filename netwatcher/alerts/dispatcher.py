@@ -184,6 +184,7 @@ class AlertDispatcher:
                 dest_mac=alert.dest_mac,
                 metadata=alert.metadata,
                 packet_info=alert.packet_info,
+                mitre_attack_id=alert.mitre_attack_id,
             )
         except Exception:
             logger.exception("Failed to save alert to DB")

@@ -29,6 +29,7 @@ class HTTPSuspiciousEngine(DetectionEngine):
     name = "http_suspicious"
     description = "HTTP 트래픽의 이상을 탐지합니다. 보안 스캐너 사용 및 악성코드의 C2 비컨 통신 패턴을 식별합니다."
     description_key = "engines.http_suspicious.description"
+    mitre_attack_ids = ['T1071.001', 'T1190']
     config_schema = {
         "beacon_threshold": {
             "type": int, "default": 10, "min": 5, "max": 100,

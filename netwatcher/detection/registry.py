@@ -109,6 +109,11 @@ class EngineRegistry:
                     _engine_analyze_duration.labels(engine=engine.name).observe(elapsed)
 
                 if alert is not None:
+                    # mitre_attack_id 자동 주입 (엔진이 직접 설정하지 않은 경우)
+                    if alert.mitre_attack_id is None:
+                        ids = getattr(engine, "mitre_attack_ids", [])
+                        if ids:
+                            alert.mitre_attack_id = ids[0]
                     # 신뢰도 기반 심각도 조정 적용
                     if alert.confidence < 0.3:
                         alert.severity = downgrade_severity(alert.severity)
@@ -132,6 +137,11 @@ class EngineRegistry:
             try:
                 engine_alerts = engine.on_tick(now)
                 for alert in engine_alerts:
+                    # mitre_attack_id 자동 주입 (엔진이 직접 설정하지 않은 경우)
+                    if alert.mitre_attack_id is None:
+                        ids = getattr(engine, "mitre_attack_ids", [])
+                        if ids:
+                            alert.mitre_attack_id = ids[0]
                     # 신뢰도 기반 심각도 조정 적용
                     if alert.confidence < 0.3:
                         alert.severity = downgrade_severity(alert.severity)

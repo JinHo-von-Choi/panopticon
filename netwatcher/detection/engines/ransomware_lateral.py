@@ -26,6 +26,7 @@ class RansomwareLateralEngine(DetectionEngine):
     name = "ransomware_lateral"
     description = "랜섬웨어의 측면 확산 활동을 탐지합니다. SMB/RDP 브루트포스 및 비인가 허니팟 접근을 감시합니다."
     description_key = "engines.ransomware_lateral.description"
+    mitre_attack_ids = ['T1486', 'T1021']
     config_schema = {
         "brute_force_threshold": {
             "type": int, "default": 20, "min": 5, "max": 100,

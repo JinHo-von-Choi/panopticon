@@ -63,20 +63,22 @@ class EventRepository:
         metadata: dict[str, Any] | None = None,
         packet_info: dict[str, Any] | None = None,
         reasoning: str | None = None,
+        mitre_attack_id: str | None = None,
     ) -> int:
         """새 이벤트를 삽입하고 해당 id를 반환한다."""
         row_id = await self._db.pool.fetchval(
             """INSERT INTO events
                (engine, severity, title, description, title_key, description_key,
-                source_ip, source_mac, dest_ip, dest_mac, metadata, packet_info, reasoning)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                source_ip, source_mac, dest_ip, dest_mac, metadata, packet_info,
+                reasoning, mitre_attack_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                RETURNING id""",
             engine, severity,
             _sanitize(title), _sanitize(description),
             title_key, description_key,
             source_ip, source_mac, dest_ip, dest_mac,
             _sanitize(metadata or {}), _sanitize(packet_info or {}),
-            reasoning,
+            reasoning, mitre_attack_id,
         )
         return row_id
 

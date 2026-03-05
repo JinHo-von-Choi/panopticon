@@ -41,6 +41,7 @@ class DHCPSpoofEngine(DetectionEngine):
     name = "dhcp_spoof"
     description = "비인가 DHCP 서버를 탐지합니다. 공격자가 위조 DHCP 응답으로 네트워크 설정을 조작하는 것을 방지합니다."
     description_key = "engines.dhcp_spoof.description"
+    mitre_attack_ids = ['T1557.003']
     config_schema = {
         "starvation_threshold": {
             "type": int, "default": 50, "min": 5, "max": 1000,

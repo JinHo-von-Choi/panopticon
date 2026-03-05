@@ -26,6 +26,7 @@ class TrafficAnomalyEngine(DetectionEngine):
     name = "traffic_anomaly"
     description = "네트워크 트래픽 양의 통계적 이상 및 신규 장치의 등장을 탐지합니다."
     description_key = "engines.traffic_anomaly.description"
+    mitre_attack_ids = ["T1018", "T1041"]
     config_schema = {
         "zscore_threshold": {
             "type": float, "default": 3.0, "min": 1.5, "max": 10.0,

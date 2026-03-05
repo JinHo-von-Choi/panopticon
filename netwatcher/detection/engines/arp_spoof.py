@@ -26,6 +26,7 @@ class ARPSpoofEngine(DetectionEngine):
     name = "arp_spoof"
     description = "ARP 스푸핑 및 Gratuitous ARP 폭주를 탐지합니다. MAC-IP 매핑 변경을 감시하여 중간자 공격(MITM)을 식별합니다."
     description_key = "engines.arp_spoof.description"
+    mitre_attack_ids = ["T1557.002"]
     config_schema = {
         "gratuitous_window_seconds": {
             "type": int, "default": 30, "min": 5, "max": 300,

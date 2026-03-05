@@ -26,6 +26,7 @@ class PortScanEngine(DetectionEngine):
     name = "port_scan"
     description = "포트 스캔 활동을 탐지합니다. 짧은 시간 내에 다수의 포트를 조사하는 스캐너 및 공격자를 식별합니다."
     description_key = "engines.port_scan.description"
+    mitre_attack_ids = ['T1046']
     config_schema = {
         "threshold": {
             "type": int, "default": 15, "min": 5, "max": 100,

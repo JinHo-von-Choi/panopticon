@@ -26,6 +26,7 @@ class DataExfilEngine(DetectionEngine):
     name = "data_exfil"
     description = "데이터 유출 활동을 탐지합니다. 대량의 외부 전송 및 비정상적인 업로드 비율을 감시합니다."
     description_key = "engines.data_exfil.description"
+    mitre_attack_ids = ['T1048', 'T1030']
     config_schema = {
         "outbound_threshold_mb": {
             "type": int, "default": 50, "min": 10, "max": 1000,

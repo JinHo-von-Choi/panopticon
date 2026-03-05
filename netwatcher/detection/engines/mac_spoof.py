@@ -51,6 +51,7 @@ class MACSpoofEngine(DetectionEngine):
     name = "mac_spoof"
     description = "MAC 주소 위조를 탐지합니다. OUI 불일치, 랜덤 MAC, 동일 MAC의 다중 IP 사용 등 스푸핑 징후를 식별합니다."
     description_key = "engines.mac_spoof.description"
+    mitre_attack_ids = ['T1036.005']
     config_schema = {
         "max_ips_per_mac": {
             "type": int, "default": 5, "min": 2, "max": 50,
