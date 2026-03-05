@@ -60,6 +60,7 @@ class Alert:
     dest_mac: str | None = None
     confidence: float = 0.5
     mitre_attack_id: str | None = None
+    threat_level: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     packet_info: dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(
@@ -94,6 +95,7 @@ class Alert:
             "dest_mac": self.dest_mac,
             "confidence": self.confidence,
             "mitre_attack_id": self.mitre_attack_id,
+            "threat_level": self.threat_level,
             "metadata": self.metadata,
             "packet_info": self.packet_info,
             "timestamp": self.timestamp,

@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS events (
     packet_info      JSONB           NOT NULL DEFAULT '{}',
     resolved         BOOLEAN         NOT NULL DEFAULT FALSE,
     reasoning        TEXT,
-    mitre_attack_id  VARCHAR(64)
+    mitre_attack_id  VARCHAR(64),
+    threat_level     SMALLINT        NOT NULL DEFAULT 0
 );
 """
 
