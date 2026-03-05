@@ -17,6 +17,7 @@ from typing import Any
 
 from scapy.all import Packet
 
+from netwatcher.detection.attack_mapping import enrich_alert_metadata
 from netwatcher.detection.base import DetectionEngine
 
 try:
@@ -114,6 +115,10 @@ class EngineRegistry:
                         ids = getattr(engine, "mitre_attack_ids", [])
                         if ids:
                             alert.mitre_attack_id = ids[0]
+                    # ATT&CK TTP 메타데이터 자동 주입
+                    alert.metadata = enrich_alert_metadata(
+                        alert.mitre_attack_id, alert.metadata
+                    )
                     # 신뢰도 기반 심각도 조정 적용
                     if alert.confidence < 0.3:
                         alert.severity = downgrade_severity(alert.severity)
@@ -142,6 +147,10 @@ class EngineRegistry:
                         ids = getattr(engine, "mitre_attack_ids", [])
                         if ids:
                             alert.mitre_attack_id = ids[0]
+                    # ATT&CK TTP 메타데이터 자동 주입
+                    alert.metadata = enrich_alert_metadata(
+                        alert.mitre_attack_id, alert.metadata
+                    )
                     # 신뢰도 기반 심각도 조정 적용
                     if alert.confidence < 0.3:
                         alert.severity = downgrade_severity(alert.severity)

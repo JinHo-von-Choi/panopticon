@@ -9,36 +9,39 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from netwatcher.detection.attack_mapping import (
+    KILL_CHAIN_ORDER as _ATK_KILL_CHAIN_ORDER,
+    ttp_to_kill_chain_phase,
+)
 from netwatcher.detection.models import Alert, Severity
 
 logger = logging.getLogger("netwatcher.detection.correlator")
 
-# 킬체인 단계 매핑
-_KILL_CHAIN_STAGES = {
-    "port_scan": "reconnaissance",
-    "icmp_anomaly": "reconnaissance",
-    "arp_spoof": "initial_access",
-    "dhcp_spoof": "initial_access",
-    "dns_anomaly": "command_and_control",
-    "threat_intel": "command_and_control",
-    "http_suspicious": "command_and_control",
-    "lateral_movement": "lateral_movement",
+# 킬체인 단계 매핑 (엔진명 → 단계 폴백 테이블)
+# attack_mapping.ttp_to_kill_chain_phase()로 TTP 기반 우선 조회를 수행하며,
+# TTP가 없는 경우 이 테이블을 폴백으로 사용한다.
+_KILL_CHAIN_STAGES: dict[str, str] = {
+    "port_scan":          "discovery",
+    "icmp_anomaly":       "discovery",
+    "dark_ip":            "discovery",
+    "arp_spoof":          "credential_access",
+    "dhcp_spoof":         "credential_access",
+    "mac_spoof":          "defense_evasion",
+    "protocol_anomaly":   "defense_evasion",
+    "dns_anomaly":        "command_and_control",
+    "threat_intel":       "reconnaissance",
+    "http_suspicious":    "command_and_control",
+    "c2_beaconing":       "command_and_control",
+    "lateral_movement":   "lateral_movement",
     "ransomware_lateral": "lateral_movement",
-    "mac_spoof": "defense_evasion",
-    "protocol_anomaly": "defense_evasion",
-    "data_exfil": "exfiltration",
-    "traffic_anomaly": "anomaly",
+    "segment_violation":  "lateral_movement",
+    "behavior_profile":   "discovery",
+    "data_exfil":         "exfiltration",
+    "traffic_anomaly":    "exfiltration",
 }
 
-# 킬체인 진행 순서
-_KILL_CHAIN_ORDER = [
-    "reconnaissance",
-    "initial_access",
-    "command_and_control",
-    "lateral_movement",
-    "defense_evasion",
-    "exfiltration",
-]
+# 킬체인 진행 순서 — attack_mapping.KILL_CHAIN_ORDER 재사용
+_KILL_CHAIN_ORDER = _ATK_KILL_CHAIN_ORDER
 
 
 @dataclass
@@ -115,12 +118,16 @@ class AlertCorrelator:
         if not source:
             return None
 
+        # TTP ID 기반 Kill Chain 단계 조회 — 없으면 엔진명 폴백
+        _ttp_phase = ttp_to_kill_chain_phase(alert.mitre_attack_id or "")
+        _kc_stage  = _ttp_phase or _KILL_CHAIN_STAGES.get(alert.engine, "unknown")
         alert_info = {
-            "event_id": event_id,
-            "engine": alert.engine,
-            "severity": alert.severity,
-            "title": alert.title,
-            "kill_chain_stage": _KILL_CHAIN_STAGES.get(alert.engine, "unknown"),
+            "event_id":         event_id,
+            "engine":           alert.engine,
+            "severity":         alert.severity,
+            "title":            alert.title,
+            "mitre_attack_id":  alert.mitre_attack_id,
+            "kill_chain_stage": _kc_stage,
         }
 
         self._recent_alerts[source].append((now, alert_info))
