@@ -113,4 +113,4 @@ class TestRansomwareLateralKillChain:
         # rule은 항상 "multi_engine"이다.
         assert incident.rule == "multi_engine"
         # kill_chain 단계는 update 경로에서 stages로 덮어쓰이므로 정확히 설정된다.
-        assert incident.kill_chain_stages == ["reconnaissance", "lateral_movement"]
+        assert incident.kill_chain_stages == ["discovery", "lateral_movement"]

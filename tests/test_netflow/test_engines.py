@@ -107,7 +107,7 @@ class TestFlowDataExfilEngine:
     def setup_method(self):
         self.engine = FlowDataExfilEngine({
             "enabled": True,
-            "byte_threshold": 50 * self.MB,  # 50MB
+            "outbound_threshold_mb": 50,  # 50MB
             "window_seconds": 3600,
         })
 
@@ -118,11 +118,13 @@ class TestFlowDataExfilEngine:
     def test_large_external_transfer_detected(self):
         src, dst = "192.168.1.10", "1.2.3.4"  # 외부 IP
         # 50MB threshold 초과: 51MB 전송
-        alert = self.engine.analyze_flow(_big_flow(src, dst, 51 * self.MB))
-        assert alert is not None
+        self.engine.analyze_flow(_big_flow(src, dst, 51 * self.MB))
+        alerts = self.engine.on_tick(time.time())
+        assert len(alerts) >= 1
+        alert = alerts[0]
         assert alert.source_ip == src
         assert alert.dest_ip == dst
-        assert alert.severity == Severity.WARNING
+        assert alert.severity == Severity.CRITICAL
 
     def test_internal_to_internal_no_alert(self):
         # 내부 → 내부: 탐지 안 함
@@ -131,12 +133,12 @@ class TestFlowDataExfilEngine:
 
     def test_cumulative_threshold(self):
         # 여러 플로우가 누적되어 임계값 초과
-        src, dst = "10.0.0.5", "203.0.113.1"
-        result = None
+        src, dst = "10.0.0.5", "8.8.4.4"
         for _ in range(10):
-            result = self.engine.analyze_flow(_big_flow(src, dst, 6 * self.MB))
+            self.engine.analyze_flow(_big_flow(src, dst, 6 * self.MB))
         # 10 * 6MB = 60MB > 50MB
-        assert result is not None
+        alerts = self.engine.on_tick(time.time())
+        assert len(alerts) >= 1
 
     def test_different_destinations_independent(self):
         # 다른 목적지는 독립 집계

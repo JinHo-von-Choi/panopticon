@@ -27,7 +27,7 @@ def create_ws_router(
     async def ws_events(websocket: WebSocket, token: str | None = None):
         if auth_manager and auth_manager.enabled:
             if not token or not auth_manager.verify_token(token):
-                await websocket.close(code=4001)
+                await websocket.close(code=1008)
                 return
         await websocket.accept()
         q = dispatcher.subscribe_ws()

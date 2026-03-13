@@ -7,11 +7,11 @@ from collections import defaultdict
 from typing import Any
 
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.netflow.base import NetFlowEngine
-from netwatcher.netflow.models import NetFlowV5Record
+from netwatcher.netflow.base import FlowEngine
+from netwatcher.netflow.models import FlowRecord
 from netwatcher.utils.network import is_private_ip
 
-class FlowDataExfilEngine(NetFlowEngine):
+class FlowDataExfilEngine(FlowEngine):
     """NetFlow 데이터를 기반으로 대량의 외부 전송을 탐지한다."""
 
     name = "flow_data_exfil"
@@ -43,11 +43,11 @@ class FlowDataExfilEngine(NetFlowEngine):
         self._last_reset = time.time()
         self._alerted: dict[tuple[str, str], float] = {}
 
-    def analyze_flow(self, flow: NetFlowV5Record) -> Alert | None:
+    def analyze_flow(self, flow: FlowRecord) -> Alert | None:
         """NetFlow 레코드에서 외부 전송량을 합산한다."""
         src_ip = flow.src_ip
         dst_ip = flow.dst_ip
-        size = flow.bytes
+        size = flow.bytes_count
         
         if is_private_ip(src_ip) and not is_private_ip(dst_ip):
             self._outbound_bytes[(src_ip, dst_ip)] += size

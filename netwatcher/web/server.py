@@ -15,11 +15,18 @@ from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
 def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None):
-    app = FastAPI(title="Panopticon API")
+    web_cfg = config.section("web") if hasattr(config, 'section') else {}
+    cors_cfg = web_cfg.get("cors", {}) if isinstance(web_cfg, dict) else {}
+    allowed_origins = cors_cfg.get("allowed_origins", ["http://localhost:38585"])
+    enable_docs = web_cfg.get("enable_docs", False) if isinstance(web_cfg, dict) else False
+    docs_url = "/docs" if enable_docs else None
+    openapi_url = "/openapi.json" if enable_docs else None
+
+    app = FastAPI(title="Panopticon API", docs_url=docs_url, openapi_url=openapi_url)
     static_dir = Path(__file__).parent / "static"
 
     # CORS & Auth Middleware
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["*"], allow_headers=["*"])
     if auth_manager: app.add_middleware(AuthMiddleware, auth_manager=auth_manager)
 
     # API Routers (Standardized Prefix)
@@ -47,6 +54,10 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     if ai_analyzer:
         from netwatcher.web.routes.ai_analyzer import create_ai_analyzer_router
         app.include_router(create_ai_analyzer_router(ai_analyzer), prefix=api_prefix)
+
+    @app.get("/health")
+    async def health_check():
+        return {"status": "healthy"}
 
     # Static Assets
     app.mount("/css",     StaticFiles(directory=str(static_dir / "css")),     name="css")

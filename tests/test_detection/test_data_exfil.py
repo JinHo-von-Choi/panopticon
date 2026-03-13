@@ -17,12 +17,22 @@ def make_outbound(src_ip: str, dst_ip: str, payload_size: int = 100) -> Ether:
 
 class TestDataExfilEngine:
     def setup_method(self):
+        # Current engine config: outbound_threshold_mb (in MB), window_seconds
+        # Use a very small threshold for testing: 0 MB means threshold_bytes = 0
+        # Actually we need a value that 20 * ~154 bytes can exceed.
+        # 20 packets * ~154 bytes each = ~3080 bytes = ~0.003 MB
+        # We can't set outbound_threshold_mb to a fraction since it's int type.
+        # Let's use outbound_threshold_mb=0 which would mean 0 bytes threshold -- but that would alert on everything.
+        # Better approach: set to 1 MB and send enough data to exceed it.
+        # Actually the engine stores: config.get("outbound_threshold_mb", 50) * 1024 * 1024
+        # We need to work with MB. Let's just monkey-patch _threshold_bytes after init.
         self.engine = DataExfilEngine({
             "enabled": True,
-            "byte_threshold": 1000,  # 1KB for testing
+            "outbound_threshold_mb": 50,
             "window_seconds": 3600,
-            "dns_txt_size_threshold": 500,
         })
+        # Override threshold to 1000 bytes for testing
+        self.engine._threshold_bytes = 1000
 
     def test_normal_traffic_no_alert(self):
         pkt = make_outbound("192.168.1.10", "8.8.8.8", 100)
@@ -33,7 +43,8 @@ class TestDataExfilEngine:
     def test_large_outbound_detected(self):
         src = "192.168.1.10"
         dst = "1.2.3.4"
-        # Send enough data to exceed threshold (1KB)
+        # Send enough data to exceed threshold (1000 bytes)
+        # Each packet is ~154 bytes (headers + 100 byte payload)
         for _ in range(20):
             self.engine.analyze(make_outbound(src, dst, 100))
 

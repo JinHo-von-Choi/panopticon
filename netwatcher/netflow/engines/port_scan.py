@@ -7,10 +7,10 @@ from collections import defaultdict, deque
 from typing import Any
 
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.netflow.base import NetFlowEngine
-from netwatcher.netflow.models import NetFlowV5Record
+from netwatcher.netflow.base import FlowEngine
+from netwatcher.netflow.models import FlowRecord
 
-class FlowPortScanEngine(NetFlowEngine):
+class FlowPortScanEngine(FlowEngine):
     """NetFlow 레코드를 분석하여 포트 스캔을 탐지한다 (SPAN 없는 환경용)."""
 
     name = "flow_port_scan"
@@ -37,16 +37,17 @@ class FlowPortScanEngine(NetFlowEngine):
         super().__init__(config)
         self._threshold = config.get("threshold", 20)
         self._window = config.get("window_seconds", 60)
-        # src_ip -> deque of (timestamp, dst_port)
-        self._scans: dict[str, deque[tuple[float, int]]] = defaultdict(deque)
-        self._alerted: dict[str, float] = {}
+        # (src_ip, dst_ip) -> deque of (timestamp, dst_port)
+        self._scans: dict[tuple[str, str], deque[tuple[float, int]]] = defaultdict(deque)
+        self._alerted: dict[tuple[str, str], float] = {}
 
-    def analyze_flow(self, flow: NetFlowV5Record) -> Alert | None:
+    def analyze_flow(self, flow: FlowRecord) -> Alert | None:
         """NetFlow 레코드에서 목적지 포트를 추적한다."""
-        src_ip = flow.src_ip
+        src_ip  = flow.src_ip
+        dst_ip  = flow.dst_ip
         dst_port = flow.dst_port
         now = time.time()
-        self._scans[src_ip].append((now, dst_port))
+        self._scans[(src_ip, dst_ip)].append((now, dst_port))
         return None
 
     def on_tick(self, timestamp: float) -> list[Alert]:
@@ -54,7 +55,7 @@ class FlowPortScanEngine(NetFlowEngine):
         now = time.time()
         cutoff = now - self._window
 
-        for src_ip, attempts in list(self._scans.items()):
+        for (src_ip, dst_ip), attempts in list(self._scans.items()):
             while attempts and attempts[0][0] < cutoff:
                 attempts.popleft()
             if not attempts:
@@ -62,19 +63,21 @@ class FlowPortScanEngine(NetFlowEngine):
 
             unique_ports = set(p for _, p in attempts)
             if len(unique_ports) >= self._threshold:
-                if now - self._alerted.get(src_ip, 0) > self._window:
-                    self._alerted[src_ip] = now
+                key = (src_ip, dst_ip)
+                if now - self._alerted.get(key, 0) > self._window:
+                    self._alerted[key] = now
                     alerts.append(Alert(
                         engine=self.name,
                         severity=Severity.WARNING,
-                        title="Port Scan Detected (NetFlow)",
+                        title="Flow Port Scan Detected (NetFlow)",
                         title_key="engines.flow_port_scan.alerts.scan.title",
                         description=(
                             f"Host {src_ip} scanned {len(unique_ports)} ports "
-                            f"via NetFlow in {self._window}s."
+                            f"on {dst_ip} via NetFlow in {self._window}s."
                         ),
                         description_key="engines.flow_port_scan.alerts.scan.description",
                         source_ip=src_ip,
+                        dest_ip=dst_ip,
                         confidence=0.7,
                         metadata={"unique_ports": len(unique_ports), "window_seconds": self._window},
                     ))

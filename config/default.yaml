@@ -61,7 +61,7 @@ netwatcher:
       - "http://localhost:38585"
 
   auth:
-    enabled: true
+    enabled: false           # 비밀번호 설정 후 true로 변경
     username: "admin"
     password: ""          # 반드시 환경변수(NETWATCHER_LOGIN_PASSWORD)로 설정
     token_expire_hours: 24
@@ -95,6 +95,7 @@ netwatcher:
   # Whitelist: suppress alerts for known-safe entities
   whitelist:
     ips:
+    - 14.63.60.117
     - 211.58.70.14
     ip_ranges: []        # CIDR notation, e.g. "192.168.1.0/24"
     macs:
@@ -187,11 +188,15 @@ netwatcher:
       window_seconds: 300
       fast_flux_threshold: 3.0
       dns_nxdomain_threshold: 20.0
+      fast_flux_severity_threshold: 0.4
+      fast_flux_detection_threshold: 0.4
+      dns_response_severity_threshold: 0.3
     threat_intel:
       enabled: true
       update_interval_hours: 6
 
       blocklist_confidence_threshold: 0.85
+      threat_intel_confidence_threshold: 0.8
     icmp_anomaly:
       enabled: true
       ping_sweep_threshold: 20        # unique dest IPs per source
@@ -281,11 +286,12 @@ netwatcher:
       eviction_seconds: 86400       # evict hosts unseen for 24h
 
       behavior_profile_threshold: 100.0
-      behavior_anomaly_threshold: 0.9
+      behavior_anomaly_threshold: 0.85
       volume_threshold: 5.0
       behavioral_correlation_threshold: 0.4
       learning_period_seconds: 3600
-      deviation_threshold: 2.6
+      deviation_threshold: 0.576
+      behavior_deviation_threshold: 0.45
     signature:
       enabled: true
       rules_dir: "config/rules"

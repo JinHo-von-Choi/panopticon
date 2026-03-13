@@ -38,11 +38,11 @@ netwatcher:
   interface: null
   postgresql:
     enabled: true
-    host: "localhost"
-    port: 35432
-    database: "bee_db"
-    username: "bee"
-    password: "{os.environ.get('NETWATCHER_DB_PASSWORD', '')}"
+    host: "{os.environ.get('NETWATCHER_TEST_DB_HOST', 'localhost')}"
+    port: {os.environ.get('NETWATCHER_TEST_DB_PORT', '35432')}
+    database: "{os.environ.get('NETWATCHER_TEST_DB_NAME', 'bee_db')}"
+    username: "{os.environ.get('NETWATCHER_TEST_DB_USER', 'bee')}"
+    password: "{os.environ.get('NETWATCHER_TEST_DB_PASSWORD', os.environ.get('NETWATCHER_DB_PASSWORD', ''))}"
     pool_size: 5
     ssl_mode: "disable"
     search_path: "test_{uuid.uuid4().hex[:8]},public"

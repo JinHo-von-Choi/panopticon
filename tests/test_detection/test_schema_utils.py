@@ -20,7 +20,9 @@ class TestNormalizeSchemaField:
             "type": int,
             "default": 15,
             "label": "threshold",
+            "label_key": None,
             "description": "",
+            "description_key": None,
             "min": None,
             "max": None,
         }
@@ -58,7 +60,9 @@ class TestNormalizeSchemaField:
             "type": int,
             "default": 60,
             "label": "Window Seconds",
+            "label_key": "engines.test.window.label",
             "description": "Time window for analysis",
+            "description_key": "engines.test.window.description",
             "min": 1,
             "max": 3600,
         }
@@ -73,6 +77,8 @@ class TestNormalizeSchemaField:
         assert result["default"] == 100
         assert result["label"] == "threshold"
         assert result["description"] == ""
+        assert result["label_key"] is None
+        assert result["description_key"] is None
         assert result["min"] is None
         assert result["max"] is None
 
@@ -209,6 +215,8 @@ class TestSchemaToApi:
         assert field["default"] == 15
         assert field["label"] == "threshold"
         assert field["description"] == ""
+        assert field["label_key"] is None
+        assert field["description_key"] is None
         assert field["min"] is None
         assert field["max"] is None
 

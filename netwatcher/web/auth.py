@@ -27,8 +27,6 @@ logger = logging.getLogger(__name__)
 _PUBLIC_PREFIXES = (
     "/api/auth/login",
     "/api/auth/status",
-    "/docs",
-    "/openapi.json",
     "/health",
     "/metrics",
 )
@@ -81,8 +79,11 @@ class AuthManager:
         self._secret = jwt_secret
 
         if self._enabled and not self._password_hash:
-            logger.warning("auth.enabled=true but auth.password is empty — disabling authentication")
-            self._enabled = False
+            raise ValueError(
+                "auth.enabled=true but auth.password is empty. "
+                "Set a password via NETWATCHER_LOGIN_PASSWORD env var or auth.password in config, "
+                "or explicitly set auth.enabled=false."
+            )
 
         if self._enabled:
             logger.info("Dashboard authentication enabled (user=%s, expire=%dh)", self._username, self._expire_hours)

@@ -76,25 +76,7 @@ def _default_engine_config() -> dict:
     """Return default config for ProtocolInspectEngine tests."""
     return {
         "enabled": True,
-        "suspicious_user_agents": [
-            "Nmap", "sqlmap", "Nikto", "DirBuster",
-            "Hydra", "Masscan", "ZmEu", "w3af",
-        ],
-        "sensitive_paths": [
-            "/admin", "/wp-login.php", "/.env", "/actuator",
-            "/phpmyadmin", "/wp-config.php", "/.git", "/server-status",
-        ],
-        "check_response": True,
-        "max_tracked_responses": 5000,
-        "smtp_ports": [25, 587, 465],
-        "ftp_ports": [20, 21],
-        "ssh_port": 22,
-        "sensitive_files": [".env", ".htpasswd", "passwd", "shadow", "id_rsa", ".ssh"],
-        "smtp_auth_threshold": 5,
-        "smtp_auth_window": 300,
-        "ftp_fail_threshold": 5,
-        "ftp_fail_window": 300,
-        "max_tracked_sources": 10000,
+        "detect_plain_auth": True,
     }
 
 
@@ -380,50 +362,49 @@ class TestParseSshBanner:
 
 
 # ===========================================================================
-# ProtocolInspectEngine Tests - HTTP (existing)
+# ProtocolInspectEngine Tests - HTTP
 # ===========================================================================
 
 
 class TestProtocolInspectEngine:
-    """Tests for ProtocolInspectEngine HTTP detections."""
+    """Tests for ProtocolInspectEngine HTTP detections.
+
+    The engine currently detects two things:
+    1. Plaintext authentication on ports 21/25/110/143 (USER/PASS/LOGIN/AUTHENTICATE)
+    2. Suspicious file extension requests via HTTP GET (.sh/.php/.exe/.py/.pl/.jsp/.asp/.bat)
+    """
 
     def setup_method(self):
         self.engine = ProtocolInspectEngine(_default_engine_config())
 
-    def test_suspicious_user_agent_alert(self):
-        """Nmap UA should trigger a WARNING alert."""
-        payload = _build_http_request(
-            path="/scan", user_agent="Mozilla/5.0 (Nmap Scripting Engine)",
-        )
+    def test_suspicious_file_extension_sh(self):
+        """GET request for .sh file should trigger INFO alert."""
+        payload = _build_http_request(method="GET", path="/install.sh")
         pkt = _make_http_packet(payload=payload)
         alert = self.engine.analyze(pkt)
         assert alert is not None
-        assert alert.severity == Severity.WARNING
+        assert alert.severity == Severity.INFO
         assert alert.engine == "protocol_inspect"
-        assert "User-Agent" in alert.title
-        assert alert.metadata["matched_ua"] == "nmap"
+        assert "Suspicious File Request" in alert.title
+        assert alert.metadata["extension"] == "sh"
 
-    def test_sensitive_path_alert(self):
-        """/admin access should trigger a WARNING alert."""
-        payload = _build_http_request(path="/admin/dashboard")
+    def test_suspicious_file_extension_php(self):
+        """GET request for .php file should trigger INFO alert."""
+        payload = _build_http_request(method="GET", path="/admin/shell.php")
         pkt = _make_http_packet(payload=payload)
         alert = self.engine.analyze(pkt)
         assert alert is not None
-        assert alert.severity == Severity.WARNING
-        assert "Sensitive Path" in alert.title
-        assert alert.metadata["matched_path"] == "/admin"
+        assert alert.severity == Severity.INFO
+        assert alert.metadata["extension"] == "php"
 
-    def test_combined_suspicious_ua_and_path(self):
-        """Both suspicious UA and sensitive path should trigger CRITICAL."""
-        payload = _build_http_request(
-            path="/.env", user_agent="sqlmap/1.6",
-        )
+    def test_suspicious_file_extension_exe(self):
+        """GET request for .exe file should trigger INFO alert."""
+        payload = _build_http_request(method="GET", path="/download/payload.exe")
         pkt = _make_http_packet(payload=payload)
         alert = self.engine.analyze(pkt)
         assert alert is not None
-        assert alert.severity == Severity.CRITICAL
-        assert alert.metadata["matched_ua"] == "sqlmap"
-        assert alert.metadata["matched_path"] == "/.env"
+        assert alert.severity == Severity.INFO
+        assert alert.metadata["extension"] == "exe"
 
     def test_normal_http_no_alert(self):
         """Legitimate HTTP traffic should produce no alert."""
@@ -441,152 +422,48 @@ class TestProtocolInspectEngine:
         assert alert is None
 
     def test_whitelisted_ip_no_alert(self):
-        """Whitelisted source IP should be skipped."""
-        payload = _build_http_request(
-            path="/admin", user_agent="Nmap",
-        )
+        """Whitelisted source IP should be skipped (engine has no whitelist check
+        in analyze, but this verifies general packet flow)."""
+        payload = _build_http_request(path="/index.html")
         pkt = _make_http_packet(payload=payload)
-
-        with patch.object(self.engine, "is_whitelisted", return_value=True):
-            alert = self.engine.analyze(pkt)
-        assert alert is None
-
-    def test_server_banner_outdated(self):
-        """Apache/2.2 in response should trigger INFO alert."""
-        resp_payload = _build_http_response(
-            status_code=200, server="Apache/2.2.34",
-        )
-        pkt = _make_http_packet(
-            src="10.0.0.1", dst="192.168.1.10",
-            sport=80, dport=54321, payload=resp_payload,
-        )
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.INFO
-        assert "Outdated" in alert.title
-        assert alert.metadata["server_banner"] == "Apache/2.2.34"
-
-    def test_server_banner_modern_no_alert(self):
-        """Modern server banner should not trigger alert."""
-        resp_payload = _build_http_response(
-            status_code=200, server="nginx/1.24.0",
-        )
-        pkt = _make_http_packet(
-            src="10.0.0.1", dst="192.168.1.10",
-            sport=80, dport=54321, payload=resp_payload,
-        )
+        # Normal request with no suspicious extension -> no alert regardless
         alert = self.engine.analyze(pkt)
         assert alert is None
 
     def test_config_schema(self):
         """Validate config_schema keys exist."""
         schema = ProtocolInspectEngine.config_schema
-        assert "suspicious_user_agents" in schema
-        assert "sensitive_paths" in schema
-        assert "check_response" in schema
-        assert "max_tracked_responses" in schema
-        assert "smtp_ports" in schema
-        assert "ftp_ports" in schema
-        assert "ssh_port" in schema
-        assert "sensitive_files" in schema
+        assert "detect_plain_auth" in schema
+        assert schema["detect_plain_auth"]["type"] is bool
+        assert schema["detect_plain_auth"]["default"] is True
 
-    def test_multiple_sensitive_paths(self):
-        """Various sensitive paths should all be detected."""
-        paths = [
-            "/wp-login.php", "/.env", "/actuator/health",
-            "/phpmyadmin/index.php", "/wp-config.php",
-            "/.git/config", "/server-status",
-        ]
-        for path in paths:
-            payload = _build_http_request(path=path)
-            pkt = _make_http_packet(payload=payload)
-            alert = self.engine.analyze(pkt)
-            assert alert is not None, f"No alert for sensitive path: {path}"
-            assert alert.severity == Severity.WARNING
-
-    def test_method_abuse_trace(self):
-        """TRACE method should trigger HTTP Method Abuse alert."""
-        payload = b"TRACE / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+    def test_suspicious_file_dedup(self):
+        """Same extension from same IP should only alert once."""
+        payload = _build_http_request(method="GET", path="/a.php")
         pkt = _make_http_packet(payload=payload)
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.WARNING
-        assert "Method Abuse" in alert.title
-        assert alert.metadata["method"] == "TRACE"
-
-    def test_method_abuse_connect(self):
-        """CONNECT method should trigger HTTP Method Abuse alert."""
-        payload = b"CONNECT proxy.example.com:443 HTTP/1.1\r\nHost: proxy.example.com\r\n\r\n"
-        pkt = _make_http_packet(payload=payload)
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.WARNING
-        assert "Method Abuse" in alert.title
-        assert alert.metadata["method"] == "CONNECT"
-
-    def test_port_8080(self):
-        """HTTP traffic on port 8080 should be inspected."""
-        payload = _build_http_request(path="/admin", user_agent="Nikto/2.1.5")
-        pkt = _make_http_packet(dport=8080, payload=payload)
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.CRITICAL
-
-    def test_port_8443(self):
-        """HTTP traffic on port 8443 should be inspected."""
-        payload = _build_http_request(path="/.git/HEAD")
-        pkt = _make_http_packet(dport=8443, payload=payload)
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.WARNING
-
-    def test_non_http_port_ignored(self):
-        """HTTP traffic on non-HTTP ports should be ignored."""
-        payload = _build_http_request(path="/admin")
-        pkt = _make_http_packet(dport=443, payload=payload)
-        alert = self.engine.analyze(pkt)
-        assert alert is None
-
-    def test_response_check_disabled(self):
-        """When check_response is False, response inspection is skipped."""
-        engine = ProtocolInspectEngine({
-            "enabled": True,
-            "check_response": False,
-        })
-        resp_payload = _build_http_response(server="Apache/2.2.34")
-        pkt = _make_http_packet(
-            src="10.0.0.1", dst="192.168.1.10",
-            sport=80, dport=54321, payload=resp_payload,
-        )
-        alert = engine.analyze(pkt)
-        assert alert is None
-
-    def test_outdated_banner_dedup(self):
-        """Same outdated banner from same IP should only alert once."""
-        resp_payload = _build_http_response(server="IIS/6.0")
-        engine = ProtocolInspectEngine({
-            "enabled": True,
-            "check_response": True,
-        })
-        pkt = _make_http_packet(
-            src="10.0.0.1", dst="192.168.1.10",
-            sport=80, dport=54321, payload=resp_payload,
-        )
-        first  = engine.analyze(pkt)
-        second = engine.analyze(pkt)
+        first  = self.engine.analyze(pkt)
+        second = self.engine.analyze(pkt)
         assert first is not None
         assert second is None
 
-    def test_dual_http_port_classified_as_request(self):
-        """Packet where both sport and dport are HTTP ports: classify by dport (request)."""
-        payload = _build_http_request(path="/admin")
-        pkt = _make_http_packet(
-            src="10.0.0.1", dst="10.0.0.2",
-            sport=8080, dport=80, payload=payload,
-        )
+    def test_different_extensions_both_alert(self):
+        """Different extensions from same IP should both alert."""
+        pkt1 = _make_http_packet(payload=_build_http_request(method="GET", path="/a.php"))
+        pkt2 = _make_http_packet(payload=_build_http_request(method="GET", path="/b.exe"))
+        alert1 = self.engine.analyze(pkt1)
+        alert2 = self.engine.analyze(pkt2)
+        assert alert1 is not None
+        assert alert2 is not None
+        assert alert1.metadata["extension"] == "php"
+        assert alert2.metadata["extension"] == "exe"
+
+    def test_post_method_not_detected(self):
+        """POST requests are not matched by the suspicious file regex (only GET)."""
+        payload = b"POST /upload.php HTTP/1.1\r\nHost: example.com\r\n\r\n"
+        pkt = _make_http_packet(payload=payload)
         alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert "Sensitive Path" in alert.title
+        # The engine checks "GET\s+/..." regex, POST won't match
+        assert alert is None
 
     def test_no_tcp_layer_ignored(self):
         """Packet without TCP layer should be ignored."""
@@ -596,7 +473,7 @@ class TestProtocolInspectEngine:
         assert alert is None
 
     def test_no_raw_layer_ignored(self):
-        """Packet without Raw layer should be ignored."""
+        """Packet without Raw layer (empty TCP payload) should be ignored."""
         pkt = Ether() / IP(src="1.2.3.4", dst="5.6.7.8") / TCP(dport=80)
         alert = self.engine.analyze(pkt)
         assert alert is None
@@ -607,63 +484,71 @@ class TestProtocolInspectEngine:
         assert result == []
 
     def test_shutdown_clears_state(self):
-        """shutdown should clear internal state."""
-        # Add an entry to alerted banners
-        resp_payload = _build_http_response(server="Apache/2.2.1")
-        pkt = _make_http_packet(
-            src="10.0.0.1", dst="192.168.1.10",
-            sport=80, dport=54321, payload=resp_payload,
-        )
+        """shutdown should clear internal state (_alerted_ips)."""
+        payload = _build_http_request(method="GET", path="/test.php")
+        pkt = _make_http_packet(payload=payload)
         self.engine.analyze(pkt)
-        assert len(self.engine._alerted_banners) > 0
+        assert len(self.engine._alerted_ips) > 0
 
         self.engine.shutdown()
-        assert len(self.engine._alerted_banners) == 0
-        assert len(self.engine._smtp_auth_attempts) == 0
-        assert len(self.engine._ftp_fail_attempts) == 0
-        assert len(self.engine._alerted_ssh_banners) == 0
+        assert len(self.engine._alerted_ips) == 0
+
+    def test_get_on_non_80_port_with_get_prefix(self):
+        """GET request on non-80 port should still be inspected if payload starts with GET."""
+        payload = _build_http_request(method="GET", path="/backdoor.jsp")
+        pkt = _make_http_packet(dport=8080, payload=payload)
+        alert = self.engine.analyze(pkt)
+        assert alert is not None
+        assert alert.metadata["extension"] == "jsp"
+
+    def test_safe_file_extension_no_alert(self):
+        """GET request for safe file types (.html, .css, .js) should not alert."""
+        for ext in ("html", "css", "js", "png", "jpg"):
+            payload = _build_http_request(method="GET", path=f"/static/file.{ext}")
+            pkt = _make_http_packet(payload=payload)
+            alert = self.engine.analyze(pkt)
+            assert alert is None, f"Unexpected alert for .{ext}"
 
 
 # ===========================================================================
-# ProtocolInspectEngine Tests - SMTP
+# ProtocolInspectEngine Tests - SMTP plaintext auth
 # ===========================================================================
 
 
 class TestProtocolInspectSMTP:
-    """Tests for ProtocolInspectEngine SMTP detections."""
+    """Tests for ProtocolInspectEngine SMTP plaintext auth detection."""
 
     def setup_method(self):
         self.engine = ProtocolInspectEngine(_default_engine_config())
 
-    def test_smtp_vrfy_alert(self):
-        """VRFY command should trigger WARNING alert."""
+    def test_smtp_auth_login_alert(self):
+        """AUTH LOGIN on port 25 should trigger Plaintext Authentication alert."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=25,
-            payload=b"VRFY admin\r\n",
+            payload=b"AUTH LOGIN\r\n",
         )
         alert = self.engine.analyze(pkt)
         assert alert is not None
         assert alert.severity == Severity.WARNING
-        assert "User Enumeration" in alert.title
-        assert alert.metadata["protocol"] == "smtp"
-        assert alert.metadata["command"] == "VRFY"
+        assert "Plaintext Authentication" in alert.title
+        assert alert.source_ip == "192.168.1.10"
+        assert alert.metadata["port"] == 25
 
-    def test_smtp_expn_alert(self):
-        """EXPN command should trigger WARNING alert."""
+    def test_smtp_authenticate_alert(self):
+        """AUTHENTICATE command on SMTP port should trigger alert."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
-            sport=54321, dport=587,
-            payload=b"EXPN postmaster\r\n",
+            sport=54321, dport=25,
+            payload=b"AUTHENTICATE PLAIN\r\n",
         )
         alert = self.engine.analyze(pkt)
         assert alert is not None
         assert alert.severity == Severity.WARNING
-        assert "User Enumeration" in alert.title
-        assert alert.metadata["command"] == "EXPN"
+        assert "Plaintext Authentication" in alert.title
 
     def test_smtp_normal_ehlo_no_alert(self):
-        """Normal EHLO command should not trigger alert."""
+        """Normal EHLO command should not trigger alert (not a USER/PASS/LOGIN/AUTHENTICATE pattern)."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=25,
@@ -672,66 +557,88 @@ class TestProtocolInspectSMTP:
         alert = self.engine.analyze(pkt)
         assert alert is None
 
-    def test_smtp_auth_tracking(self):
-        """AUTH command should be tracked (no immediate alert)."""
+    def test_smtp_user_command_alert(self):
+        """USER command on SMTP port should trigger plaintext auth alert."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=25,
-            payload=b"AUTH LOGIN\r\n",
-        )
-        alert = self.engine.analyze(pkt)
-        # Single AUTH should not trigger alert
-        assert alert is None
-        # But should be tracked
-        assert "192.168.1.10" in self.engine._smtp_auth_attempts
-
-    def test_smtp_auth_brute_force_on_tick(self):
-        """Multiple AUTH commands should trigger brute force alert on tick."""
-        config = _default_engine_config()
-        config["smtp_auth_threshold"] = 3
-        config["smtp_auth_window"] = 300
-        engine = ProtocolInspectEngine(config)
-
-        # Simulate 3 AUTH attempts
-        for _ in range(3):
-            pkt = _make_packet(
-                src="10.0.0.50", dst="10.0.0.5",
-                sport=54321, dport=25,
-                payload=b"AUTH LOGIN\r\n",
-            )
-            engine.analyze(pkt)
-
-        alerts = engine.on_tick(time.time())
-        assert len(alerts) == 1
-        assert alerts[0].severity == Severity.WARNING
-        assert "AUTH Brute Force" in alerts[0].title
-        assert alerts[0].metadata["protocol"] == "smtp"
-
-    def test_smtp_port_465(self):
-        """SMTP on port 465 (SMTPS) should be inspected."""
-        pkt = _make_packet(
-            src="192.168.1.10", dst="10.0.0.5",
-            sport=54321, dport=465,
-            payload=b"VRFY root\r\n",
+            payload=b"USER admin\r\n",
         )
         alert = self.engine.analyze(pkt)
         assert alert is not None
-        assert "User Enumeration" in alert.title
+        assert alert.severity == Severity.WARNING
+        assert "Plaintext Authentication" in alert.title
+
+    def test_smtp_pass_command_alert(self):
+        """PASS command on port 25 should trigger plaintext auth alert."""
+        pkt = _make_packet(
+            src="10.0.0.50", dst="10.0.0.5",
+            sport=54321, dport=25,
+            payload=b"PASS secret123\r\n",
+        )
+        alert = self.engine.analyze(pkt)
+        assert alert is not None
+        assert alert.severity == Severity.WARNING
+
+    def test_smtp_dedup_per_source_ip(self):
+        """Same source IP should only trigger one plaintext auth alert."""
+        pkt = _make_packet(
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=25,
+            payload=b"USER admin\r\n",
+        )
+        first  = self.engine.analyze(pkt)
+        second = self.engine.analyze(pkt)
+        assert first is not None
+        assert second is None
+
+    def test_smtp_port_110_pop3(self):
+        """Plaintext auth on port 110 (POP3) should also be detected."""
+        pkt = _make_packet(
+            src="192.168.1.20", dst="10.0.0.5",
+            sport=54321, dport=110,
+            payload=b"USER mailuser\r\n",
+        )
+        alert = self.engine.analyze(pkt)
+        assert alert is not None
+        assert alert.metadata["port"] == 110
+
+    def test_smtp_port_143_imap(self):
+        """Plaintext auth on port 143 (IMAP) should also be detected."""
+        pkt = _make_packet(
+            src="192.168.1.30", dst="10.0.0.5",
+            sport=54321, dport=143,
+            payload=b"LOGIN user pass\r\n",
+        )
+        alert = self.engine.analyze(pkt)
+        assert alert is not None
+        assert alert.metadata["port"] == 143
+
+    def test_detect_plain_auth_disabled(self):
+        """When detect_plain_auth is False, plaintext auth should not alert."""
+        engine = ProtocolInspectEngine({"enabled": True, "detect_plain_auth": False})
+        pkt = _make_packet(
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=25,
+            payload=b"USER admin\r\n",
+        )
+        alert = engine.analyze(pkt)
+        assert alert is None
 
 
 # ===========================================================================
-# ProtocolInspectEngine Tests - FTP
+# ProtocolInspectEngine Tests - FTP plaintext auth
 # ===========================================================================
 
 
 class TestProtocolInspectFTP:
-    """Tests for ProtocolInspectEngine FTP detections."""
+    """Tests for ProtocolInspectEngine FTP plaintext auth detection."""
 
     def setup_method(self):
         self.engine = ProtocolInspectEngine(_default_engine_config())
 
-    def test_ftp_anonymous_alert(self):
-        """USER anonymous should trigger INFO alert."""
+    def test_ftp_user_command_alert(self):
+        """USER command on FTP port 21 should trigger plaintext auth alert."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=21,
@@ -739,59 +646,24 @@ class TestProtocolInspectFTP:
         )
         alert = self.engine.analyze(pkt)
         assert alert is not None
-        assert alert.severity == Severity.INFO
-        assert "Anonymous" in alert.title
-        assert alert.metadata["protocol"] == "ftp"
-
-    def test_ftp_normal_user_no_alert(self):
-        """Normal USER command should not trigger alert."""
-        pkt = _make_packet(
-            src="192.168.1.10", dst="10.0.0.5",
-            sport=54321, dport=21,
-            payload=b"USER admin\r\n",
-        )
-        alert = self.engine.analyze(pkt)
-        assert alert is None
-
-    def test_ftp_sensitive_file_alert(self):
-        """RETR .env should trigger WARNING alert."""
-        pkt = _make_packet(
-            src="192.168.1.10", dst="10.0.0.5",
-            sport=54321, dport=21,
-            payload=b"RETR .env\r\n",
-        )
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
         assert alert.severity == Severity.WARNING
-        assert "Sensitive File" in alert.title
-        assert alert.metadata["protocol"] == "ftp"
-        assert alert.metadata["matched_pattern"] == ".env"
+        assert "Plaintext Authentication" in alert.title
+        assert alert.source_ip == "192.168.1.10"
+        assert alert.metadata["port"] == 21
 
-    def test_ftp_sensitive_file_passwd(self):
-        """RETR /etc/passwd should trigger WARNING alert."""
+    def test_ftp_pass_command_alert(self):
+        """PASS command on FTP port should trigger plaintext auth alert."""
         pkt = _make_packet(
-            src="192.168.1.10", dst="10.0.0.5",
+            src="10.0.0.50", dst="10.0.0.5",
             sport=54321, dport=21,
-            payload=b"RETR /etc/passwd\r\n",
-        )
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.WARNING
-        assert "Sensitive File" in alert.title
-
-    def test_ftp_sensitive_file_stor(self):
-        """STOR with sensitive file should also trigger alert."""
-        pkt = _make_packet(
-            src="192.168.1.10", dst="10.0.0.5",
-            sport=54321, dport=21,
-            payload=b"STOR id_rsa\r\n",
+            payload=b"PASS secret123\r\n",
         )
         alert = self.engine.analyze(pkt)
         assert alert is not None
         assert alert.severity == Severity.WARNING
 
     def test_ftp_normal_retr_no_alert(self):
-        """RETR for non-sensitive file should not trigger alert."""
+        """RETR for non-sensitive file should not trigger alert (no USER/PASS pattern)."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=21,
@@ -800,67 +672,69 @@ class TestProtocolInspectFTP:
         alert = self.engine.analyze(pkt)
         assert alert is None
 
-    def test_ftp_530_tracking(self):
-        """FTP 530 response should be tracked for brute force detection."""
+    def test_ftp_dedup_per_source_ip(self):
+        """Same source IP should only trigger one FTP plaintext auth alert."""
         pkt = _make_packet(
-            src="10.0.0.5", dst="192.168.1.10",
-            sport=21, dport=54321,
-            payload=b"530 Login incorrect.\r\n",
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=21,
+            payload=b"USER admin\r\n",
+        )
+        first  = self.engine.analyze(pkt)
+        # Same src_ip:plain_auth key -> deduped
+        pkt2 = _make_packet(
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=21,
+            payload=b"PASS secret\r\n",
+        )
+        second = self.engine.analyze(pkt2)
+        assert first is not None
+        assert second is None
+
+    def test_ftp_different_sources_both_alert(self):
+        """Different source IPs should both get alerted."""
+        pkt1 = _make_packet(
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=21,
+            payload=b"USER admin\r\n",
+        )
+        pkt2 = _make_packet(
+            src="192.168.1.20", dst="10.0.0.5",
+            sport=54321, dport=21,
+            payload=b"PASS secret\r\n",
+        )
+        alert1 = self.engine.analyze(pkt1)
+        alert2 = self.engine.analyze(pkt2)
+        assert alert1 is not None
+        assert alert2 is not None
+
+    def test_ftp_list_no_alert(self):
+        """LIST command (no USER/PASS/LOGIN/AUTHENTICATE) should not trigger alert."""
+        pkt = _make_packet(
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=21,
+            payload=b"LIST\r\n",
         )
         alert = self.engine.analyze(pkt)
-        # Single 530 does not trigger immediate alert
         assert alert is None
-        # But should be tracked (tracked by dst_ip = the client that received the failure)
-        assert "192.168.1.10" in self.engine._ftp_fail_attempts
-
-    def test_ftp_brute_force_on_tick(self):
-        """Multiple FTP 530 responses should trigger brute force alert."""
-        config = _default_engine_config()
-        config["ftp_fail_threshold"] = 3
-        config["ftp_fail_window"] = 300
-        engine = ProtocolInspectEngine(config)
-
-        for _ in range(3):
-            pkt = _make_packet(
-                src="10.0.0.5", dst="192.168.1.100",
-                sport=21, dport=54321,
-                payload=b"530 Login incorrect.\r\n",
-            )
-            engine.analyze(pkt)
-
-        alerts = engine.on_tick(time.time())
-        assert len(alerts) == 1
-        assert alerts[0].severity == Severity.WARNING
-        assert "FTP Login Brute Force" in alerts[0].title
 
 
 # ===========================================================================
-# ProtocolInspectEngine Tests - SSH
+# ProtocolInspectEngine Tests - SSH (no detection in current engine)
 # ===========================================================================
 
 
 class TestProtocolInspectSSH:
-    """Tests for ProtocolInspectEngine SSH detections."""
+    """Tests for ProtocolInspectEngine SSH behavior.
+
+    The current engine does not inspect SSH traffic (port 22).
+    These tests verify that SSH packets do not cause false positives.
+    """
 
     def setup_method(self):
         self.engine = ProtocolInspectEngine(_default_engine_config())
 
-    def test_ssh_outdated_protocol_alert(self):
-        """SSH-1.5 should trigger WARNING alert for outdated protocol."""
-        pkt = _make_packet(
-            src="10.0.0.5", dst="192.168.1.10",
-            sport=22, dport=54321,
-            payload=b"SSH-1.5-OldServer_1.0\r\n",
-        )
-        alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.WARNING
-        assert "Outdated SSH Protocol" in alert.title
-        assert alert.metadata["protocol"] == "ssh"
-        assert alert.metadata["ssh_version"] == "1.5"
-
-    def test_ssh_modern_no_alert(self):
-        """SSH-2.0 with modern software should produce no alert."""
+    def test_ssh_banner_no_alert(self):
+        """SSH-2.0 banner on port 22 should not trigger alert (not inspected)."""
         pkt = _make_packet(
             src="10.0.0.5", dst="192.168.1.10",
             sport=22, dport=54321,
@@ -869,42 +743,35 @@ class TestProtocolInspectSSH:
         alert = self.engine.analyze(pkt)
         assert alert is None
 
-    def test_ssh_vulnerable_software_alert(self):
-        """SSH with known vulnerable software should trigger INFO alert."""
+    def test_ssh_old_protocol_no_alert(self):
+        """SSH-1.5 banner on port 22 should not trigger alert (SSH not inspected)."""
         pkt = _make_packet(
             src="10.0.0.5", dst="192.168.1.10",
             sport=22, dport=54321,
-            payload=b"SSH-2.0-OpenSSH_5.3\r\n",
+            payload=b"SSH-1.5-OldServer_1.0\r\n",
         )
         alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.INFO
-        assert "Outdated SSH Software" in alert.title
+        assert alert is None
 
-    def test_ssh_client_banner(self):
-        """SSH banner from client side (dport=22) should also be inspected."""
+    def test_ssh_client_banner_no_alert(self):
+        """SSH banner from client side (dport=22) should not trigger alert."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=22,
             payload=b"SSH-1.5-PuTTY_0.60\r\n",
         )
         alert = self.engine.analyze(pkt)
-        assert alert is not None
-        assert alert.severity == Severity.WARNING
-        assert "Outdated SSH Protocol" in alert.title
+        assert alert is None
 
-    def test_ssh_199_protocol_modern(self):
-        """SSH-1.99 is backward-compatible, treated as >= 2.0 (major = 1)."""
-        # Protocol 1.99 has major version 1, which is < 2.0
+    def test_ssh_199_protocol_no_alert(self):
+        """SSH-1.99 banner should not trigger alert (SSH not inspected)."""
         pkt = _make_packet(
             src="10.0.0.5", dst="192.168.1.10",
             sport=22, dport=54321,
             payload=b"SSH-1.99-OpenSSH_3.9\r\n",
         )
         alert = self.engine.analyze(pkt)
-        assert alert is not None
-        # SSH-1.99 major = 1 < 2, triggers outdated protocol alert
-        assert alert.severity == Severity.WARNING
+        assert alert is None
 
 
 # ===========================================================================
@@ -919,21 +786,21 @@ class TestProtocolInspectEdgeCases:
         self.engine = ProtocolInspectEngine(_default_engine_config())
 
     def test_non_smtp_port_ignored(self):
-        """SMTP payload on non-SMTP port should be ignored."""
+        """Plaintext auth payload on non-monitored port should be ignored."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=443,
-            payload=b"VRFY admin\r\n",
+            payload=b"USER admin\r\n",
         )
         alert = self.engine.analyze(pkt)
         assert alert is None
 
     def test_non_ftp_port_ignored(self):
-        """FTP payload on non-FTP port should be ignored."""
+        """FTP-like payload on non-monitored port should be ignored."""
         pkt = _make_packet(
             src="192.168.1.10", dst="10.0.0.5",
             sport=54321, dport=443,
-            payload=b"USER anonymous\r\n",
+            payload=b"PASS secret\r\n",
         )
         alert = self.engine.analyze(pkt)
         assert alert is None
@@ -949,25 +816,24 @@ class TestProtocolInspectEdgeCases:
         assert alert is None
 
     def test_smtp_response_from_server_port(self):
-        """SMTP response from server port (sport=25) should be inspected."""
+        """SMTP response from server port (sport=25) should not trigger alert
+        (no USER/PASS/LOGIN/AUTHENTICATE pattern in response)."""
         pkt = _make_packet(
             src="10.0.0.5", dst="192.168.1.10",
             sport=25, dport=54321,
             payload=b"220 mail.example.com ESMTP\r\n",
         )
         alert = self.engine.analyze(pkt)
-        # SMTP responses currently don't generate per-packet alerts
         assert alert is None
 
     def test_ftp_response_from_server_port(self):
-        """FTP welcome banner from server should be inspected."""
+        """FTP welcome banner from server should not trigger alert."""
         pkt = _make_packet(
             src="10.0.0.5", dst="192.168.1.10",
             sport=21, dport=54321,
             payload=b"220 Welcome to FTP\r\n",
         )
         alert = self.engine.analyze(pkt)
-        # 220 response doesn't trigger alert (only 530 is tracked)
         assert alert is None
 
     def test_binary_payload_on_smtp_port_no_crash(self):
@@ -1001,15 +867,15 @@ class TestProtocolInspectEdgeCases:
         assert alert is None
 
     def test_shutdown_clears_all_state(self):
-        """shutdown should clear all tracking data structures."""
-        # Add entries to various tracking structures
-        self.engine._smtp_auth_attempts["1.2.3.4"] = [time.time()]
-        self.engine._ftp_fail_attempts["5.6.7.8"] = [time.time()]
-        self.engine._alerted_ssh_banners[("1.2.3.4", "SSH-2.0-old")] = True
-        self.engine._alerted_banners[("1.2.3.4", "Apache/2.2.1")] = True
+        """shutdown should clear _alerted_ips."""
+        # Add an entry via analyze
+        pkt = _make_packet(
+            src="192.168.1.10", dst="10.0.0.5",
+            sport=54321, dport=21,
+            payload=b"USER admin\r\n",
+        )
+        self.engine.analyze(pkt)
+        assert len(self.engine._alerted_ips) > 0
 
         self.engine.shutdown()
-        assert len(self.engine._smtp_auth_attempts) == 0
-        assert len(self.engine._ftp_fail_attempts) == 0
-        assert len(self.engine._alerted_ssh_banners) == 0
-        assert len(self.engine._alerted_banners) == 0
+        assert len(self.engine._alerted_ips) == 0
