@@ -100,8 +100,33 @@ _REGISTRY_ENTRIES: list[TTPInfo] = [
     TTPInfo("T1498",     "Network Denial of Service",          "impact",               IMPACT,               "서비스 거부 공격"),
 ]
 
-# ID → TTPInfo 조회 테이블
+# ID -> TTPInfo 조회 테이블
 TTP_REGISTRY: dict[str, TTPInfo] = {entry.id: entry for entry in _REGISTRY_ENTRIES}
+
+# Kill Chain 단계별 가중치 (ROSCA-inspired)
+PHASE_WEIGHT: dict[str, int] = {
+    RECONNAISSANCE:       1,
+    RESOURCE_DEVELOPMENT: 1,
+    INITIAL_ACCESS:       2,
+    EXECUTION:            2,
+    PERSISTENCE:          2,
+    PRIVILEGE_ESCALATION: 3,
+    DEFENSE_EVASION:      3,
+    CREDENTIAL_ACCESS:    3,
+    DISCOVERY:            2,
+    LATERAL_MOVEMENT:     4,
+    COLLECTION:           3,
+    COMMAND_AND_CONTROL:  4,
+    EXFILTRATION:         5,
+    IMPACT:               5,
+}
+
+# 심각도 팩터
+SEVERITY_FACTOR: dict[str, float] = {
+    "INFO": 0.5,
+    "WARNING": 1.0,
+    "CRITICAL": 2.0,
+}
 
 
 # ---------------------------------------------------------------------------

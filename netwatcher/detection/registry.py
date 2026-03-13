@@ -95,7 +95,16 @@ class EngineRegistry:
                         logger.exception("Failed to instantiate engine: %s", obj.name)
 
     def process_packet(self, packet: Packet) -> list[Alert]:
-        """패킷을 모든 엔진에 분배한다. 알림 목록을 반환한다."""
+        """패킷을 모든 엔진에 분배한다. 알림 목록을 반환한다.
+
+        화이트리스트에 등록된 출발지 IP의 패킷은 탐지 엔진을 건너뛴다.
+        """
+        # 화이트리스트 IP는 모든 탐지 엔진 스킵
+        if self._whitelist is not None and packet.haslayer("IP"):
+            src_ip = packet["IP"].src
+            if self._whitelist.is_ip_whitelisted(src_ip):
+                return []
+
         alerts: list[Alert] = []
         for engine in self._engines:
             if not engine.enabled:

@@ -1,143 +1,255 @@
-"""트래픽 양 이상 탐지: Z-score 기반 통계적 탐지, 신규 장치 탐지."""
+"""트래픽 양 이상 탐지: Adaptive EWMA + Seasonal + MAD 기반 통계적 탐지, 신규 장치 탐지.
+
+작성자: 최진호
+작성일: 2026-03-13
+"""
 
 from __future__ import annotations
 
 import logging
-import statistics
 import time
-from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from scapy.all import IP, Packet
 
 from netwatcher.detection.base import DetectionEngine
+from netwatcher.detection.eviction import BoundedDefaultDict
 from netwatcher.detection.models import Alert, Severity
+from netwatcher.detection.stats import AdaptiveEWMA, MADDetector, SeasonalBuffer
 
 logger = logging.getLogger("netwatcher.detection.engines.traffic_anomaly")
+
+
+@dataclass
+class _HostTickState:
+    """호스트별 현재 틱 내 패킷/바이트 카운터."""
+    packets: int = 0
+    bytes:   int = 0
+
+
+@dataclass
+class _HostStats:
+    """호스트별 EWMA + MAD 추적 상태."""
+    ewma: AdaptiveEWMA = field(default=None)
+    mad:  MADDetector   = field(default=None)
+
+    def __post_init__(self) -> None:
+        if self.ewma is None:
+            self.ewma = AdaptiveEWMA(span=60)
+        if self.mad is None:
+            self.mad = MADDetector(window_size=100)
 
 
 class TrafficAnomalyEngine(DetectionEngine):
     """네트워크 트래픽의 통계적 이상 징후를 탐지한다.
 
-    - Volume Anomaly: 최근 트래픽 양이 평균에서 크게 벗어남 (Z-score 분석)
+    - Per-host Adaptive EWMA: 호스트별 지수 가중 이동 평균으로 트래픽 추세 추적
+    - Seasonal Decomposition: 168-슬롯(주간) 계절성 보정
+    - MAD Anomaly Detection: Median Absolute Deviation 기반 로버스트 이상 탐지
     - New Device: 네트워크에서 처음 관측된 MAC 주소 (인가되지 않은 장치)
+
+    EWMA z-score 또는 MAD z-score 중 하나라도 임계값을 초과하면 알림을 발생시킨다.
     """
 
     name = "traffic_anomaly"
-    description = "네트워크 트래픽 양의 통계적 이상 및 신규 장치의 등장을 탐지합니다."
+    description = "Adaptive EWMA + MAD 기반 호스트별 트래픽 이상 및 신규 장치 탐지."
     description_key = "engines.traffic_anomaly.description"
     mitre_attack_ids = ["T1018", "T1041"]
     config_schema = {
-        "zscore_threshold": {
+        "ewma_span": {
+            "type": int, "default": 60, "min": 5, "max": 1440,
+            "label": "EWMA 스팬(틱 수)",
+            "label_key": "engines.traffic_anomaly.ewma_span.label",
+            "description": "EWMA 평활화 계수 산출을 위한 스팬. alpha = 2/(span+1).",
+            "description_key": "engines.traffic_anomaly.ewma_span.description",
+        },
+        "z_threshold": {
             "type": float, "default": 3.0, "min": 1.5, "max": 10.0,
-            "label": "Z-score 임계값",
-            "label_key": "engines.traffic_anomaly.zscore_threshold.label",
-            "description": "트래픽 편차가 표준편차의 이 배수를 초과하면 이상으로 판단. "
-                           "높을수록 보수적(확실한 이상만), 낮을수록 민감.",
-            "description_key": "engines.traffic_anomaly.zscore_threshold.description",
+            "label": "EWMA Z-score 임계값",
+            "label_key": "engines.traffic_anomaly.z_threshold.label",
+            "description": "EWMA z-score가 이 값을 초과하면 이상으로 판단.",
+            "description_key": "engines.traffic_anomaly.z_threshold.description",
         },
-        "window_seconds": {
-            "type": int, "default": 60, "min": 10, "max": 300,
-            "label": "집계 윈도우(초)",
-            "label_key": "engines.traffic_anomaly.window_seconds.label",
-            "description": "트래픽 양을 계산하는 시간 단위.",
-            "description_key": "engines.traffic_anomaly.window_seconds.description",
+        "mad_threshold": {
+            "type": float, "default": 3.5, "min": 1.5, "max": 10.0,
+            "label": "MAD Z-score 임계값",
+            "label_key": "engines.traffic_anomaly.mad_threshold.label",
+            "description": "MAD modified z-score가 이 값을 초과하면 이상으로 판단.",
+            "description_key": "engines.traffic_anomaly.mad_threshold.description",
         },
-        "min_data_points": {
-            "type": int, "default": 10, "min": 5, "max": 100,
-            "label": "최소 데이터 포인트",
-            "label_key": "engines.traffic_anomaly.min_data_points.label",
-            "description": "Z-score를 계산하기 위한 최소한의 관측치 수.",
-            "description_key": "engines.traffic_anomaly.min_data_points.description",
+        "max_tracked_hosts": {
+            "type": int, "default": 5000, "min": 100, "max": 100_000,
+            "label": "최대 추적 호스트 수",
+            "label_key": "engines.traffic_anomaly.max_tracked_hosts.label",
+            "description": "메모리 제한을 위한 동시 추적 호스트 상한.",
+            "description_key": "engines.traffic_anomaly.max_tracked_hosts.description",
         },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:
         """엔진을 초기화한다."""
         super().__init__(config)
-        self._z_threshold = config.get("zscore_threshold", 3.0)
-        self._window = config.get("window_seconds", 60)
-        self._min_points = config.get("min_data_points", 10)
+        self._ewma_span       = config.get("ewma_span", 60)
+        self._z_threshold     = config.get("z_threshold", 3.0)
+        self._mad_threshold   = config.get("mad_threshold", 3.5)
+        max_hosts             = config.get("max_tracked_hosts", 5000)
 
-        # 윈도우 내 현재 트래픽 카운터
+        # 호스트별 현재 틱 카운터
+        self._tick_counters: BoundedDefaultDict = BoundedDefaultDict(
+            _HostTickState, max_keys=max_hosts,
+        )
+
+        # 호스트별 통계 추적기
+        self._host_stats: BoundedDefaultDict = BoundedDefaultDict(
+            lambda: _HostStats(
+                ewma=AdaptiveEWMA(span=self._ewma_span),
+                mad=MADDetector(window_size=100),
+            ),
+            max_keys=max_hosts,
+        )
+
+        # 전역 계절성 버퍼
+        self._seasonal = SeasonalBuffer()
+
+        # 전역 카운터 (하위 호환)
         self._current_packets = 0
-        self._current_bytes = 0
-        self._last_window_end = time.time()
+        self._current_bytes   = 0
 
-        # 과거 윈도우 기록 (packets)
-        self._history: deque[int] = deque(maxlen=1440)  # 최대 24시간 분량 (1분 윈도우 기준)
+        # 신규 장치 탐지
         self._new_devices_alerted: set[str] = set()
 
     def analyze(self, packet: Packet) -> Alert | None:
-        """패킷을 카운팅하고 신규 장치를 탐지한다."""
+        """패킷을 호스트별로 카운팅하고 신규 장치를 탐지한다."""
         self._current_packets += 1
-        self._current_bytes += len(packet)
+        pkt_len = len(packet)
+        self._current_bytes += pkt_len
+
+        # 호스트별 틱 카운터 갱신
+        if packet.haslayer(IP):
+            src_ip = packet[IP].src
+            state  = self._tick_counters[src_ip]
+            state.packets += 1
+            state.bytes   += pkt_len
 
         # 신규 장치 탐지 (등록된 장치가 아닌 경우)
         src_mac = getattr(packet, "src", None)
         if src_mac and src_mac != "ff:ff:ff:ff:ff:ff":
             if self.whitelist and src_mac not in self._new_devices_alerted:
-                # 화이트리스트(또는 Inventory)에 없는 장치인지 확인
-                # 여기서는 단순함을 위해 첫 1회 관측 시 INFO 발생
                 if not self.whitelist.is_whitelisted(source_mac=src_mac):
                     self._new_devices_alerted.add(src_mac)
-                    src_ip = packet[IP].src if packet.haslayer(IP) else None
+                    src_ip_val = packet[IP].src if packet.haslayer(IP) else None
                     return Alert(
                         engine=self.name,
                         severity=Severity.INFO,
                         title="New Network Device Detected",
                         title_key="engines.traffic_anomaly.alerts.new_device.title",
                         description=(
-                            f"A new device with MAC {src_mac} (IP: {src_ip or 'unknown'}) "
+                            f"A new device with MAC {src_mac} "
+                            f"(IP: {src_ip_val or 'unknown'}) "
                             "was observed for the first time on the network."
                         ),
                         description_key="engines.traffic_anomaly.alerts.new_device.description",
-                        source_ip=src_ip,
+                        source_ip=src_ip_val,
                         source_mac=src_mac,
                         confidence=0.5,
-                        metadata={"mac": src_mac, "ip": src_ip},
+                        metadata={"mac": src_mac, "ip": src_ip_val},
                     )
 
         return None
 
     def on_tick(self, timestamp: float) -> list[Alert]:
-        """주기적으로 트래픽 양을 평가하여 통계적 이상을 탐지한다."""
+        """주기적으로 호스트별 트래픽을 평가하여 통계적 이상을 탐지한다.
+
+        1. 각 활성 호스트의 틱 내 패킷 수 확보
+        2. EWMA 및 MAD 갱신
+        3. 계절 보정 적용 (준비 시)
+        4. z-score 임계값 초과 시 알림 생성
+        5. 틱 카운터 리셋
+        6. 빈 키 정리
+        """
         alerts = []
-        now = time.time()
+        now = datetime.now(timezone.utc)
+        hour_of_week = now.weekday() * 24 + now.hour
 
-        if now - self._last_window_end >= self._window:
-            # 윈도우 종료 시점
-            packets = self._current_packets
-            self._current_packets = 0
-            self._current_bytes = 0
-            self._last_window_end = now
+        # 활성 호스트 목록 스냅샷 (반복 중 dict 변경 방지)
+        active_hosts = list(self._tick_counters.keys())
 
-            if len(self._history) >= self._min_points:
-                avg = statistics.mean(self._history)
-                std = statistics.stdev(self._history)
-                
-                if std > 0:
-                    z_score = (packets - avg) / std
-                    if z_score > self._z_threshold:
-                        alerts.append(Alert(
-                            engine=self.name,
-                            severity=Severity.WARNING,
-                            title="Traffic Volume Anomaly Detected",
-                            title_key="engines.traffic_anomaly.alerts.volume.title",
-                            description=(
-                                f"Traffic spike detected: {packets} packets in {self._window}s "
-                                f"(Z-score: {z_score:.2f}, Avg: {avg:.1f})."
-                            ),
-                            description_key="engines.traffic_anomaly.alerts.volume.description",
-                            confidence=0.7,
-                            metadata={"packets": packets, "z_score": round(z_score, 2), "avg": round(avg, 1)},
-                        ))
-            
-            self._history.append(packets)
+        for src_ip in active_hosts:
+            tick = self._tick_counters.get(src_ip)
+            if tick is None:
+                continue
+
+            packets = tick.packets
+            if packets == 0:
+                continue
+
+            value = float(packets)
+
+            # 계절 보정: 계절 계수로 나누어 비계절화
+            seasonal_factor = self._seasonal.get_factor(hour_of_week)
+            adjusted_value = value / seasonal_factor if seasonal_factor > 0.0 else value
+
+            # EWMA 및 MAD 갱신
+            stats = self._host_stats[src_ip]
+            ewma_z = stats.ewma.update(adjusted_value)
+            mad_z  = stats.mad.update(adjusted_value)
+
+            # 계절 버퍼 갱신 (원본 값)
+            self._seasonal.update(hour_of_week, value)
+
+            # 임계값 판정
+            triggered_ewma = abs(ewma_z) > self._z_threshold
+            triggered_mad  = abs(mad_z) > self._mad_threshold
+
+            if triggered_ewma or triggered_mad:
+                # 가장 높은 z-score 기준으로 보고
+                primary_z = max(abs(ewma_z), abs(mad_z))
+                method    = "EWMA" if abs(ewma_z) >= abs(mad_z) else "MAD"
+                severity  = (
+                    Severity.CRITICAL if primary_z > self._z_threshold * 2
+                    else Severity.WARNING
+                )
+                confidence = min(0.95, 0.5 + primary_z * 0.05)
+
+                alerts.append(Alert(
+                    engine=self.name,
+                    severity=severity,
+                    title="Traffic Volume Anomaly Detected",
+                    title_key="engines.traffic_anomaly.alerts.volume.title",
+                    description=(
+                        f"Traffic anomaly for {src_ip}: {packets} packets "
+                        f"({method} z={primary_z:.2f}, "
+                        f"EWMA z={ewma_z:.2f}, MAD z={mad_z:.2f})."
+                    ),
+                    description_key="engines.traffic_anomaly.alerts.volume.description",
+                    source_ip=src_ip,
+                    confidence=confidence,
+                    metadata={
+                        "packets": packets,
+                        "ewma_z_score": round(ewma_z, 2),
+                        "mad_z_score": round(mad_z, 2),
+                        "method": method,
+                        "seasonal_factor": round(seasonal_factor, 3),
+                        "ewma_mean": round(stats.ewma.mean, 1),
+                    },
+                ))
+
+        # 글로벌 카운터 리셋
+        self._current_packets = 0
+        self._current_bytes   = 0
+
+        # 틱 카운터 전체 리셋
+        self._tick_counters.clear()
 
         return alerts
 
     def shutdown(self) -> None:
         """엔진 상태를 정리한다."""
-        self._history.clear()
+        self._tick_counters.clear()
+        self._host_stats.clear()
+        self._seasonal = SeasonalBuffer()
         self._new_devices_alerted.clear()
+        self._current_packets = 0
+        self._current_bytes   = 0

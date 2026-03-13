@@ -96,6 +96,90 @@ class TestAlertCorrelator:
         assert len(incident.kill_chain_stages) >= 2
 
 
+class TestKillChainScoring:
+    def setup_method(self):
+        self.correlator = AlertCorrelator(time_window=300)
+
+    def test_compute_kc_score_empty(self):
+        """KC 상태가 없으면 점수는 0이어야 한다."""
+        assert self.correlator.compute_kc_score("10.0.0.99") == 0.0
+
+    def test_update_kc_state_tracks_phase(self):
+        """_update_kc_state가 호스트별 단계 상태를 기록한다."""
+        now = 1000.0
+        self.correlator._update_kc_state("10.0.0.1", "discovery", "WARNING", now)
+        state = self.correlator._kc_state["10.0.0.1"]
+        assert "discovery" in state
+        count, sev, ts = state["discovery"]
+        assert count == 1
+        assert sev == "WARNING"
+        assert ts == now
+
+    def test_kc_state_increments_count(self):
+        """동일 단계 반복 시 count가 증가한다."""
+        self.correlator._update_kc_state("10.0.0.1", "discovery", "WARNING", 1000.0)
+        self.correlator._update_kc_state("10.0.0.1", "discovery", "WARNING", 1001.0)
+        count, _, _ = self.correlator._kc_state["10.0.0.1"]["discovery"]
+        assert count == 2
+
+    def test_kc_state_upgrades_severity(self):
+        """동일 단계에서 더 높은 심각도가 반영된다."""
+        self.correlator._update_kc_state("10.0.0.1", "exfiltration", "WARNING", 1000.0)
+        self.correlator._update_kc_state("10.0.0.1", "exfiltration", "CRITICAL", 1001.0)
+        _, sev, _ = self.correlator._kc_state["10.0.0.1"]["exfiltration"]
+        assert sev == "CRITICAL"
+
+    def test_kc_score_increases_with_more_phases(self):
+        """다양한 킬체인 단계가 활성화될수록 점수가 상승한다."""
+        now = 1000.0
+        self.correlator._update_kc_state("10.0.0.1", "discovery", "WARNING", now)
+        score1 = self.correlator.compute_kc_score("10.0.0.1", now)
+
+        self.correlator._update_kc_state("10.0.0.1", "lateral_movement", "WARNING", now)
+        score2 = self.correlator.compute_kc_score("10.0.0.1", now)
+
+        self.correlator._update_kc_state("10.0.0.1", "exfiltration", "CRITICAL", now)
+        score3 = self.correlator.compute_kc_score("10.0.0.1", now)
+
+        assert score1 < score2 < score3
+
+    def test_kc_score_decays_over_time(self):
+        """시간이 지남에 따라 점수가 감쇠한다."""
+        self.correlator._update_kc_state("10.0.0.1", "exfiltration", "CRITICAL", 1000.0)
+        score_fresh = self.correlator.compute_kc_score("10.0.0.1", 1000.0)
+        score_old = self.correlator.compute_kc_score("10.0.0.1", 1000.0 + 7200.0)
+        assert score_old < score_fresh
+
+    def test_kc_score_capped_at_one(self):
+        """점수는 1.0을 초과하지 않는다."""
+        now = 1000.0
+        for phase in ["discovery", "lateral_movement", "exfiltration",
+                       "command_and_control", "impact", "credential_access"]:
+            self.correlator._update_kc_state("10.0.0.1", phase, "CRITICAL", now)
+        score = self.correlator.compute_kc_score("10.0.0.1", now)
+        assert score <= 1.0
+
+    def test_kc_score_triggers_incident_via_process_alert(self):
+        """높은 KC 점수가 kill_chain_score 규칙으로 인시던트를 생성한다."""
+        corr = AlertCorrelator(time_window=300)
+        corr._kc_score_threshold = 0.05
+        phases = [
+            ("port_scan", "discovery"),
+            ("lateral_movement", "lateral_movement"),
+            ("data_exfil", "exfiltration"),
+        ]
+        incident = None
+        for i, (engine, _) in enumerate(phases):
+            a = make_alert(engine, "10.0.0.1", severity=Severity.CRITICAL)
+            incident = corr.process_alert(a, event_id=i + 1)
+        assert incident is not None
+
+    def test_unknown_phase_ignored(self):
+        """알 수 없는 단계는 KC 상태에 추가되지 않는다."""
+        self.correlator._update_kc_state("10.0.0.1", "unknown", "WARNING", 1000.0)
+        assert "unknown" not in self.correlator._kc_state.get("10.0.0.1", {})
+
+
 class TestRansomwareLateralKillChain:
     def test_ransomware_lateral_mapped_to_lateral_movement_stage(self):
         """ransomware_lateral 엔진은 킬체인 lateral_movement 단계로 매핑되어야 한다."""

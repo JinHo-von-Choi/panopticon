@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from netwatcher.detection.eviction import BoundedDefaultDict
 from netwatcher.detection.attack_mapping import (
     KILL_CHAIN_ORDER as _ATK_KILL_CHAIN_ORDER,
+    PHASE_WEIGHT as _PHASE_WEIGHT,
+    SEVERITY_FACTOR as _SEVERITY_FACTOR,
     ttp_to_kill_chain_phase,
 )
 from netwatcher.detection.models import Alert, Severity
@@ -107,6 +111,12 @@ class AlertCorrelator:
         # 버스트 탐지용 알림 횟수 추적
         self._alert_counts: dict[str, deque[float]] = defaultdict(deque)
 
+        # Kill Chain 스코어링: host_ip -> {phase: (count, max_severity_str, last_seen)}
+        self._kc_state: dict[str, dict[str, tuple[int, str, float]]] = BoundedDefaultDict(dict, max_keys=5000)
+        self._kc_half_life: float = 3600.0  # 1시간
+        self._kc_score_threshold: float = 0.5
+        self._kc_critical_threshold: float = 0.7
+
     def set_incident_repo(self, repo) -> None:
         """생성 후 인시던트 저장소를 주입한다."""
         self._incident_repo = repo
@@ -132,6 +142,9 @@ class AlertCorrelator:
 
         self._recent_alerts[source].append((now, alert_info))
         self._alert_counts[source].append(now)
+
+        # Kill Chain state 갱신
+        self._update_kc_state(source, _kc_stage, alert.severity.value, now)
 
         # 오래된 항목 제거
         cutoff = now - self._time_window
@@ -177,6 +190,18 @@ class AlertCorrelator:
                 incident = self._create_or_update_incident(
                     source, recent, "burst"
                 )
+
+        # 규칙 4: Kill Chain 스코어링 기반 인시던트 승격
+        kc_score = self.compute_kc_score(source, now)
+        if kc_score >= self._kc_score_threshold:
+            kc_phases = list(self._kc_state.get(source, {}).keys())
+            severity = Severity.CRITICAL if kc_score >= self._kc_critical_threshold else Severity.WARNING
+            if incident is None:
+                incident = self._create_or_update_incident(
+                    source, recent, "kill_chain_score", kc_phases
+                )
+            if incident and severity > incident.severity:
+                incident.severity = severity
 
         return incident
 
@@ -337,6 +362,43 @@ class AlertCorrelator:
                         pass
                 return True
         return False
+
+    def _update_kc_state(
+        self, source: str, phase: str, severity_str: str, now: float
+    ) -> None:
+        """호스트별 Kill Chain 단계 상태를 갱신한다."""
+        if phase not in _PHASE_WEIGHT:
+            return
+        prev = self._kc_state[source].get(phase)
+        count = (prev[0] + 1) if prev else 1
+        old_sev = prev[1] if prev else severity_str
+        max_sev = severity_str if _SEVERITY_FACTOR.get(severity_str, 0) >= _SEVERITY_FACTOR.get(old_sev, 0) else old_sev
+        self._kc_state[source][phase] = (count, max_sev, now)
+
+    def compute_kc_score(self, source: str, now: float | None = None) -> float:
+        """ROSCA 방식 Kill Chain 위협 점수를 계산한다.
+
+        KC_score = sum(phase_weight * severity_factor * recency_decay) / max_possible
+        recency_decay = 2^(-(now - last_seen) / half_life)
+        """
+        phases = self._kc_state.get(source)
+        if not phases:
+            return 0.0
+        if now is None:
+            now = time.time()
+
+        total = 0.0
+        for phase, (count, sev_str, last_seen) in phases.items():
+            pw = _PHASE_WEIGHT.get(phase, 1)
+            sf = _SEVERITY_FACTOR.get(sev_str, 0.5)
+            age = max(now - last_seen, 0.0)
+            decay = math.pow(2, -(age / self._kc_half_life))
+            total += pw * sf * decay
+
+        max_possible = sum(_PHASE_WEIGHT.values()) * max(_SEVERITY_FACTOR.values())
+        if max_possible == 0:
+            return 0.0
+        return min(total / max_possible, 1.0)
 
     def get_incident(self, incident_id: int) -> dict | None:
         """ID로 단일 인시던트를 조회하여 딕셔너리로 반환한다."""
