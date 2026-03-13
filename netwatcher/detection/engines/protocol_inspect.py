@@ -9,6 +9,7 @@ from typing import Any
 from scapy.all import IP, Packet, TCP
 
 from netwatcher.detection.base import DetectionEngine
+from netwatcher.detection.eviction import LRUSet
 from netwatcher.detection.models import Alert, Severity
 
 logger = logging.getLogger("netwatcher.detection.engines.protocol_inspect")
@@ -40,7 +41,7 @@ class ProtocolInspectEngine(DetectionEngine):
         """엔진을 초기화한다."""
         super().__init__(config)
         self._detect_auth = config.get("detect_plain_auth", True)
-        self._alerted_ips: set[str] = set()
+        self._alerted_ips: LRUSet = LRUSet(maxlen=10000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """L7 페이로드를 분석하여 프로토콜별 위협 지표를 추출한다."""

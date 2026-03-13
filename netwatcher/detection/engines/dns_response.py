@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict, deque
+
+from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import DNS, DNSQR, DNSRR, IP, Packet
@@ -143,6 +145,9 @@ class DNSResponseEngine(DetectionEngine):
                         metadata={"domain": domain, "ip_count": len(unique_ips), "ips": list(unique_ips)[:10]},
                     ))
 
+        prune_empty_keys(self._nx_counts)
+        prune_empty_keys(self._ff_ips)
+        prune_expired_entries(self._alerted, max_age=self._window * 2)
         return alerts
 
     def shutdown(self) -> None:

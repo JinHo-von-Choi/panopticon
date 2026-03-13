@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import statistics
 import time
-from collections import defaultdict, deque
+from collections import deque
+
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, Packet, TCP
@@ -54,7 +56,7 @@ class HTTPSuspiciousEngine(DetectionEngine):
         self._max_jitter = config.get("max_jitter_pct", 0.15)
 
         # (src_ip, host) -> deque of timestamps
-        self._connections: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+        self._connections = BoundedDefaultDict(deque, max_keys=5000)
         self._alerted: dict[str, float] = {}
 
     def analyze(self, packet: Packet) -> Alert | None:
@@ -166,6 +168,8 @@ class HTTPSuspiciousEngine(DetectionEngine):
             while len(times) > self._beacon_threshold * 2:
                 times.popleft()
 
+        prune_empty_keys(self._connections)
+        prune_expired_entries(self._alerted, max_age=3600)
         return alerts
 
     def shutdown(self) -> None:

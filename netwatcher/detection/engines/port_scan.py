@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict, deque
+
+from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, TCP, Packet
@@ -159,6 +161,8 @@ class PortScanEngine(DetectionEngine):
                         },
                     ))
 
+        prune_empty_keys(self._scans)
+        prune_expired_entries(self._alerted, max_age=self._window * 2)
         return alerts
 
     def shutdown(self) -> None:

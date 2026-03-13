@@ -6,6 +6,8 @@ import logging
 import statistics
 import time
 from collections import defaultdict, deque
+
+from netwatcher.detection.eviction import BoundedDefaultDict
 from typing import Any
 
 from scapy.all import IP, Packet
@@ -63,7 +65,9 @@ class BehaviorProfileEngine(DetectionEngine):
         self._start_time = time.time()
 
         # src_ip -> feature -> deque of values
-        self._profiles: dict[str, dict[str, deque[int]]] = defaultdict(lambda: defaultdict(lambda: deque(maxlen=100)))
+        self._profiles = BoundedDefaultDict(
+            lambda: defaultdict(lambda: deque(maxlen=100)), max_keys=5000
+        )
         # 현재 윈도우 카운터
         self._current: dict[str, dict[str, set[Any]]] = defaultdict(lambda: defaultdict(set))
         self._last_tick = time.time()

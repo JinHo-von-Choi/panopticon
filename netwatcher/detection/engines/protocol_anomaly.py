@@ -7,6 +7,8 @@ from typing import Any
 
 from scapy.all import IP, TCP, Packet
 
+from netwatcher.detection.eviction import LRUSet
+
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity
 
@@ -48,7 +50,7 @@ class ProtocolAnomalyEngine(DetectionEngine):
         super().__init__(config)
         self._min_ttl = config.get("min_ttl", 10)
         self._detect_reserved = config.get("detect_reserved_bits", True)
-        self._alerted_ips: set[str] = set()
+        self._alerted_ips: LRUSet = LRUSet(maxlen=10000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """IP 및 TCP 헤더의 이상 징후를 분석한다."""

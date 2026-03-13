@@ -6,6 +6,8 @@ import logging
 import math
 import time
 from collections import defaultdict, deque
+
+from netwatcher.detection.eviction import LRUSet, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import DNS, DNSQR, IP, Packet
@@ -69,7 +71,7 @@ class DNSAnomalyEngine(DetectionEngine):
 
         # src_ip -> deque of timestamps
         self._query_times: dict[str, deque[float]] = defaultdict(deque)
-        self._alerted_domains: set[str] = set()
+        self._alerted_domains: LRUSet = LRUSet(maxlen=10000)
         self._flood_alerted: dict[str, float] = {}
 
     def analyze(self, packet: Packet) -> Alert | None:
@@ -170,12 +172,8 @@ class DNSAnomalyEngine(DetectionEngine):
                         metadata={"query_count": len(times)},
                     ))
 
-        # 정리: 오래된 IP 데이터 제거
-        if len(self._query_times) > 1000:
-            inactive = [ip for ip, times in self._query_times.items() if not times]
-            for ip in inactive:
-                self._query_times.pop(ip, None)
-
+        prune_empty_keys(self._query_times)
+        prune_expired_entries(self._flood_alerted, max_age=120)
         return alerts
 
     def shutdown(self) -> None:

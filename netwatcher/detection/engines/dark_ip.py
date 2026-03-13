@@ -6,6 +6,8 @@ import ipaddress
 import logging
 import time
 from collections import defaultdict
+
+from netwatcher.detection.eviction import prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, Packet
@@ -174,9 +176,13 @@ class DarkIPEngine(DetectionEngine):
             },
         )
 
+    def on_tick(self, timestamp: float) -> list[Alert]:
+        """만료된 알림 쿨다운 항목을 정리한다."""
+        prune_expired_entries(self._alerted, max_age=self._cooldown * 2)
+        return []
+
     def shutdown(self) -> None:
         """엔진 상태를 초기화한다."""
         self._alerted.clear()
-        # 동적 학습 결과는 보존하지 않음 — 정적 설정만 복원
         self._known_ips = set(self._static_hosts)
         self._start_time = time.time()

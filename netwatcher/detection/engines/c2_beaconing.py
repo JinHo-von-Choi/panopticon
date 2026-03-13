@@ -6,7 +6,7 @@ import logging
 import math
 import statistics
 import time
-from collections import defaultdict
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, TCP, UDP, Packet
@@ -96,9 +96,7 @@ class C2BeaconingEngine(DetectionEngine):
         self._cooldown: int = config.get("cooldown_seconds", 3600)
 
         # (src_ip, dst_ip, dst_port) -> [last_ts, iat_1, iat_2, ...]
-        # 첫 번째 원소는 마지막 패킷 타임스탬프, 나머지는 IAT 값
-        self._sessions: dict[tuple[str, str, int], list[float]] = defaultdict(list)
-        # (src_ip, dst_ip, dst_port) -> 마지막 알림 시각
+        self._sessions: BoundedDefaultDict = BoundedDefaultDict(list, max_keys=5000)
         self._alerted: dict[tuple[str, str, int], float] = {}
 
     # ------------------------------------------------------------------
@@ -183,6 +181,12 @@ class C2BeaconingEngine(DetectionEngine):
                 "sample_count": len(iats),
             },
         )
+
+    def on_tick(self, timestamp: float) -> list[Alert]:
+        """세션/알림 데이터를 주기적으로 정리한다."""
+        prune_empty_keys(self._sessions)
+        prune_expired_entries(self._alerted, max_age=self._cooldown * 2)
+        return []
 
     def shutdown(self) -> None:
         """엔진 상태를 초기화한다."""
