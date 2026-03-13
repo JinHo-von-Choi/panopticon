@@ -51,6 +51,18 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
         from netwatcher.web.routes.engines import create_engines_router
         app.include_router(create_engines_router(registry, yaml_editor, flow_processor=flow_processor), prefix=api_prefix)
 
+    if correlator:
+        from netwatcher.web.routes.incidents import create_incidents_router
+        app.include_router(create_incidents_router(correlator), prefix=api_prefix)
+
+    if block_manager:
+        from netwatcher.web.routes.blocks import create_blocks_router
+        app.include_router(create_blocks_router(block_manager, whitelist), prefix=api_prefix)
+
+    if signature_engine:
+        from netwatcher.web.routes.rules import create_rules_router
+        app.include_router(create_rules_router(signature_engine), prefix=api_prefix)
+
     if ai_analyzer:
         from netwatcher.web.routes.ai_analyzer import create_ai_analyzer_router
         app.include_router(create_ai_analyzer_router(ai_analyzer), prefix=api_prefix)
