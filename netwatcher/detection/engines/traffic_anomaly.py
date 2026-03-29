@@ -56,6 +56,7 @@ class TrafficAnomalyEngine(DetectionEngine):
     name = "traffic_anomaly"
     description = "Adaptive EWMA + MAD 기반 호스트별 트래픽 이상 및 신규 장치 탐지."
     description_key = "engines.traffic_anomaly.description"
+    engine_type = "cpu"
     mitre_attack_ids = ["T1018", "T1041"]
     config_schema = {
         "ewma_span": {
@@ -244,6 +245,57 @@ class TrafficAnomalyEngine(DetectionEngine):
         self._tick_counters.clear()
 
         return alerts
+
+    def export_state(self) -> dict | None:
+        """호스트별 EWMA/MAD 통계 및 계절성 상태를 직렬화한다."""
+        host_stats = {}
+        for src_ip, stats in self._host_stats.items():
+            host_stats[src_ip] = {
+                "ewma": {
+                    "alpha": stats.ewma._alpha,
+                    "mu": stats.ewma._mu,
+                    "sigma": stats.ewma._sigma,
+                    "count": stats.ewma._count,
+                },
+                "mad_window": list(stats.mad._window),
+            }
+
+        return {
+            "host_stats": host_stats,
+            "seasonal": {
+                "sums": list(self._seasonal._sums),
+                "counts": list(self._seasonal._counts),
+                "total_updates": self._seasonal._total_updates,
+            },
+            "new_devices_alerted": list(self._new_devices_alerted),
+        }
+
+    def import_state(self, state: dict) -> None:
+        """이전에 내보낸 트래픽 이상 탐지 상태를 복원한다."""
+        for src_ip, data in state.get("host_stats", {}).items():
+            stats = self._host_stats[src_ip]
+            ewma_data = data.get("ewma", {})
+            stats.ewma._alpha = float(ewma_data.get("alpha", stats.ewma._alpha))
+            stats.ewma._mu = float(ewma_data.get("mu", 0.0))
+            stats.ewma._sigma = float(ewma_data.get("sigma", 0.0))
+            stats.ewma._count = int(ewma_data.get("count", 0))
+            mad_window = data.get("mad_window", [])
+            stats.mad._window.clear()
+            for v in mad_window:
+                stats.mad._window.append(float(v))
+
+        seasonal = state.get("seasonal", {})
+        if seasonal:
+            sums = seasonal.get("sums", [])
+            counts = seasonal.get("counts", [])
+            if len(sums) == 168:
+                self._seasonal._sums = [float(s) for s in sums]
+            if len(counts) == 168:
+                self._seasonal._counts = [int(c) for c in counts]
+            self._seasonal._total_updates = int(seasonal.get("total_updates", 0))
+
+        for mac in state.get("new_devices_alerted", []):
+            self._new_devices_alerted.add(mac)
 
     def shutdown(self) -> None:
         """엔진 상태를 정리한다."""

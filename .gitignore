@@ -6,6 +6,9 @@ data/
 *.pcap
 *.cap
 *.pcapng
+*.db
+*.sqlite
+*.sqlite3
 
 # ============================================================
 # 환경 변수 / 시크릿 (절대 커밋 금지)
@@ -92,6 +95,23 @@ CLAUDE.md
 .github/copilot-instructions.md
 .aider*
 .continue/
+
+# ============================================================
+# 내부 도구 / 플러그인 (절대 커밋 금지)
+# ============================================================
+# Claude superpowers 플러그인
+.github/skills/
+.github/agents/
+**/superpowers/
+**/.superpowers/
+# gstack 관련
+gstack/
+.gstack/
+**/gstack/**
+# 기타 개발 워크플로우 산출물
+.gemini/
+GEMINI.md
+AGENTS.md
 
 # ============================================================
 # 설정 백업 (ruamel.yaml 자동 생성)

@@ -57,7 +57,7 @@ class HTTPSuspiciousEngine(DetectionEngine):
 
         # (src_ip, host) -> deque of timestamps
         self._connections = BoundedDefaultDict(deque, max_keys=5000)
-        self._alerted: dict[str, float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """HTTP 패킷(추정)에서 스캐너 및 주기적 접속을 분석한다."""

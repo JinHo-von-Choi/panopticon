@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict, deque
 
-from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, TCP, Packet
@@ -51,6 +51,13 @@ class PortScanEngine(DetectionEngine):
             "description": "비정상 TCP 플래그(NULL, XMAS 등)를 가진 패킷이 이 횟수를 초과하면 즉시 경고.",
             "description_key": "engines.port_scan.stealth_threshold.description",
         },
+        "internal_multiplier": {
+            "type": float, "default": 1.5, "min": 1.0, "max": 5.0,
+            "label": "내부 IP 임계값 배수",
+            "label_key": "engines.port_scan.internal_multiplier.label",
+            "description": "내부망 간 통신 시 포트 스캔 임계값에 적용할 배수. 내부자 위협 탐지 민감도를 제어한다.",
+            "description_key": "engines.port_scan.internal_multiplier.description",
+        },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -59,12 +66,13 @@ class PortScanEngine(DetectionEngine):
         self._threshold = config.get("threshold", 15)
         self._window = config.get("window_seconds", 60)
         self._stealth_threshold = config.get("stealth_threshold", 3)
+        self._internal_multiplier = config.get("internal_multiplier", 1.5)
 
         # source_ip -> deque of (timestamp, dst_port)
         self._scans: dict[str, deque[tuple[float, int]]] = defaultdict(deque)
         # source_ip -> stealth_packet_count
-        self._stealth_counts: dict[str, int] = defaultdict(int)
-        self._alerted: dict[str, float] = {}
+        self._stealth_counts: BoundedDefaultDict = BoundedDefaultDict(int, max_keys=10_000)
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """TCP 패킷에서 비정상 플래그 또는 대량의 포트 접속 시도를 탐지한다."""
@@ -131,7 +139,7 @@ class PortScanEngine(DetectionEngine):
             
             # 내부망 간 통신 여부 확인
             is_internal = is_private_ip(src_ip)
-            effective_threshold = self._threshold * 3 if is_internal else self._threshold
+            effective_threshold = int(self._threshold * self._internal_multiplier) if is_internal else self._threshold
 
             if len(unique_ports) >= effective_threshold:
                 if self.is_whitelisted(source_ip=src_ip):
@@ -164,6 +172,33 @@ class PortScanEngine(DetectionEngine):
         prune_empty_keys(self._scans)
         prune_expired_entries(self._alerted, max_age=self._window * 2)
         return alerts
+
+    def export_state(self) -> dict | None:
+        """포트 스캔 추적 상태를 직렬화한다."""
+        scans = {}
+        for src_ip, dq in self._scans.items():
+            scans[src_ip] = list(dq)  # list of (timestamp, dst_port)
+
+        return {
+            "scans": scans,
+            "stealth_counts": dict(self._stealth_counts),
+            "alerted": dict(self._alerted),
+        }
+
+    def import_state(self, state: dict) -> None:
+        """이전에 내보낸 포트 스캔 상태를 복원한다."""
+        for src_ip, entries in state.get("scans", {}).items():
+            dq = deque()
+            for entry in entries:
+                if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                    dq.append((float(entry[0]), int(entry[1])))
+            self._scans[src_ip] = dq
+
+        for src_ip, count in state.get("stealth_counts", {}).items():
+            self._stealth_counts[src_ip] = int(count)
+
+        for key, ts in state.get("alerted", {}).items():
+            self._alerted[key] = float(ts)
 
     def shutdown(self) -> None:
         """엔진 데이터를 초기화한다."""

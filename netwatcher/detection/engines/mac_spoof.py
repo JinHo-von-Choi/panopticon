@@ -7,6 +7,8 @@ import time
 from collections import defaultdict, deque
 from typing import Any
 
+from netwatcher.detection.eviction import BoundedDefaultDict
+
 from scapy.all import ARP, IP, Packet
 
 from netwatcher.detection.base import DetectionEngine
@@ -85,7 +87,7 @@ class MACSpoofEngine(DetectionEngine):
 
         # MAC -> (timestamp, ip) deque
         self._mac_ips: dict[str, deque[tuple[float, str]]] = defaultdict(deque)
-        self._multi_ip_alerted: dict[str, float] = {}
+        self._multi_ip_alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
         self._local_admin_alerted: set[str] = set()
 
     def analyze(self, packet: Packet) -> Alert | None:

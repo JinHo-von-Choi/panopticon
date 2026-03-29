@@ -26,6 +26,7 @@ class SegmentViolationEngine(DetectionEngine):
     name = "segment_violation"
     description = "설정된 네트워크 세그먼트 격리 정책을 위반하는 트래픽을 탐지합니다."
     description_key = "engines.segment_violation.description"
+    engine_type = "fast"
     mitre_attack_ids = ["T1599"]   # Network Boundary Bridging
     requires_span = True
     config_schema = {

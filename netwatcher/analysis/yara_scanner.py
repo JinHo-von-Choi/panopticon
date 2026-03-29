@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -132,6 +133,13 @@ class YaraScanner:
         except yara.Error as exc:
             logger.error("YARA in-memory scan failed: %s", exc)
             return []
+
+    async def scan_bytes_async(self, data: bytes) -> list[dict[str, Any]]:
+        """인메모리 바이트를 비동기로 스캔한다.
+
+        CPU-bound 작업이므로 asyncio.to_thread로 위임한다.
+        """
+        return await asyncio.to_thread(self.scan_bytes, data)
 
     # ------------------------------------------------------------------
     # 내부 헬퍼

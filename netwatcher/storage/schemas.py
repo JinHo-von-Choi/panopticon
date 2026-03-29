@@ -121,6 +121,34 @@ INCIDENTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_incidents_resolved ON incidents(resolved) WHERE resolved = FALSE;",
 ]
 
+USERS_TABLE = """
+CREATE TABLE IF NOT EXISTS users (
+    id              SERIAL          PRIMARY KEY,
+    username        VARCHAR(100)    UNIQUE NOT NULL,
+    password_hash   VARCHAR(200)    NOT NULL,
+    role            VARCHAR(20)     NOT NULL DEFAULT 'viewer',
+    created_at      TIMESTAMPTZ     DEFAULT NOW(),
+    last_login      TIMESTAMPTZ
+);
+"""
+
+AUDIT_LOG_TABLE = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          SERIAL          PRIMARY KEY,
+    user_id     VARCHAR(100),
+    action      VARCHAR(50)     NOT NULL,
+    resource    VARCHAR(200),
+    details     JSONB,
+    ip          VARCHAR(45),
+    created_at  TIMESTAMPTZ     DEFAULT NOW()
+);
+"""
+
+AUDIT_LOG_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id);",
+]
+
 ALL_SCHEMAS = [
     EVENTS_TABLE,
     *EVENTS_INDEXES,
@@ -132,4 +160,7 @@ ALL_SCHEMAS = [
     *TRAFFIC_STATS_INDEXES,
     INCIDENTS_TABLE,
     *INCIDENTS_INDEXES,
+    USERS_TABLE,
+    AUDIT_LOG_TABLE,
+    *AUDIT_LOG_INDEXES,
 ]

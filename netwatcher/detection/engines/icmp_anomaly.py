@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict, deque
 
-from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import ICMP, IP, Packet
@@ -64,7 +64,7 @@ class ICMPAnomalyEngine(DetectionEngine):
         self._requests: dict[str, deque[tuple[float, str]]] = defaultdict(deque)
         # (src_ip, dst_ip) -> deque of timestamp
         self._floods: dict[tuple[str, str], deque[float]] = defaultdict(deque)
-        self._alerted: dict[str, float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """ICMP 패킷에서 정찰 활동 및 플러딩을 탐지한다."""

@@ -14,3 +14,5 @@ prometheus-client==0.21.1
 ruamel.yaml>=0.18.0
 alembic>=1.13.0
 psycopg2-binary>=2.9.0
+redis[hiredis]>=5.0.0
+structlog>=24.0.0

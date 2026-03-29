@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict
 
-from netwatcher.detection.eviction import prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, Packet
@@ -53,9 +53,9 @@ class DataExfilEngine(DetectionEngine):
         self._window = config.get("window_seconds", 300)
 
         # (src_ip, dst_ip) -> total_bytes
-        self._outbound_bytes: dict[tuple[str, str], int] = defaultdict(int)
+        self._outbound_bytes: BoundedDefaultDict = BoundedDefaultDict(int, max_keys=10_000)
         self._last_reset = time.time()
-        self._alerted: dict[tuple[str, str], float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """패킷 크기를 합산하여 외부 전송량을 추적한다."""

@@ -7,7 +7,7 @@ import logging
 import time
 from collections import defaultdict
 
-from netwatcher.detection.eviction import prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, Packet
@@ -94,7 +94,7 @@ class DarkIPEngine(DetectionEngine):
         self._known_ips: set[str] = set(self._static_hosts)
 
         # (dst_ip) -> 마지막 알림 시각
-        self._alerted: dict[str, float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
         self._start_time: float = time.time()
 
         if self._monitored:

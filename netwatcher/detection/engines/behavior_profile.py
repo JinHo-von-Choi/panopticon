@@ -39,6 +39,7 @@ class BehaviorProfileEngine(DetectionEngine):
     name = "behavior_profile"
     description = "호스트별 동작 프로파일링을 수행합니다. 평소와 다른 비정상적인 통신 패턴(새로운 연결지, 평소보다 많은 포트 사용 등)을 식별합니다."
     description_key = "engines.behavior_profile.description"
+    engine_type = "cpu"
     mitre_attack_ids = ["T1041"]
     config_schema = {
         "learning_period_seconds": {
@@ -133,6 +134,32 @@ class BehaviorProfileEngine(DetectionEngine):
             self._last_tick = now
 
         return alerts
+
+    def export_state(self) -> dict | None:
+        """호스트별 행동 프로파일 상태를 직렬화한다."""
+        profiles = {}
+        for src_ip, features in self._profiles.items():
+            host_data = {}
+            for name, history_dq in features.items():
+                host_data[name] = list(history_dq)
+            profiles[src_ip] = host_data
+
+        return {
+            "profiles": profiles,
+            "start_time": self._start_time,
+            "last_tick": self._last_tick,
+        }
+
+    def import_state(self, state: dict) -> None:
+        """이전에 내보낸 행동 프로파일 상태를 복원한다."""
+        self._start_time = state.get("start_time", self._start_time)
+        self._last_tick = state.get("last_tick", self._last_tick)
+
+        for src_ip, features in state.get("profiles", {}).items():
+            for name, values in features.items():
+                history = self._profiles[src_ip][name]
+                for v in values:
+                    history.append(v)
 
     def shutdown(self) -> None:
         """엔진 상태를 초기화한다."""

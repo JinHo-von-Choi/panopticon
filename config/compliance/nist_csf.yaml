@@ -1,0 +1,56 @@
+framework: "NIST CSF 2.0"
+controls:
+  - id: "DE.CM-01"
+    name: "Networks monitored for threats"
+    description: "Networks and network services are monitored to find potentially adverse events"
+    engines: ["traffic_anomaly", "threat_intel", "port_scan", "c2_beaconing"]
+
+  - id: "DE.CM-06"
+    name: "External service provider activity monitored"
+    description: "External service provider activity and services are monitored"
+    engines: ["dns_anomaly", "threat_intel", "tls_fingerprint"]
+
+  - id: "DE.CM-09"
+    name: "Computing hardware and software monitored"
+    description: "Computing hardware and software, runtime environments monitored"
+    engines: ["protocol_anomaly", "behavior_profile", "mac_spoof"]
+
+  - id: "DE.AE-02"
+    name: "Anomalous activity detected"
+    description: "Potentially adverse events are analyzed to better understand associated activities"
+    engines: ["behavior_profile", "traffic_anomaly", "protocol_anomaly"]
+
+  - id: "DE.AE-03"
+    name: "Event data aggregated and correlated"
+    description: "Information is correlated from multiple sources"
+    engines: ["lateral_movement", "c2_beaconing", "data_exfil"]
+
+  - id: "DE.AE-06"
+    name: "Information on adverse events provided to authorized staff"
+    description: "Affected parties are notified of security incidents"
+    engines: ["*"]
+
+  - id: "PR.DS-01"
+    name: "Data-at-rest protected"
+    description: "The confidentiality, integrity, and availability of data-at-rest are protected"
+    engines: ["ransomware_lateral", "data_exfil"]
+
+  - id: "PR.DS-02"
+    name: "Data-in-transit protected"
+    description: "The confidentiality, integrity, and availability of data-in-transit are protected"
+    engines: ["tls_fingerprint", "dns_anomaly", "arp_spoof"]
+
+  - id: "RS.AN-01"
+    name: "Incident investigation conducted"
+    description: "Investigations are conducted to ensure effective response"
+    engines: ["dns_anomaly", "lateral_movement", "data_exfil"]
+
+  - id: "RS.AN-03"
+    name: "Forensics performed"
+    description: "Forensic analysis and artifact handling performed"
+    engines: ["protocol_inspect", "signature", "http_suspicious"]
+
+  - id: "ID.RA-01"
+    name: "Vulnerabilities identified"
+    description: "Asset vulnerabilities are identified and documented"
+    engines: ["port_scan", "dark_ip", "protocol_anomaly"]

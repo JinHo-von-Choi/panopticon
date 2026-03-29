@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Scapy-2.6-blue" alt="Scapy" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/tests-939%20passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-1437%20passed-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -51,7 +51,7 @@
 
 | 원칙 | 설명 |
 |------|------|
-| **단일 배포** | Python 단일 프로세스로 캡처-탐지-알림-대시보드를 모두 처리. 별도 메시지 큐나 분산 시스템 불필요 |
+| **유연한 배포** | 단일 프로세스 모드(기본)부터 멀티프로세스 WorkerPool 모드까지 `workers` 설정 하나로 전환. 별도 메시지 큐나 분산 시스템 불필요 |
 | **플러그인 아키텍처** | 탐지 엔진은 `DetectionEngine` 기본 클래스를 상속하기만 하면 자동 발견 및 등록 |
 | **런타임 설정** | 모든 엔진의 파라미터를 웹 UI에서 실시간으로 변경 가능. YAML 영속화 + 핫 리로드 |
 | **방어 종심** | 패킷-프로토콜-행위-위협정보 4계층 탐지로 단일 엔진 우회 시에도 다른 계층이 포착 |
@@ -120,44 +120,61 @@ AI 판단 근거(reasoning)는 이벤트 DB에 함께 저장되며, 대시보드
                                     └──────────────┬──────────────────────┘
                                                    │ REST API / WebSocket
                                                    │
-┌──────────────┐    call_soon_threadsafe    ┌───────┴───────┐
-│    Scapy     │ ────────────────────────> │  PacketProcessor│
+┌──────────────┐    call_soon_threadsafe    ┌───────┴────────┐
+│    Scapy     │ ────────────────────────> │ PacketProcessor │
 │ AsyncSniffer │   스레드-안전 브릿지       │  (이벤트 루프)  │
-│ (캡처 스레드) │                           └───────┬───────┘
+│ (캡처 스레드) │                           └───────┬────────┘
 └──────────────┘                                   │
-                                      ┌────────────┼────────────┐
-                                      │            │            │
-                                      v            v            v
-                              ┌──────────┐ ┌────────────┐ ┌──────────┐
-                              │  Engine  │ │   Engine   │ │  Engine  │
-                              │ Registry │ │  Registry  │ │ Registry │
-                              │ (18개)   │ │  (18개)    │ │  (18개)  │
-                              └────┬─────┘ └─────┬──────┘ └────┬─────┘
-                                   │             │             │
-                                   └─────────────┼─────────────┘
-                                                 │ Alert
-                                                 v
-                              ┌──────────────────────────────────┐
-                              │        AlertDispatcher           │
-                              │  Rate Limit → DB → WebSocket →  │
-                              │  Correlator → Webhooks → IRS    │
-                              └──────────┬───────────────────────┘
-                                         │
-                          ┌──────────────┼──────────────┐
-                          v              v              v
-                    ┌──────────┐  ┌──────────┐  ┌──────────┐
-                    │PostgreSQL│  │  Slack/   │  │ iptables │
-                    │  (저장)  │  │ Telegram/ │  │ /nftables│
-                    │          │  │ Discord   │  │  (차단)  │
-                    └──────────┘  └──────────┘  └──────────┘
+                              ┌────────────────────┴────────────────────┐
+                              │ workers=1 (단일 모드)                    │ workers≥2 (멀티프로세스)
+                              │                                          │
+                              v                                          v
+                    ┌─────────────────┐                      ┌─────────────────────┐
+                    │  EngineRegistry │                      │     WorkerPool      │
+                    │  (인라인 실행)  │                      │  src_ip 해시 파티셔닝 │
+                    └────────┬────────┘                      └──────────┬──────────┘
+                             │                                          │
+                             │                          ┌───────────────┼───────────────┐
+                             │                          v               v               v
+                             │                  ┌────────────┐ ┌────────────┐ ┌────────────┐
+                             │                  │  Worker[0] │ │  Worker[1] │ │  Worker[N] │
+                             │                  │EngineRegis.│ │EngineRegis.│ │EngineRegis.│
+                             │                  └─────┬──────┘ └─────┬──────┘ └─────┬──────┘
+                             │                        └───────────────┼───────────────┘
+                             │                                result_queue (IPC)
+                             │                                        │
+                             └────────────────────────────────────────┘
+                                                      │ Alert
+                                                      v
+                               ┌──────────────────────────────────────┐
+                               │          AlertDispatcher             │
+                               │  Rate Limit → DB → WebSocket →      │
+                               │  Correlator → Webhooks → IRS        │
+                               └──────────┬───────────────────────────┘
+                                          │
+                           ┌──────────────┼──────────────┐
+                           v              v              v
+                     ┌──────────┐  ┌──────────┐  ┌──────────┐
+                     │PostgreSQL│  │  Slack/   │  │ iptables │
+                     │  (저장)  │  │ Telegram/ │  │ /nftables│
+                     │          │  │ Discord   │  │  (차단)  │
+                     └──────────┘  └──────────┘  └──────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  HA Layer (Redis 활성 시)                                    │
+│  HAManager → LeaderElection (SET NX/XX) + InstanceRegistry  │
+│  CheckpointService → 엔진 상태 Redis 체크포인트 (주기 저장)  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### 패킷 처리 파이프라인
 
 1. **캡처**: Scapy `AsyncSniffer`가 백그라운드 스레드에서 원시 패킷을 캡처한다
 2. **브릿지**: `call_soon_threadsafe`를 통해 캡처 스레드에서 asyncio 이벤트 루프로 전달한다
-3. **분석**: `PacketProcessor`가 패킷 정보를 추출하고, `EngineRegistry`를 통해 모든 활성 엔진의 `analyze()` 메서드를 호출한다
-4. **디스패치**: 탐지된 `Alert`는 `AlertDispatcher`로 전달되어 속도 제한 -> DB 저장 -> 로그 -> WebSocket 브로드캐스트 -> 웹훅 전송 순으로 처리된다
+3. **분석**: `PacketProcessor`가 패킷 정보를 추출한 뒤, `workers` 설정에 따라 분기한다
+   - **단일 모드** (`workers=1`): 인라인으로 `EngineRegistry`의 모든 엔진 `analyze()`를 직접 호출한다
+   - **멀티프로세스 모드** (`workers≥2`): `WorkerPool`이 src_ip 해시 파티셔닝으로 패킷을 워커 프로세스로 라우팅한다. 동일 src_ip의 패킷은 항상 같은 워커로 전달되어 상태 기반 엔진의 정확성이 보장된다. 워커는 자체 `EngineRegistry`와 `on_tick()` 루프를 보유하며, 탐지 결과를 `result_queue`로 반환한다
+4. **디스패치**: 탐지된 `Alert`는 `AlertDispatcher`로 전달되어 속도 제한 → DB 저장 → 로그 → WebSocket 브로드캐스트 → 웹훅 전송 순으로 처리된다
 5. **상관분석**: `AlertCorrelator`가 관련 알림을 킬체인 단계에 매핑하여 인시던트를 생성/업데이트한다
 6. **응답**: IRS가 활성화된 경우, 특정 엔진의 탐지 결과에 따라 자동 IP 차단을 수행한다
 
@@ -165,10 +182,12 @@ AI 판단 근거(reasoning)는 이벤트 DB에 함께 저장되며, 대시보드
 
 | 서비스 | 주기 | 역할 |
 |--------|------|------|
-| `TickService` | 1초 | 엔진 `on_tick()` 호출 (시간 윈도우 기반 탐지), 스니퍼 워치독 |
+| `TickService` | 1초 | 엔진 `on_tick()` 호출 (시간 윈도우 기반 탐지), 스니퍼 워치독, 워커 result_queue 수집 |
 | `StatsFlushService` | 60초 | 트래픽 카운터/디바이스 버퍼를 DB에 배치 플러시, Prometheus 메트릭 업데이트 |
 | `MaintenanceService` | 6시간 | 데이터 보존 정책 적용, 위협 피드 갱신, 만료 차단 정리 |
 | `AIAnalyzerService` | 설정값 (기본 15분) | 최근 이벤트 AI 배치 분석 → 오탐 임계값 자동 조정, 실제 위협 재알림, 미탐 위협 CRITICAL 알림 + 임계값 하향 |
+| `CheckpointService` | 설정값 (기본 60초) | 엔진 내부 상태를 Redis에 주기 저장. 재시작 시 자동 복원 (Redis 활성 시에만 동작) |
+| `HAManager` | 상시 | Redis 기반 분산 리더 선출 + 인스턴스 레지스트리. Redis 비활성 시 standalone 모드(항상 리더) |
 
 ---
 
@@ -908,6 +927,48 @@ netflow:
         min_severity: "WARNING"
 ```
 
+### 멀티프로세스 패킷 처리
+
+```yaml
+netwatcher:
+  workers: 1   # 0=자동(cpu_count-1), 1=단일프로세스(기본), 2+=멀티프로세스
+```
+
+`workers: 0`으로 설정하면 시스템 CPU 코어 수에서 1을 뺀 만큼 워커를 자동 생성한다. 패킷이 큐에 쌓이기 시작하면 워커를 자동 교체한다 (self-healing). 단일 모드에서는 Redis 없이도 모든 기능이 동작하며, 멀티프로세스 모드로의 전환은 재시작 없이 `workers` 값 변경만으로 가능하다.
+
+### Redis (엔진 체크포인트 및 HA)
+
+Redis는 선택 사항이다. 설치하지 않아도 모든 탐지 기능이 정상 동작한다.
+
+```yaml
+redis:
+  enabled: false
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: ""          # 환경변수 NETWATCHER_REDIS_PASSWORD로 오버라이드
+  checkpoint_interval: 60  # 엔진 상태 저장 주기 (초)
+```
+
+Redis를 활성화하면 두 가지 기능이 추가된다:
+- **엔진 상태 체크포인트**: `port_scan`, `behavior_profile`, `traffic_anomaly`, `dns_anomaly`, `c2_beaconing` 엔진의 내부 학습 상태가 주기적으로 저장된다. 프로세스 재시작 후에도 포트 스캔 추적 이력, 행위 프로파일, EWMA 기저선 등이 복원된다
+- **고가용성 리더 선출**: 아래 `ha` 섹션 참조
+
+### 고가용성 (HA)
+
+복수의 Panopticon 인스턴스를 동일 네트워크에서 실행할 때 사용한다. Redis가 필수다.
+
+```yaml
+ha:
+  enabled: false
+  ttl_seconds: 30      # 리더 락 TTL. 이 시간 내에 갱신 실패 시 리더 교체
+  lock_key: "ha:leader"
+```
+
+- **리더 인스턴스**: 알림 디스패치, IRS 자동 차단, AIAnalyzer 등 상태 변이 작업을 수행한다
+- **Standby 인스턴스**: 패킷 캡처와 탐지만 수행하고, 리더가 다운되면 자동으로 리더 역할을 획득한다
+- Redis 없이 `ha.enabled: true`를 설정하면 자동으로 standalone 모드로 동작한다 (항상 리더)
+
 ### AI 오탐 분석기 (AIAnalyzer)
 
 AI CLI를 통해 주기적으로 최근 이벤트를 분석하고 오탐률을 자동으로 낮춘다.
@@ -1305,7 +1366,7 @@ rules:
 
 ### 테스트 구조
 
-939개 테스트는 다음 4개 레이어로 구성된다.
+1,437개 테스트는 다음 레이어로 구성된다.
 
 | 레이어 | 디렉토리 | 내용 |
 |--------|----------|------|
@@ -1313,6 +1374,8 @@ rules:
 | 저장소/웹 API | `tests/test_storage/`, `tests/test_web/` | 임시 PostgreSQL DB + FastAPI TestClient |
 | 통합 | `tests/test_integration/` | 전체 파이프라인 (캡처 → 탐지 → 디스패치) |
 | 성능 | `tests/test_performance/` | 패킷 처리량(throughput) 기준선 검증 |
+| 멀티프로세스 | `tests/test_capture/` | WorkerPool 라우팅, 워커 생명주기, 큐 수집, self-healing |
+| HA | `tests/test_ha/` | LeaderElection, InstanceRegistry, HAManager, CheckpointService |
 
 ```bash
 # 전체 실행

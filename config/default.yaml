@@ -9,6 +9,7 @@ netwatcher:
   interface:       # null = auto-detect
   bpf_filter: ""   # additional BPF filter
   promiscuous: true
+  workers: 1        # 패킷 분석 워커 프로세스 수 (0=자동(CPU-1), 1=단일프로세스, 2+=멀티프로세스)
 
   netflow:
     enabled: false           # true로 설정 시 NetFlow/IPFIX 수신 활성화
@@ -65,6 +66,12 @@ netwatcher:
     username: "admin"
     password: ""          # 반드시 환경변수(NETWATCHER_LOGIN_PASSWORD)로 설정
     token_expire_hours: 24
+    multi_user: false        # false = 기존 단일 사용자 모드 유지
+    default_admin_password: ""
+    api_rate_limit:
+      enabled: true
+      requests_per_minute: 60
+      burst: 10
 
   retention:
     events_days: 90            # 이벤트 보존 일수
@@ -367,6 +374,56 @@ netwatcher:
     output_dir: "data/extracted"
     max_file_size: 10485760    # 10MB
     yara_rules_dir: "config/yara"
+
+  redis:
+    enabled: false
+    host: "localhost"
+    port: 6379
+    db: 0
+    password: ""
+    key_prefix: "nw:"
+    checkpoint_interval: 60   # 엔진 상태 체크포인트 주기 (초)
+
+  ha:
+    enabled: false              # true 시 Redis 기반 HA 클러스터 모드 활성화
+    ttl_seconds: 30             # 리더 락 TTL / 하트비트 TTL
+    lock_key: "ha:leader"       # 리더 선출 Redis 키
+
+  integrations:
+    syslog:
+      enabled: false
+      host: "localhost"
+      port: 514
+      protocol: "udp"         # udp, tcp, tls
+      format: "cef"           # cef, rfc5424
+      min_severity: "WARNING"
+      tls_ca_cert: ""
+    elasticsearch:
+      enabled: false
+      hosts: ["http://localhost:9200"]
+      index_prefix: "netwatcher-events"
+      api_key: ""
+      username: ""
+      password: ""
+      min_severity: "INFO"
+    stix_taxii:
+      enabled: false
+      taxii_url: ""
+      collection_id: ""
+      api_key: ""
+      min_severity: "WARNING"
+
+  observability:
+    structlog: true
+    log_format: "json"            # json | console
+    tracing:
+      enabled: false
+      exporter: "otlp"
+      endpoint: "http://localhost:4317"
+      service_name: "netwatcher"
+      sample_rate: 0.01
+    health_check:
+      detailed: true
 
   threatfeeds:
     config_path: "config/threatfeeds.yaml"

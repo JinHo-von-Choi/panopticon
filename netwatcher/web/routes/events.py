@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,12 +19,20 @@ from netwatcher.storage.repositories import EventRepository
 if TYPE_CHECKING:
     from netwatcher.web.auth import AuthManager
 
+logger = logging.getLogger("netwatcher.web.routes.events")
+
+# WebSocket 연결 제한 상수
+_WS_MAX_CONNECTIONS_PER_IP = 5
+_WS_RATE_LIMIT_MSG_PER_MIN = 100
+
+
 def create_ws_router(
     dispatcher: AlertDispatcher,
     auth_manager: "AuthManager | None" = None,
 ) -> APIRouter:
     """WebSocket 실시간 이벤트 스트림 라우터 (/api/ws/events)."""
     router = APIRouter(prefix="/ws", tags=["websocket"])
+    ws_connections_per_ip: dict[str, int] = defaultdict(int)
 
     @router.websocket("/events")
     async def ws_events(websocket: WebSocket, token: str | None = None):
@@ -29,15 +40,34 @@ def create_ws_router(
             if not token or not auth_manager.verify_token(token):
                 await websocket.close(code=1008)
                 return
+
+        client_ip = websocket.client.host if websocket.client else "unknown"
+
+        # IP당 동시 연결 수 제한
+        if ws_connections_per_ip[client_ip] >= _WS_MAX_CONNECTIONS_PER_IP:
+            logger.warning("WebSocket connection limit exceeded for %s", client_ip)
+            await websocket.close(code=1008)
+            return
+
         await websocket.accept()
+        ws_connections_per_ip[client_ip] += 1
         q = dispatcher.subscribe_ws()
+        msg_count = 0
+        window_start = time.monotonic()
         try:
             while True:
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=30)
+                    # 메시지 전송 레이트 리밋
+                    now = time.monotonic()
+                    if now - window_start >= 60.0:
+                        msg_count = 0
+                        window_start = now
+                    msg_count += 1
+                    if msg_count > _WS_RATE_LIMIT_MSG_PER_MIN:
+                        continue  # 초과분은 드롭
                     await websocket.send_text(msg)
                 except asyncio.TimeoutError:
-                    # 연결 유지 ping
                     await websocket.send_text('{"type":"ping"}')
         except WebSocketDisconnect:
             pass
@@ -45,6 +75,9 @@ def create_ws_router(
             pass
         finally:
             dispatcher.unsubscribe_ws(q)
+            ws_connections_per_ip[client_ip] = max(0, ws_connections_per_ip[client_ip] - 1)
+            if ws_connections_per_ip[client_ip] == 0:
+                del ws_connections_per_ip[client_ip]
 
     return router
 

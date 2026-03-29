@@ -7,7 +7,7 @@ import math
 import time
 from collections import defaultdict, deque
 
-from netwatcher.detection.eviction import LRUSet, prune_empty_keys, prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, LRUSet, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import DNS, DNSQR, IP, Packet
@@ -72,7 +72,7 @@ class DNSAnomalyEngine(DetectionEngine):
         # src_ip -> deque of timestamps
         self._query_times: dict[str, deque[float]] = defaultdict(deque)
         self._alerted_domains: LRUSet = LRUSet(maxlen=10000)
-        self._flood_alerted: dict[str, float] = {}
+        self._flood_alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """DNS 쿼리 패킷에서 DGA 및 터널링 징후를 분석한다."""
@@ -175,6 +175,34 @@ class DNSAnomalyEngine(DetectionEngine):
         prune_empty_keys(self._query_times)
         prune_expired_entries(self._flood_alerted, max_age=120)
         return alerts
+
+    def export_state(self) -> dict | None:
+        """DNS 이상 탐지 상태를 직렬화한다."""
+        query_times = {}
+        for src_ip, times in self._query_times.items():
+            query_times[src_ip] = list(times)
+
+        alerted_domains = list(self._alerted_domains._data.keys())
+
+        return {
+            "query_times": query_times,
+            "alerted_domains": alerted_domains,
+            "flood_alerted": dict(self._flood_alerted),
+        }
+
+    def import_state(self, state: dict) -> None:
+        """이전에 내보낸 DNS 이상 탐지 상태를 복원한다."""
+        for src_ip, times in state.get("query_times", {}).items():
+            dq = deque()
+            for t in times:
+                dq.append(float(t))
+            self._query_times[src_ip] = dq
+
+        for domain in state.get("alerted_domains", []):
+            self._alerted_domains.add(domain)
+
+        for src_ip, ts in state.get("flood_alerted", {}).items():
+            self._flood_alerted[src_ip] = float(ts)
 
     def shutdown(self) -> None:
         """엔진 상태를 초기화한다."""

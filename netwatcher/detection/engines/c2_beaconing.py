@@ -222,6 +222,7 @@ class C2BeaconingEngine(DetectionEngine):
     name = "c2_beaconing"
     description = "주기적인 C2 비콘 콜백 패턴을 RITA 스타일 다중 지표 분석으로 탐지합니다."
     description_key = "engines.c2_beaconing.description"
+    engine_type = "cpu"
     mitre_attack_ids = ["T1071", "T1571"]  # Application Layer Protocol / Non-Standard Port
     config_schema = {
         "cv_threshold": {
@@ -388,6 +389,47 @@ class C2BeaconingEngine(DetectionEngine):
         prune_empty_keys(self._sessions)
         prune_expired_entries(self._alerted, max_age=self._cooldown * 2)
         return alerts
+
+    def export_state(self) -> dict | None:
+        """C2 비콘 세션 추적 상태를 직렬화한다."""
+        sessions = {}
+        for key, session in self._sessions.items():
+            # key는 (src_ip, dst_ip, dst_port) 튜플
+            str_key = f"{key[0]}|{key[1]}|{key[2]}"
+            sessions[str_key] = {
+                "last_ts": session["last_ts"],
+                "iats": session["iats"][-200:],
+                "sizes": session["sizes"][-201:],
+            }
+
+        alerted = {}
+        for key, ts in self._alerted.items():
+            str_key = f"{key[0]}|{key[1]}|{key[2]}"
+            alerted[str_key] = ts
+
+        return {
+            "sessions": sessions,
+            "alerted": alerted,
+        }
+
+    def import_state(self, state: dict) -> None:
+        """이전에 내보낸 C2 비콘 상태를 복원한다."""
+        for str_key, data in state.get("sessions", {}).items():
+            parts = str_key.split("|")
+            if len(parts) != 3:
+                continue
+            key = (parts[0], parts[1], int(parts[2]))
+            session = self._sessions[key]
+            session["last_ts"] = float(data.get("last_ts", 0.0))
+            session["iats"] = [float(v) for v in data.get("iats", [])]
+            session["sizes"] = [int(v) for v in data.get("sizes", [])]
+
+        for str_key, ts in state.get("alerted", {}).items():
+            parts = str_key.split("|")
+            if len(parts) != 3:
+                continue
+            key = (parts[0], parts[1], int(parts[2]))
+            self._alerted[key] = float(ts)
 
     def shutdown(self) -> None:
         """엔진 상태를 초기화한다."""

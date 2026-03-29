@@ -291,7 +291,7 @@ class AlertDispatcher:
             """채널 전송을 수행하고 (이름, 소요 시간, 예외)를 반환한다."""
             start = time.monotonic()
             try:
-                await asyncio.wait_for(channel.send(alert), timeout=15.0)
+                await asyncio.wait_for(channel.send(alert), timeout=5.0)
                 return name, time.monotonic() - start, None
             except Exception as exc:
                 return name, time.monotonic() - start, exc

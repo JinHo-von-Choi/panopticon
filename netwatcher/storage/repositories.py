@@ -215,6 +215,40 @@ class EventRepository:
             "UPDATE events SET resolved = TRUE WHERE id = $1", event_id,
         )
 
+    async def insert_batch(self, events: list[dict]) -> int:
+        """단일 트랜잭션 내에서 여러 이벤트를 일괄 삽입한다. 삽입된 행 수를 반환한다."""
+        if not events:
+            return 0
+
+        inserted = 0
+        async with self._db.pool.acquire() as conn:
+            async with conn.transaction():
+                for ev in events:
+                    await conn.execute(
+                        """INSERT INTO events
+                           (engine, severity, title, description, title_key, description_key,
+                            source_ip, source_mac, dest_ip, dest_mac, metadata, packet_info,
+                            reasoning, mitre_attack_id, threat_level)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)""",
+                        ev.get("engine", ""),
+                        ev.get("severity", "INFO"),
+                        _sanitize(ev.get("title", "")),
+                        _sanitize(ev.get("description", "")),
+                        ev.get("title_key"),
+                        ev.get("description_key"),
+                        ev.get("source_ip"),
+                        ev.get("source_mac"),
+                        ev.get("dest_ip"),
+                        ev.get("dest_mac"),
+                        _sanitize(ev.get("metadata") or {}),
+                        _sanitize(ev.get("packet_info") or {}),
+                        ev.get("reasoning"),
+                        ev.get("mitre_attack_id"),
+                        ev.get("threat_level", 0),
+                    )
+                    inserted += 1
+        return inserted
+
     async def delete_older_than(self, days: int) -> int:
         """지정된 일수보다 오래된 이벤트를 삭제한다."""
         cutoff = _now_utc() - timedelta(days=days)

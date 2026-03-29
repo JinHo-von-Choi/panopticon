@@ -1,0 +1,51 @@
+framework: "PCI-DSS v4.0"
+controls:
+  - id: "1.3.1"
+    name: "Network traffic restrictions"
+    description: "Restrict inbound and outbound traffic to that which is necessary"
+    engines: ["port_scan", "segment_violation", "lateral_movement"]
+
+  - id: "1.3.2"
+    name: "Restrict outbound traffic from CDE"
+    description: "Outbound traffic from the cardholder data environment is restricted"
+    engines: ["data_exfil", "segment_violation"]
+
+  - id: "5.2"
+    name: "Malware detection"
+    description: "Malicious software is prevented or detected and addressed"
+    engines: ["signature", "threat_intel", "ransomware_lateral"]
+
+  - id: "5.3.1"
+    name: "Anti-malware solution active"
+    description: "Anti-malware solution is kept current via automatic updates"
+    engines: ["threat_intel", "signature"]
+
+  - id: "6.4.1"
+    name: "Attack detection on public-facing web applications"
+    description: "Public-facing web applications are protected against attacks"
+    engines: ["http_suspicious", "signature"]
+
+  - id: "10.6.1"
+    name: "Log review for security events"
+    description: "System security events are reviewed to identify anomalies"
+    engines: ["*"]
+
+  - id: "10.7"
+    name: "Failures of security controls detected and reported"
+    description: "Failures of critical security control systems are detected and reported promptly"
+    engines: ["traffic_anomaly", "protocol_anomaly"]
+
+  - id: "11.4"
+    name: "IDS/IPS deployment"
+    description: "Intrusions and unexpected network traffic are detected"
+    engines: ["*"]
+
+  - id: "11.5.1"
+    name: "Network change detection"
+    description: "Changes to networks are detected and personnel alerted"
+    engines: ["arp_spoof", "dhcp_spoof", "mac_spoof"]
+
+  - id: "11.6"
+    name: "Unauthorized wireless access points detected"
+    description: "Unauthorized wireless access points are detected and identified"
+    engines: ["dark_ip", "mac_spoof"]

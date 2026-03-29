@@ -85,6 +85,29 @@ class NetWatcher:
 
         self.correlator.set_incident_repo(incident_repo)
 
+        # ── Redis ────────────────────────────────────────────────────────
+        from netwatcher.cache.redis_client import RedisClient
+
+        redis_cfg = self.config.section("redis") or {}
+        redis_client = RedisClient(
+            host=redis_cfg.get("host", "localhost"),
+            port=redis_cfg.get("port", 6379),
+            db=redis_cfg.get("db", 0),
+            password=redis_cfg.get("password", ""),
+            key_prefix=redis_cfg.get("key_prefix", "nw:"),
+            enabled=redis_cfg.get("enabled", False),
+        )
+        await redis_client.connect()
+
+        # ── HA 관리자 ─────────────────────────────────────────────────────
+        from netwatcher.ha.manager import HAManager
+
+        ha_manager = HAManager(
+            redis_client=redis_client,
+            config=self.config.raw,
+            instance_id=None,
+        )
+
         # ── 차단 관리자 (IRS 자동 차단) ──────────────────────────────────
         block_manager: BlockManager | None = None
         response_cfg = self.config.section("response") or {}
@@ -125,6 +148,35 @@ class NetWatcher:
             [e.name for e in self.registry.engines],
         )
 
+        # ── 엔진 상태 체크포인트 서비스 ──────────────────────────────────
+        from netwatcher.cache.engine_state import EngineStateManager
+        from netwatcher.services.checkpoint_service import CheckpointService
+
+        checkpoint_service: CheckpointService | None = None
+        if redis_client.available:
+            checkpoint_interval = self.config.get("redis.checkpoint_interval", 60)
+            state_manager = EngineStateManager(redis_client, interval_seconds=checkpoint_interval)
+            checkpoint_service = CheckpointService(
+                registry=self.registry,
+                state_manager=state_manager,
+                interval_seconds=checkpoint_interval,
+            )
+            await checkpoint_service.start()
+            logger.info("Checkpoint service started (interval=%ds)", checkpoint_interval)
+
+        # ── HA 콜백 설정 + 시작 ──────────────────────────────────────────
+        async def _on_become_leader() -> None:
+            logger.info("HA: This instance is now the leader")
+
+        async def _on_lose_leader() -> None:
+            logger.warning("HA: This instance lost leadership")
+            if checkpoint_service is not None:
+                await checkpoint_service.save_now()
+
+        ha_manager.on_become_leader = _on_become_leader
+        ha_manager.on_lose_leader = _on_lose_leader
+        await ha_manager.start()
+
         # ── 위협 인텔리전스 피드 ──────────────────────────────────────────
         feed_mgr = None
         try:
@@ -148,12 +200,27 @@ class NetWatcher:
         except Exception:
             logger.warning("Threat intel feeds not loaded (non-fatal)", exc_info=True)
 
+        # ── 멀티프로세스 워커 풀 ─────────────────────────────────────────
+        from netwatcher.capture.pool import WorkerPool
+
+        num_workers = self.config.get("workers", 1)
+        worker_pool = WorkerPool(self.config, num_workers=num_workers)
+        worker_pool.start()
+        if worker_pool.is_multiprocess:
+            logger.info(
+                "멀티프로세스 모드: %d 워커 활성",
+                worker_pool.num_workers,
+            )
+        else:
+            logger.info("단일프로세스 모드")
+
         # ── 서비스 ────────────────────────────────────────────────────────
         packet_processor = PacketProcessor(
             registry=self.registry,
             dispatcher=dispatcher,
             pcap_writer=self.pcap_writer,
             dns_resolver=self._dns_resolver,
+            worker_pool=worker_pool,
         )
         await packet_processor.init_seen_macs(device_repo)
 
@@ -161,6 +228,8 @@ class NetWatcher:
             registry=self.registry,
             dispatcher=dispatcher,
         )
+        tick_service.set_worker_pool(worker_pool)
+        tick_service.set_packet_processor(packet_processor)
 
         stats_flush = StatsFlushService(
             config=self.config,
@@ -361,6 +430,7 @@ class NetWatcher:
         if flow_collector is not None:
             flow_collector.stop()
         sniffer.stop()
+        worker_pool.stop()
         await tick_service.stop()
         await stats_flush.stop()
         await maintenance.stop()
@@ -372,8 +442,12 @@ class NetWatcher:
             await asset_monitor.stop()
         if ai_analyzer:
             await ai_analyzer.stop()
+        if checkpoint_service is not None:
+            await checkpoint_service.stop()
+        await ha_manager.stop()
         server.should_exit = True
         await server_task
         await dispatcher.stop()
+        await redis_client.close()
         await self.db.close()
         logger.info("NetWatcher stopped")

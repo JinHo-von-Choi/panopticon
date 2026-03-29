@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict, deque
 
-from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, Packet, TCP
@@ -62,7 +62,7 @@ class RansomwareLateralEngine(DetectionEngine):
 
         # (src_ip, dst_ip, port) -> deque of timestamps
         self._attempts: dict[tuple[str, str, int], deque[float]] = defaultdict(deque)
-        self._alerted: dict[str, float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """패킷에서 허니팟 접근 및 브루트포스 징후를 분석한다."""

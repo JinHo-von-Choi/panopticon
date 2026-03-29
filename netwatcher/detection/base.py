@@ -22,6 +22,12 @@ class DetectionEngine(abc.ABC):
     # 기본 틱 간격(초) — 서브클래스에서 오버라이드 가능
     tick_interval: int = 1
 
+    # 엔진 실행 유형: "fast" (인라인), "cpu" (ThreadPoolExecutor), "io" (코루틴)
+    engine_type: str = "cpu"
+
+    # 목표 analyze() 레이턴시(밀리초). SLA 모니터링에 사용.
+    sla_ms: float = 10.0
+
     # True이면 SPAN/포트 미러링 없이는 탐지 효과가 크게 제한됨.
     # ARP·DHCP 브로드캐스트만으로 동작하는 엔진은 False(기본값)를 유지한다.
     requires_span: bool = False
@@ -127,3 +133,11 @@ class DetectionEngine(abc.ABC):
     def __repr__(self) -> str:
         """엔진의 문자열 표현을 반환한다."""
         return f"<{self.__class__.__name__} name={self.name!r} enabled={self.enabled}>"
+
+    def export_state(self) -> dict | None:
+        """엔진 상태를 직렬화하여 반환한다. 서브클래스에서 오버라이드."""
+        return None
+
+    def import_state(self, state: dict) -> None:
+        """이전에 내보낸 상태를 복원한다. 서브클래스에서 오버라이드."""
+        pass

@@ -14,7 +14,7 @@ from netwatcher.web.routes.devices import create_devices_router
 from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
-def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None):
+def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None):
     web_cfg = config.section("web") if hasattr(config, 'section') else {}
     cors_cfg = web_cfg.get("cors", {}) if isinstance(web_cfg, dict) else {}
     allowed_origins = cors_cfg.get("allowed_origins", ["http://localhost:38585"])
@@ -66,6 +66,19 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     if ai_analyzer:
         from netwatcher.web.routes.ai_analyzer import create_ai_analyzer_router
         app.include_router(create_ai_analyzer_router(ai_analyzer), prefix=api_prefix)
+
+    # Threat Hunting
+    from netwatcher.hunting.ioc_correlator import IOCCorrelator
+    from netwatcher.hunting.mitre_navigator import MITRENavigator
+    from netwatcher.hunting.timeline import ThreatTimeline
+    from netwatcher.web.routes.hunting import create_hunting_router
+    _ioc_correlator = IOCCorrelator(event_repo)
+    _navigator      = MITRENavigator()
+    _timeline       = ThreatTimeline(event_repo)
+    app.include_router(
+        create_hunting_router(event_repo, _ioc_correlator, _navigator, _timeline),
+        prefix=api_prefix,
+    )
 
     @app.get("/health")
     async def health_check():

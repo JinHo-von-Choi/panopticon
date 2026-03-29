@@ -104,3 +104,8 @@ class Alert:
     def to_json(self) -> str:
         """알림을 JSON 문자열로 직렬화한다."""
         return json.dumps(self.to_dict())
+
+    def to_ecs(self) -> dict[str, Any]:
+        """알림을 Elastic Common Schema 호환 딕셔너리로 변환한다."""
+        from netwatcher.integrations.ecs_mapper import alert_to_ecs
+        return alert_to_ecs(self)

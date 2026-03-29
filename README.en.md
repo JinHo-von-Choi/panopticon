@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Scapy-2.6-blue" alt="Scapy" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/tests-939%20passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-1437%20passed-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -51,7 +51,7 @@ Office development networks are often isolated via VPCs and VPNs. However, withi
 
 | Principle | Description |
 |-----------|-------------|
-| **Single Deployment** | Handles capture, detection, notification, and dashboard in a single Python process. No separate message queues or distributed systems required. |
+| **Flexible Deployment** | Scales from a single-process mode (default) to a multi-process WorkerPool mode with a single `workers` setting. No separate message queues or distributed systems required. |
 | **Plugin Architecture** | Detection engines are automatically discovered and registered by inheriting from the `DetectionEngine` base class. |
 | **Runtime Configuration** | Parameters for all engines can be modified in real-time via the Web UI, with YAML persistence and hot-reloading. |
 | **Defense in Depth** | 4-layer detection (Packet, Protocol, Behavior, Threat Intel) ensures that if one engine is bypassed, others can still catch the threat. |
@@ -120,28 +120,37 @@ Exposes operational metrics such as packet processing rate, alert generation cou
                                     └──────────────┬──────────────────────┘
                                                    │ REST API / WebSocket
                                                    │
-┌──────────────┐    call_soon_threadsafe    ┌───────┴───────┐
-│    Scapy     │ ────────────────────────> │  PacketProcessor│
+┌──────────────┐    call_soon_threadsafe    ┌───────┴────────┐
+│    Scapy     │ ────────────────────────> │ PacketProcessor │
 │ AsyncSniffer │   Thread-safe Bridge       │  (Event Loop)   │
-│ (Capture Th) │                           └───────┬───────┘
+│ (Capture Th) │                           └───────┬────────┘
 └──────────────┘                                   │
-                                      ┌────────────┼────────────┐
-                                      │            │            │
-                                      v            v            v
-                              ┌──────────┐ ┌────────────┐ ┌──────────┐
-                              │  Engine  │ │   Engine   │ │  Engine  │
-                              │ Registry │ │  Registry  │ │ Registry │
-                              │ (21 units) │ │ (21 units) │ │ (21 units) │
-                              └────┬─────┘ └─────┬──────┘ └────┬─────┘
-                                   │             │             │
-                                   └─────────────┼─────────────┘
-                                                 │ Alert
-                                                 v
-                              ┌──────────────────────────────────┐
-                              │        AlertDispatcher           │
-                              │  Rate Limit → DB → WebSocket →  │
-                              │  Correlator → Webhooks → IRS    │
-                              └──────────┬───────────────────────┘
+                              ┌────────────────────┴────────────────────┐
+                              │ workers=1 (single mode)                 │ workers≥2 (multi-process)
+                              │                                         │
+                              v                                         v
+                    ┌─────────────────┐                     ┌─────────────────────┐
+                    │  EngineRegistry │                     │     WorkerPool      │
+                    │  (inline exec)  │                     │  src_ip hash part.  │
+                    └────────┬────────┘                     └──────────┬──────────┘
+                             │                                         │
+                             │                         ┌──────────────┼──────────────┐
+                             │                         v              v              v
+                             │                 ┌────────────┐ ┌────────────┐ ┌────────────┐
+                             │                 │  Worker[0] │ │  Worker[1] │ │  Worker[N] │
+                             │                 │EngineRegis.│ │EngineRegis.│ │EngineRegis.│
+                             │                 └─────┬──────┘ └─────┬──────┘ └─────┬──────┘
+                             │                       └──────────────┼──────────────┘
+                             │                               result_queue (IPC)
+                             │                                       │
+                             └───────────────────────────────────────┘
+                                                     │ Alert
+                                                     v
+                              ┌──────────────────────────────────────┐
+                              │          AlertDispatcher             │
+                              │  Rate Limit → DB → WebSocket →      │
+                              │  Correlator → Webhooks → IRS        │
+                              └──────────┬───────────────────────────┘
                                          │
                           ┌──────────────┼──────────────┐
                           v              v              v
@@ -150,14 +159,22 @@ Exposes operational metrics such as packet processing rate, alert generation cou
                     │ (Storage)│  │ Telegram/ │  │ /nftables│
                     │          │  │ Discord   │  │ (Block)  │
                     └──────────┘  └──────────┘  └──────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  HA Layer (when Redis is enabled)                            │
+│  HAManager → LeaderElection (SET NX/XX) + InstanceRegistry  │
+│  CheckpointService → Engine state Redis checkpoint (periodic)│
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Packet Processing Pipeline
 
 1. **Capture**: Scapy `AsyncSniffer` captures raw packets in a background thread.
 2. **Bridge**: Packets are passed to the asyncio event loop via `call_soon_threadsafe`.
-3. **Analysis**: `PacketProcessor` extracts info and calls the `analyze()` method of all active engines via the `EngineRegistry`.
-4. **Dispatch**: Detected `Alert` objects are handled by the `AlertDispatcher`: Rate Limiting -> DB Persistence -> Logging -> WebSocket Broadcast -> Webhook Transmission.
+3. **Analysis**: `PacketProcessor` extracts packet metadata, then branches based on the `workers` setting:
+   - **Single mode** (`workers=1`): Calls all engine `analyze()` methods inline via `EngineRegistry`.
+   - **Multi-process mode** (`workers≥2`): `WorkerPool` routes packets to worker processes using src_ip hash partitioning. Packets from the same src_ip always go to the same worker, preserving correctness of stateful engines. Each worker owns its `EngineRegistry` and `on_tick()` loop, returning results via `result_queue`.
+4. **Dispatch**: Detected `Alert` objects are handled by the `AlertDispatcher`: Rate Limiting → DB Persistence → Logging → WebSocket Broadcast → Webhook Transmission.
 5. **Correlation**: `AlertCorrelator` maps related alerts to Kill Chain stages to create or update Incidents.
 6. **Response**: If IRS is enabled, automated IP blocking is performed based on the detection results.
 
@@ -165,10 +182,12 @@ Exposes operational metrics such as packet processing rate, alert generation cou
 
 | Service | Interval | Role |
 |---------|----------|------|
-| `TickService` | 1s | Calls engine `on_tick()` (for window-based detection), Sniffer watchdog. |
+| `TickService` | 1s | Calls engine `on_tick()` (window-based detection), sniffer watchdog, collects worker result_queue. |
 | `StatsFlushService` | 60s | Batch flushes traffic counters/device buffers to DB, updates Prometheus metrics. |
 | `MaintenanceService` | 6h | Applies data retention policies, refreshes threat feeds, cleans up expired blocks. |
-| `AIAnalyzerService` | Configurable (15m default) | Batch analyzes recent events via AI -> Auto-adjusts thresholds, re-alerts real threats, upgrades missed threats to CRITICAL. |
+| `AIAnalyzerService` | Configurable (15m default) | Batch analyzes recent events via AI → auto-adjusts thresholds, re-alerts real threats, upgrades missed threats to CRITICAL. |
+| `CheckpointService` | Configurable (60s default) | Periodically saves engine internal state to Redis. Auto-restores on restart. (Requires Redis) |
+| `HAManager` | Always-on | Distributed leader election via Redis SET NX/XX + instance registry. Falls back to standalone mode (always leader) if Redis is unavailable. |
 
 ---
 
@@ -411,7 +430,7 @@ All APIs require JWT Authentication (`Authorization: Bearer <token>`).
 - **Database**: PostgreSQL 16 + asyncpg
 - **Migrations**: Alembic
 - **AI Integration**: Custom bridges for various AI CLIs.
-- **Testing**: 939 tests covering unit, integration, and performance layers.
+- **Testing**: 1,437 tests covering unit, multi-process capture, HA, integration, and performance layers.
 
 ---
 

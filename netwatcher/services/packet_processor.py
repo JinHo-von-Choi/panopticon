@@ -23,6 +23,7 @@ except ImportError:
 if TYPE_CHECKING:
     from netwatcher.alerts.dispatcher import AlertDispatcher
     from netwatcher.capture.pcap_writer import PCAPWriter
+    from netwatcher.capture.pool import WorkerPool
     from netwatcher.detection.registry import EngineRegistry
     from netwatcher.utils.network import AsyncDNSResolver
 
@@ -43,12 +44,14 @@ class PacketProcessor:
         dispatcher: AlertDispatcher | None,
         pcap_writer: PCAPWriter,
         dns_resolver: AsyncDNSResolver,
+        worker_pool: WorkerPool | None = None,
     ) -> None:
         """패킷 프로세서를 초기화한다. 레지스트리, 디스패처, PCAP 기록기 등을 주입받는다."""
         self.registry     = registry
         self.dispatcher   = dispatcher
         self.pcap_writer  = pcap_writer
         self._dns_resolver = dns_resolver
+        self._worker_pool  = worker_pool
 
         # 트래픽 카운터 (플러시 간격 단위)
         self._pkt_count  = 0
@@ -158,12 +161,59 @@ class PacketProcessor:
             open_ports.add(phit.port)
 
         # 탐지 엔진 실행
+        if self._worker_pool is not None and self._worker_pool.is_multiprocess:
+            # 멀티프로세스 모드: raw bytes를 워커로 라우팅
+            routed = self._worker_pool.route_packet(bytes(packet), src_ip)
+            if not routed:
+                # 라우팅 실패 시 로컬 폴백
+                self._run_engines_local(packet)
+        else:
+            self._run_engines_local(packet)
+
+    def _run_engines_local(self, packet: Packet) -> None:
+        """단일프로세스 모드: 로컬에서 엔진을 실행하고 알림을 디스패치한다."""
         alerts = self.registry.process_packet(packet)
         for alert in alerts:
             alert.packet_info = extract_packet_info(packet)
             enrich_alert_metadata(alert.metadata, alert.source_ip, alert.dest_ip)
             if self.dispatcher:
                 self.dispatcher.enqueue(alert)
+
+    def collect_worker_alerts(self) -> None:
+        """멀티프로세스 워커에서 수집한 Alert dict를 디스패처로 전달한다.
+
+        주기적으로 호출되어야 한다 (tick_service 또는 stats_flush에서).
+        """
+        if self._worker_pool is None or not self._worker_pool.is_multiprocess:
+            return
+        if not self.dispatcher:
+            return
+
+        alert_dicts = self._worker_pool.collect_alerts()
+        for d in alert_dicts:
+            try:
+                alert = Alert(
+                    engine=d["engine"],
+                    severity=Severity(d["severity"]),
+                    title=d["title"],
+                    description=d.get("description", ""),
+                    title_key=d.get("title_key"),
+                    description_key=d.get("description_key"),
+                    source_ip=d.get("source_ip"),
+                    source_mac=d.get("source_mac"),
+                    dest_ip=d.get("dest_ip"),
+                    dest_mac=d.get("dest_mac"),
+                    confidence=d.get("confidence", 0.5),
+                    mitre_attack_id=d.get("mitre_attack_id"),
+                    threat_level=d.get("threat_level", 0),
+                    metadata=d.get("metadata", {}),
+                    packet_info=d.get("packet_info", {}),
+                    timestamp=d.get("timestamp", ""),
+                )
+                enrich_alert_metadata(alert.metadata, alert.source_ip, alert.dest_ip)
+                self.dispatcher.enqueue(alert)
+            except Exception:
+                logger.exception("워커 Alert 역직렬화 실패: %s", d)
 
     def snapshot_and_reset_counters(self) -> dict[str, int]:
         """현재 카운터 값을 반환하고 0으로 초기화한다.

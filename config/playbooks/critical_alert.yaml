@@ -1,0 +1,16 @@
+id: "PB-001"
+name: "Critical Alert Response"
+trigger:
+  severity: "CRITICAL"
+  engines: ["threat_intel", "c2_beaconing"]
+actions:
+  - type: "enrich"
+    params:
+      lookup: ["whois", "dns_reverse"]
+  - type: "notify"
+    params:
+      channel: "telegram"
+      priority: "high"
+  - type: "document"
+    params:
+      template: "incident_report"

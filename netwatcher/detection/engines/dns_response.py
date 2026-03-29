@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict, deque
 
-from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import DNS, DNSQR, DNSRR, IP, Packet
@@ -63,7 +63,7 @@ class DNSResponseEngine(DetectionEngine):
         self._nx_counts: dict[str, deque[float]] = defaultdict(deque)
         # domain -> deque of (timestamp, resolved_ip)
         self._ff_ips: dict[str, deque[tuple[float, str]]] = defaultdict(deque)
-        self._alerted: dict[str, float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """DNS 응답 패킷에서 NXDOMAIN 폭주 및 다중 IP 할당을 분석한다."""

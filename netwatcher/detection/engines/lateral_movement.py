@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict, deque
 
-from netwatcher.detection.eviction import prune_empty_keys, prune_expired_entries
+from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from typing import Any
 
 from scapy.all import IP, Packet, TCP
@@ -63,7 +63,7 @@ class LateralMovementEngine(DetectionEngine):
 
         # src_ip -> deque of (timestamp, dst_ip, port)
         self._access_log: dict[str, deque[tuple[float, str, int]]] = defaultdict(deque)
-        self._alerted: dict[str, float] = {}
+        self._alerted: BoundedDefaultDict = BoundedDefaultDict(float, max_keys=10_000)
 
     def analyze(self, packet: Packet) -> Alert | None:
         """내부망 간의 TCP 연결 시도를 분석하여 민감 포트 접근을 추적한다."""

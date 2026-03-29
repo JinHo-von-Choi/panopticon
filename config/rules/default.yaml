@@ -31,3 +31,23 @@ rules:
     severity: "CRITICAL"
     protocol: "tcp"
     dst_port: 53
+
+  - id: "NW-005"
+    name: "HTTP Command Injection"
+    severity: "CRITICAL"
+    protocol: "tcp"
+    dst_port: [80, 8080, 443, 8443]
+    content:
+      - "| wget"
+    content_nocase: true
+    pcre:
+      - "(?i)[;|`]\\s*(?:wget|curl|nc|bash|sh|python|perl|ruby)\\b"
+      - "(?i)(?:\\$\\(|`).*(?:wget|curl|nc|bash)"
+
+  - id: "NW-006"
+    name: "SMB NULL Session"
+    severity: "WARNING"
+    protocol: "tcp"
+    dst_port: 445
+    content:
+      - "IPC$"
