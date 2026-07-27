@@ -104,8 +104,10 @@ async def test_get_events_filtered(app, event_repo):
 async def test_get_stats(app):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/stats")
+        resp = await client.get("/api/stats/summary")
         assert resp.status_code == 200
         data = resp.json()
-        assert "traffic" in data
-        assert "events" in data
+        assert "total_packets" in data
+        assert "severity_counts" in data
+        assert "protocol_counts" in data
+        assert "high_risk_count" in data

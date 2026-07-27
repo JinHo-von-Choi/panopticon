@@ -37,6 +37,8 @@ _STATIC_PREFIXES = (
     "/css/",
     "/js/",
     "/img/",
+    "/fonts/",
+    "/locales/",
 )
 
 

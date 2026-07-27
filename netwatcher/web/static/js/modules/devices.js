@@ -44,10 +44,50 @@ export async function loadDevices() {
         
         var statDev = document.getElementById("stat-devices");
         if (statDev) statDev.textContent = devicesAll.length;
-        
+
+        renderInventorySummary(devicesAll);
         filterDevices();
         renderDevicesPage(0);
     } catch (e) { console.error("Failed to load devices", e); }
+}
+
+/**
+ * 디바이스 목록 응답만으로 인벤토리 요약을 집계한다.
+ * 전용 요약 엔드포인트를 추가하지 않는다.
+ */
+function renderInventorySummary(devices) {
+    var el = document.getElementById("inv-summary");
+    if (!el) return;
+
+    if (!devices.length) {
+        el.textContent = "";
+        return;
+    }
+
+    var known        = devices.filter(function (d) { return d.is_known; }).length;
+    var unregistered = devices.length - known;
+    var highRisk     = devices.filter(function (d) { return (d.risk_score || 0) >= 7; }).length;
+
+    var types = {};
+    devices.forEach(function (d) {
+        var t = d.device_type || "unknown";
+        types[t] = (types[t] || 0) + 1;
+    });
+    var topTypes = Object.keys(types)
+        .sort(function (a, b) { return types[b] - types[a]; })
+        .slice(0, 4)
+        .map(function (t) { return t + " " + types[t]; })
+        .join(" · ");
+
+    var parts = [
+        "전체 " + devices.length,
+        "등록 " + known,
+        "미등록 " + unregistered,
+    ];
+    if (highRisk) parts.push("고위험 " + highRisk);
+    if (topTypes) parts.push(topTypes);
+
+    el.textContent = parts.join("  |  ");
 }
 
 export function filterDevices() {

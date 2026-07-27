@@ -828,6 +828,19 @@ class IncidentRepository:
             )
         return [dict(row) for row in rows]
 
+    async def count_open(self, severity: str | None = None) -> int:
+        """미해결 인시던트 수를 반환한다. severity를 주면 해당 등급만 센다."""
+        if severity:
+            value = await self._db.pool.fetchval(
+                "SELECT COUNT(*) FROM incidents WHERE resolved = FALSE AND severity = $1",
+                severity,
+            )
+        else:
+            value = await self._db.pool.fetchval(
+                "SELECT COUNT(*) FROM incidents WHERE resolved = FALSE",
+            )
+        return int(value or 0)
+
     async def resolve(self, incident_id: int) -> bool:
         """인시던트를 해결 완료 상태로 변경한다. 성공 시 True를 반환한다."""
         result = await self._db.pool.execute(

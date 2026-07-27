@@ -4,13 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panopticon Dashboard</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/fonts/fonts.css">
     <link rel="stylesheet" href="/css/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/i18next@23.10.0/dist/umd/i18next.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/i18next-http-backend@2.5.0/i18nextHttpBackend.min.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/vendor/i18next.min.js"></script>
+    <script src="/js/vendor/i18nextHttpBackend.min.js"></script>
 </head>
 <body>
     <!-- Login Overlay -->
@@ -90,8 +88,10 @@
         <!-- Tabs -->
         <nav class="tabs">
             <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
+            <button class="tab" data-tab="incidents" data-i18n="tabs.incidents">Incidents</button>
             <button class="tab" data-tab="traffic" data-i18n="tabs.traffic">Traffic</button>
             <button class="tab" data-tab="devices" data-i18n="tabs.devices">Devices</button>
+            <button class="tab" data-tab="defense" data-i18n="tabs.defense">Defense</button>
             <button class="tab" data-tab="blocklist" data-i18n="tabs.blocklist">Blocklist</button>
             <button class="tab" data-tab="whitelist" data-i18n="tabs.whitelist">Whitelist</button>
             <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
@@ -139,6 +139,78 @@
                 </table>
             </div>
             <div class="pagination" id="events-pagination"></div>
+        </section>
+
+        <!-- Incidents Tab -->
+        <section id="tab-incidents" class="tab-content">
+            <div class="toolbar">
+                <span class="toolbar-label">
+                    <span data-i18n="incidents.total">Incidents</span>:
+                    <strong id="incidents-count">0</strong>
+                </span>
+                <label class="toolbar-check">
+                    <input type="checkbox" id="incidents-show-resolved" />
+                    <span data-i18n="incidents.show_resolved">해결된 항목 포함</span>
+                </label>
+                <button id="btn-incidents-refresh" class="btn" data-i18n="common.refresh">Refresh</button>
+            </div>
+            <div class="incidents-layout">
+                <div id="incidents-list" class="incidents-list"></div>
+                <div id="incident-detail" class="incident-detail"></div>
+            </div>
+        </section>
+
+        <!-- Defense Tab -->
+        <section id="tab-defense" class="tab-content">
+            <h3 class="section-title">
+                <span data-i18n="defense.active_blocks">Active Blocks</span>
+                <span class="section-count" id="blocks-count">0</span>
+            </h3>
+            <p class="section-hint" data-i18n="defense.blocks_hint">
+                방화벽에 실제로 적용 중인 차단이다. 탐지 매칭용 목록은 Blocklist 탭에 있다.
+            </p>
+            <div class="toolbar">
+                <input type="text" id="block-ip" class="input-search" placeholder="192.0.2.10" />
+                <input type="text" id="block-reason" class="input-search" placeholder="reason" />
+                <button id="btn-add-block" class="btn btn-accent" data-i18n="defense.block">Block</button>
+                <button id="btn-blocks-refresh" class="btn" data-i18n="common.refresh">Refresh</button>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-i18n="defense.ip">IP</th>
+                            <th data-i18n="defense.reason">Reason</th>
+                            <th data-i18n="defense.blocked_at">Blocked At</th>
+                            <th data-i18n="defense.expires_at">Expires</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="blocks-body"></tbody>
+                </table>
+            </div>
+
+            <h3 class="section-title">
+                <span data-i18n="defense.signature_rules">Signature Rules</span>
+                <span class="section-count" id="rules-count">0</span>
+            </h3>
+            <div class="toolbar">
+                <button id="btn-rules-reload" class="btn" data-i18n="defense.reload_rules">Reload Rules</button>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-i18n="defense.rule_id">ID</th>
+                            <th data-i18n="defense.rule_name">Name</th>
+                            <th data-i18n="defense.severity">Severity</th>
+                            <th data-i18n="defense.protocol">Protocol</th>
+                            <th data-i18n="defense.enabled">Enabled</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rules-body"></tbody>
+                </table>
+            </div>
         </section>
 
         <!-- Traffic Tab -->

@@ -9,7 +9,7 @@
   copilot  — gh copilot explain <prompt>    (기본값)
   claude   — claude -p <prompt>
   codex    — codex <prompt>
-  gemini   — gemini <prompt>
+  gemini   — gemini -p <prompt>
   agent    — claude --agent <prompt>        (실험적)
 
 작성자: 최진호
@@ -430,6 +430,7 @@ class AIAnalyzerService:
                     "engine_name": result.engine,
                     "verdict": "CONFIRMED_THREAT",
                     "provider": self._provider,
+                    "reasoning": result.reasoning or None,
                 },
             )
             self._dispatcher.enqueue(alert)
@@ -475,6 +476,7 @@ class AIAnalyzerService:
                     "engine_name": result.engine,
                     "verdict": "MISSED_THREAT",
                     "provider": self._provider,
+                    "reasoning": result.reasoning or None,
                 },
             )
             self._dispatcher.enqueue(alert)

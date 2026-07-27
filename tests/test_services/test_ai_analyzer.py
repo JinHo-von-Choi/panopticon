@@ -267,7 +267,8 @@ class TestRunAI:
 
         args = mock_exec.call_args[0]
         assert args[0] == "gemini"
-        assert args[1] == "prompt"
+        assert args[1] == "-p"
+        assert args[2] == "prompt"
 
     @pytest.mark.asyncio
     async def test_timeout_returns_empty(self):
@@ -517,10 +518,11 @@ class TestAnalysisLoop:
             reason="Real port scan.",
         )
         await svc._apply_result(result)
-        svc._event_repo.insert.assert_awaited_once()
-        call_kwargs = svc._event_repo.insert.call_args.kwargs
-        assert call_kwargs["engine"] == "ai_analyzer"
-        assert call_kwargs["severity"] == "CRITICAL"
+        svc._event_repo.insert.assert_not_awaited()
+        svc._dispatcher.enqueue.assert_called_once()
+        alert_arg = svc._dispatcher.enqueue.call_args[0][0]
+        assert alert_arg.engine == "ai_analyzer"
+        assert alert_arg.severity.value == "CRITICAL"
 
     @pytest.mark.asyncio
     async def test_false_positive_saves_event_to_db(self):
@@ -579,12 +581,10 @@ class TestAnalysisLoop:
             reasoning="1. Reason one.\n2. Reason two.",
         )
         await svc._apply_result(result)
-        svc._event_repo.insert.assert_awaited()
-        # _apply_result()의 첫 번째 insert 호출 검증 (CRITICAL)
-        # _try_lower_threshold()의 WARNING insert는 create_task로 나중에 실행됨
-        first_call_kwargs = svc._event_repo.insert.call_args_list[0].kwargs
-        assert first_call_kwargs["severity"] == "CRITICAL"
-        assert first_call_kwargs["reasoning"] == result.reasoning
+        svc._dispatcher.enqueue.assert_called_once()
+        alert_arg = svc._dispatcher.enqueue.call_args[0][0]
+        assert alert_arg.severity.value == "CRITICAL"
+        assert alert_arg.metadata["reasoning"] == result.reasoning
 
     @pytest.mark.asyncio
     async def test_missed_threat_calls_try_lower_threshold(self):
@@ -610,8 +610,8 @@ class TestAnalysisLoop:
             reasoning="1. 25 distinct ports.\n2. SYN only.",
         )
         await svc._apply_result(result)
-        call_kwargs = svc._event_repo.insert.call_args.kwargs
-        assert call_kwargs.get("reasoning") == result.reasoning
+        alert_arg = svc._dispatcher.enqueue.call_args[0][0]
+        assert alert_arg.metadata["reasoning"] == result.reasoning
 
     @pytest.mark.asyncio
     async def test_fetch_recent_events_includes_info(self):

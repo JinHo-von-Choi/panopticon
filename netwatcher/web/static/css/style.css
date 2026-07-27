@@ -46,6 +46,42 @@
     --radius-md: 8px;
     --radius-lg: 12px;
     --radius-xl: 16px;
+
+    /* Spacing */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+
+    /* Density — 운영 밀도를 기본으로 한다 */
+    --row-h:         36px;
+    --row-h-compact: 28px;
+    --font-size-table: 12px;
+    --font-size-body:  14px;
+
+    /* Table states */
+    --table-row-hover:      rgba(95, 111, 255, 0.07);
+    --table-row-selected:   rgba(95, 111, 255, 0.14);
+    --table-header-bg:      #171a24;
+
+    /* Interaction */
+    --focus-ring: 0 0 0 2px var(--accent-glow);
+    --disabled-opacity: 0.45;
+
+    /* Layering */
+    --z-header:  200;
+    --z-drawer:  300;
+    --z-modal:   400;
+    --z-toast:   500;
+
+    /* Chart series — 심각도 토큰과 분리된 범주형 색상 */
+    --chart-1: #3498db;
+    --chart-2: #9b59b6;
+    --chart-3: #e67e22;
+    --chart-4: #1abc9c;
+    --chart-5: #f1c40f;
 }
 
 /* ================================================================
@@ -1444,4 +1480,472 @@ textarea.input-search {
     .detail-grid { grid-template-columns: 110px 1fr; }
     .charts-grid { grid-template-columns: 1fr; }
     .engines-layout { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   데이터 밀도 · 상태 표현 · 반응형
+   ============================================================ */
+
+/* 키보드 조작 가시성 */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
+
+/* 테이블 가독성: 고정 헤더, 숫자 정렬, 호버/선택 상태 */
+.table-wrapper table {
+    font-size: var(--font-size-table);
+}
+
+.table-wrapper thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--table-header-bg);
+}
+
+.table-wrapper tbody tr {
+    height: var(--row-h);
+}
+
+.table-wrapper tbody tr:hover {
+    background: var(--table-row-hover);
+}
+
+.table-wrapper tbody tr[aria-selected="true"],
+.table-wrapper tbody tr.selected {
+    background: var(--table-row-selected);
+}
+
+/* 시각·수치·식별자는 고정폭으로 비교 가능하게 */
+.table-wrapper td.num,
+.table-wrapper td.time,
+.table-wrapper td.mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.table-wrapper td.num {
+    text-align: right;
+}
+
+/* 심각도를 색 외 채널로도 구분한다 (색각 이상 대응) */
+.severity-badge::before {
+    margin-right: var(--space-1);
+    font-size: 0.85em;
+    line-height: 1;
+}
+
+.severity-CRITICAL::before { content: "\25CF"; }  /* ● */
+.severity-WARNING::before  { content: "\25B2"; }  /* ▲ */
+.severity-INFO::before     { content: "\25A0"; }  /* ■ */
+
+/* 좌측 마커로 행 단위 심각도를 스캔 가능하게 */
+.table-wrapper tbody tr.row-CRITICAL { box-shadow: inset 4px 0 0 var(--critical); }
+.table-wrapper tbody tr.row-WARNING  { box-shadow: inset 4px 0 0 var(--warning); }
+.table-wrapper tbody tr.row-INFO     { box-shadow: inset 4px 0 0 var(--info); }
+
+/* 넓은 노트북: 통계 카드 열 수를 줄이고 좌우 여백을 회수한다 */
+@media (max-width: 1280px) {
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+}
+
+/* 작은 노트북·태블릿: 카드 2열, 마스터-디테일은 세로 스택 */
+@media (max-width: 1024px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .charts-grid {
+        grid-template-columns: 1fr;
+    }
+    :root {
+        --row-h: var(--row-h-compact);
+    }
+}
+
+/* 좁은 화면: 탭은 가로 스크롤. 표는 카드로 접지 않고 스크롤을 유지한다 */
+@media (max-width: 768px) {
+    .tabs {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar {
+        display: none;
+    }
+    .tabs .tab {
+        flex: 0 0 auto;
+    }
+}
+
+/* ============================================================
+   Incidents — 운영 큐 (마스터-디테일)
+   ============================================================ */
+
+.incidents-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 34%) 1fr;
+    gap: var(--space-4);
+    align-items: start;
+}
+
+.incidents-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.incident-item {
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: var(--space-3);
+    cursor: pointer;
+    color: var(--text);
+    font-family: inherit;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.incident-item:hover { background: var(--table-row-hover); }
+
+.incident-item.selected {
+    background: var(--table-row-selected);
+    border-color: var(--accent);
+}
+
+.incident-item.sev-CRITICAL { border-left-color: var(--critical); }
+.incident-item.sev-WARNING  { border-left-color: var(--warning); }
+.incident-item.sev-INFO     { border-left-color: var(--info); }
+
+.incident-item-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+}
+
+.incident-item-title {
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1.35;
+    margin-bottom: var(--space-1);
+}
+
+.incident-item-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.incident-resolved-tag {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--green);
+    background: var(--green-bg);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+}
+
+.incident-detail {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    min-height: 240px;
+}
+
+.incident-detail-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+
+.incident-detail-head h3 {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.incident-detail-times {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: var(--space-4);
+}
+
+.incident-detail h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    margin: var(--space-5) 0 var(--space-2);
+}
+
+.incident-desc {
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+/* 킬체인 진행 — 도달 단계는 채움, 미도달은 윤곽만 */
+.killchain {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.killchain-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 62px;
+    position: relative;
+}
+
+.killchain-step::after {
+    content: "";
+    position: absolute;
+    top: 5px;
+    left: calc(50% + 8px);
+    right: calc(-50% + 8px);
+    height: 1px;
+    background: var(--border);
+}
+
+.killchain-step:last-child::after { display: none; }
+
+.killchain-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid var(--text-faint);
+    background: transparent;
+    z-index: 1;
+}
+
+.killchain-step.reached .killchain-dot {
+    border-color: var(--critical);
+    background: var(--critical);
+}
+
+.killchain-label {
+    font-size: 10px;
+    color: var(--text-faint);
+    white-space: nowrap;
+}
+
+.killchain-step.reached .killchain-label {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.incident-ips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.ip-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 3px 6px 3px 8px;
+}
+
+.btn-chip {
+    background: var(--critical-bg);
+    color: var(--critical);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.btn-chip:hover { border-color: var(--critical); }
+
+.incident-actions { margin-top: var(--space-5); }
+
+.toolbar-check {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.empty-state {
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: var(--space-6) var(--space-4);
+    text-align: center;
+}
+
+@media (max-width: 1024px) {
+    .incidents-layout { grid-template-columns: 1fr; }
+    .incidents-list { max-height: 40vh; }
+}
+
+/* Defense — 섹션 제목과 보조 설명 */
+.section-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-dim);
+    margin: var(--space-6) 0 var(--space-2);
+}
+
+.section-title:first-child { margin-top: 0; }
+
+.section-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-bg);
+    padding: 1px 7px;
+    border-radius: var(--radius-sm);
+}
+
+.section-hint {
+    color: var(--text-faint);
+    font-size: 12px;
+    margin-bottom: var(--space-3);
+}
+
+/* ============================================================
+   Hunting 드로어 — 엔티티 조사 패널
+   ============================================================ */
+
+.hunt-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: min(440px, 92vw);
+    height: 100vh;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+}
+
+.hunt-drawer.hidden { display: none; }
+
+.hunt-drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border);
+}
+
+.hunt-drawer-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    word-break: break-all;
+}
+
+.hunt-drawer-body {
+    padding: var(--space-5);
+    overflow-y: auto;
+    flex: 1;
+}
+
+.hunt-drawer-body h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    margin: var(--space-5) 0 var(--space-2);
+}
+
+.hunt-drawer-body h4:first-child { margin-top: 0; }
+
+.hunt-summary {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.hunt-summary th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 500;
+    padding: var(--space-1) 0;
+    width: 42%;
+}
+
+.hunt-summary td {
+    font-family: var(--font-mono);
+    padding: var(--space-1) 0;
+}
+
+.hunt-timeline {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.hunt-timeline-item {
+    border-left: 3px solid var(--border);
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface2);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: 12px;
+}
+
+.hunt-timeline-item.sev-CRITICAL { border-left-color: var(--critical); }
+.hunt-timeline-item.sev-WARNING  { border-left-color: var(--warning); }
+.hunt-timeline-item.sev-INFO     { border-left-color: var(--info); }
+
+.hunt-time {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-right: var(--space-2);
+}
+
+.hunt-engine {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    margin-left: var(--space-2);
+}
+
+.hunt-desc {
+    margin-top: var(--space-1);
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+
+/* 조사 가능한 엔티티임을 알린다 */
+.hunt-link {
+    cursor: pointer;
+    border-bottom: 1px dashed var(--text-faint);
+}
+
+.hunt-link:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
 }

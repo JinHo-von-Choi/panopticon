@@ -75,6 +75,16 @@ class DarkIPEngine(DetectionEngine):
             "label": "자동 학습",
             "description": "관찰된 소스 IP를 활성 호스트로 자동 등록한다.",
         },
+        "monitored_networks": {
+            "type": list, "default": [],
+            "label": "감시 대상 네트워크",
+            "description": "다크 IP 판정을 적용할 CIDR 목록. 비우면 사설 대역 전체를 대상으로 한다.",
+        },
+        "known_hosts": {
+            "type": list, "default": [],
+            "label": "알려진 호스트",
+            "description": "활성 호스트로 미리 등록하여 다크 IP 판정에서 제외할 IP 목록.",
+        },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:

@@ -21,11 +21,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def create_auth_router(auth_manager: "AuthManager") -> APIRouter:
+def create_auth_router(auth_manager: "AuthManager | None") -> APIRouter:
     router = APIRouter(prefix="/auth", tags=["auth"])
 
     @router.post("/login")
     async def login(body: LoginRequest):
+        if auth_manager is None or not auth_manager.enabled:
+            return JSONResponse({"error": "Authentication is disabled"}, status_code=404)
         token = auth_manager.authenticate(body.username, body.password)
         if token is None:
             return JSONResponse({"error": "Invalid credentials"}, status_code=401)
@@ -33,12 +35,21 @@ def create_auth_router(auth_manager: "AuthManager") -> APIRouter:
 
     @router.get("/status")
     async def status(request: Request):
+        """인증 활성화 여부를 알린다. 토큰이 있으면 유효성까지 함께 검사한다.
+
+        토큰 없이 호출할 수 있어야 대시보드가 로그인 화면 표시 여부를 판단할 수 있다.
+        """
+        enabled = auth_manager is not None and auth_manager.enabled
+        if not enabled:
+            return {"enabled": False}
+
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
-            return JSONResponse({"error": "Missing token"}, status_code=401)
+            return {"enabled": True}
+
         payload = auth_manager.verify_token(auth_header[7:])
         if payload is None:
             return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
-        return {"authenticated": True, "user": payload.get("sub")}
+        return {"enabled": True, "authenticated": True, "user": payload.get("sub")}
 
     return router

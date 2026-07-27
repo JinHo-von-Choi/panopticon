@@ -6,9 +6,12 @@ import { initI18n } from './core/i18n.js';
 import { getAuthToken, setAuthToken, setAuthEnabled, isAuthEnabled, authFetch } from './core/api.js';
 import { loadEvents, renderEventRow, exportEvents } from './modules/events.js';
 import { loadDevices, filterDevices, renderDevicesPage } from './modules/devices.js';
-import { loadStats, loadCharts } from './modules/stats.js';
+import { loadStats, loadCharts, bumpSeverityCounter } from './modules/stats.js';
 import { loadEngines, populateEngineFilter } from './modules/engines.js';
 import { loadBlocklist } from './modules/blocklist.js';
+import { loadIncidents, registerIncidentListeners } from './modules/incidents.js';
+import { loadDefense, registerDefenseListeners } from './modules/defense.js';
+import { registerHuntListeners } from './modules/hunting.js';
 import { initAiAnalyzerTab, loadAiAnalyzerStatus, loadAiLogs, registerAiAnalyzerListeners } from './modules/ai_analyzer.js';
 import { loadWhitelist, registerWhitelistListeners } from './modules/whitelist.js';
 
@@ -31,6 +34,40 @@ async function initApp() {
 
     connectWS();
     if (!statsInterval) statsInterval = setInterval(loadStats, 30000);
+    startFreshnessClock();
+}
+
+let lastDataAt = null;
+let freshnessInterval = null;
+
+/** 알림 수신 시각을 기록한다. 파이프라인 생존 여부 표시의 기준점이 된다. */
+function markDataReceived() {
+    lastDataAt = Date.now();
+}
+
+/**
+ * 헤더에 마지막 데이터 수신 후 경과 시간을 표시한다.
+ * 벽시계보다 캡처 파이프라인이 살아 있는지를 알려주는 편이 유용하다.
+ */
+function startFreshnessClock() {
+    const el = document.getElementById("clock");
+    if (!el || freshnessInterval) return;
+
+    const render = () => {
+        if (lastDataAt === null) {
+            el.textContent = "—";
+            el.title = "아직 수신한 알림이 없습니다";
+            return;
+        }
+        const seconds = Math.floor((Date.now() - lastDataAt) / 1000);
+        if (seconds < 60)      el.textContent = `${seconds}s ago`;
+        else if (seconds < 3600) el.textContent = `${Math.floor(seconds / 60)}m ago`;
+        else                   el.textContent = `${Math.floor(seconds / 3600)}h ago`;
+        el.title = `마지막 알림 수신: ${new Date(lastDataAt).toLocaleString()}`;
+    };
+
+    render();
+    freshnessInterval = setInterval(render, 1000);
 }
 
 function connectWS() {
@@ -55,6 +92,8 @@ function connectWS() {
                 const row = renderEventRow(ev);
                 body.insertBefore(row, body.firstChild);
             }
+            bumpSeverityCounter(ev.severity);
+            markDataReceived();
         }
     };
 }
@@ -64,6 +103,10 @@ window.closeModal = function() { document.getElementById("modal-overlay").classL
 window.closeDeviceModal = function() { document.getElementById("device-modal-overlay").classList.add("hidden"); };
 
 function registerListeners() {
+    registerIncidentListeners();
+    registerDefenseListeners();
+    registerHuntListeners();
+
     // Tabs
     document.querySelectorAll(".tab").forEach(tab => {
         tab.addEventListener("click", () => {
@@ -78,6 +121,8 @@ function registerListeners() {
             if (target === "devices")      loadDevices();
             if (target === "traffic")      loadCharts();
             if (target === "engines")      loadEngines();
+            if (target === "incidents")    loadIncidents();
+            if (target === "defense")      loadDefense();
             if (target === "blocklist")    loadBlocklist(0);
             if (target === "whitelist")    loadWhitelist();
             if (target === "ai-analyzer") { loadAiAnalyzerStatus(); loadAiLogs(0); }
@@ -261,13 +306,21 @@ window.addEventListener("DOMContentLoaded", () => {
     registerListeners();
     initI18n(() => { if (isAuthEnabled()) { loadEvents(0); loadEngines(); } }).then(async () => {
         const token = getAuthToken();
-        if (token) {
-            try {
-                const resp = await fetch("/api/auth/status", { headers: { "Authorization": `Bearer ${token}` } });
-                if (resp.ok) initApp();
-                else { setAuthToken(null); document.getElementById("login-overlay").classList.remove("hidden"); }
-            } catch (e) { document.getElementById("login-overlay").classList.remove("hidden"); }
-        } else {
+        const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+        try {
+            const resp = await fetch("/api/auth/status", { headers });
+            const data = resp.ok ? await resp.json() : null;
+
+            // 인증이 꺼진 배포에서는 로그인 화면을 띄우지 않는다.
+            if (data && data.enabled === false) {
+                initApp();
+            } else if (resp.ok && token) {
+                initApp();
+            } else {
+                if (token) setAuthToken(null);
+                document.getElementById("login-overlay").classList.remove("hidden");
+            }
+        } catch (e) {
             document.getElementById("login-overlay").classList.remove("hidden");
         }
     });

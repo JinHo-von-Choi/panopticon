@@ -35,6 +35,11 @@ class SegmentViolationEngine(DetectionEngine):
             "label": "쿨다운(초)",
             "description": "동일 (src, dst) 쌍에 대한 알림 재발생 억제 시간.",
         },
+        "allowed_flows": {
+            "type": list, "default": [],
+            "label": "허용 흐름",
+            "description": "세그먼트 간 통신을 허용할 흐름 정의 목록. 여기에 없는 흐름을 위반으로 판정한다.",
+        },
     }
 
     def __init__(self, config: dict[str, Any]) -> None:

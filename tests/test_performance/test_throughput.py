@@ -15,9 +15,16 @@ from scapy.all import IP, TCP, UDP, Ether
 
 
 def _make_tcp_packet(src_ip="192.168.1.100", dst_ip="10.0.0.1", sport=12345, dport=80):
-    return Ether(src="aa:bb:cc:dd:ee:01", dst="ff:ff:ff:ff:ff:ff") / \
-           IP(src=src_ip, dst=dst_ip) / \
-           TCP(sport=sport, dport=dport, flags="S")
+    """캡처 경로와 동일한 형태의 패킷을 만든다.
+
+    스니퍼가 넘기는 패킷은 항상 wire bytes에서 파싱된 상태다. 조립만 한 패킷은
+    len() 호출마다 scapy가 전체를 재직렬화하므로, 그대로 쓰면 엔진 처리량이
+    아니라 직렬화 비용을 측정하게 된다.
+    """
+    packet = Ether(src="aa:bb:cc:dd:ee:01", dst="ff:ff:ff:ff:ff:ff") / \
+             IP(src=src_ip, dst=dst_ip) / \
+             TCP(sport=sport, dport=dport, flags="S")
+    return Ether(bytes(packet))
 
 
 class TestEngineThroughput:

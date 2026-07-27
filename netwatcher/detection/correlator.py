@@ -117,6 +117,11 @@ class AlertCorrelator:
         self._kc_score_threshold: float = 0.5
         self._kc_critical_threshold: float = 0.7
 
+    @property
+    def incident_repo(self):
+        """영속 저장소를 반환한다. 주입되지 않았으면 None."""
+        return self._incident_repo
+
     def set_incident_repo(self, repo) -> None:
         """생성 후 인시던트 저장소를 주입한다."""
         self._incident_repo = repo

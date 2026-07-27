@@ -46,8 +46,29 @@ export async function loadBlocklist(page) {
             body.appendChild(tr);
         });
 
+        renderSummary(blTotal, data.entries.length, { type, source, search });
         renderPagination(document.getElementById("blocklist-pagination"), blPage, blTotal, BL_PER_PAGE, loadBlocklist);
     } catch (e) { console.error("Failed to load blocklist", e); }
+}
+
+/**
+ * 목록 응답의 총계로 요약 줄을 채운다.
+ * 별도의 통계 엔드포인트를 두지 않고 현재 조회 결과만으로 표현한다.
+ */
+function renderSummary(total, shown, filters) {
+    const el = document.getElementById("bl-stats");
+    if (!el) return;
+
+    const active = [];
+    if (filters.type)   active.push(`type=${filters.type}`);
+    if (filters.source) active.push(`source=${filters.source}`);
+    if (filters.search) active.push(`search="${filters.search}"`);
+
+    const scope = active.length
+        ? `필터 일치 ${total.toLocaleString()}건 (${active.join(", ")})`
+        : `전체 ${total.toLocaleString()}건`;
+
+    el.textContent = `${scope} · 현재 페이지 ${shown.toLocaleString()}건`;
 }
 
 window.removeBlock = async function(type, value) {

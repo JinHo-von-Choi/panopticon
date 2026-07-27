@@ -31,13 +31,13 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
     # API Routers (Standardized Prefix)
     api_prefix = "/api"
-    if auth_manager:
-        from netwatcher.web.routes.auth import create_auth_router
-        app.include_router(create_auth_router(auth_manager), prefix=api_prefix)
+    # 인증이 꺼져 있어도 /auth/status는 응답해야 대시보드가 로그인 화면 표시 여부를 판단한다.
+    from netwatcher.web.routes.auth import create_auth_router
+    app.include_router(create_auth_router(auth_manager), prefix=api_prefix)
     app.include_router(create_events_router(event_repo, dispatcher, auth_manager=auth_manager), prefix=api_prefix)
     app.include_router(create_ws_router(dispatcher, auth_manager=auth_manager), prefix=api_prefix)
     app.include_router(create_devices_router(device_repo), prefix=api_prefix)
-    app.include_router(create_stats_router(stats_repo, event_repo), prefix=api_prefix)
+    app.include_router(create_stats_router(stats_repo, event_repo, correlator=correlator), prefix=api_prefix)
 
     if whitelist:
         from netwatcher.web.routes.whitelist import create_whitelist_router
@@ -57,7 +57,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
     if block_manager:
         from netwatcher.web.routes.blocks import create_blocks_router
-        app.include_router(create_blocks_router(block_manager, whitelist), prefix=api_prefix)
+        app.include_router(create_blocks_router(block_manager), prefix=api_prefix)
 
     if signature_engine:
         from netwatcher.web.routes.rules import create_rules_router
@@ -89,6 +89,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     app.mount("/js",      StaticFiles(directory=str(static_dir / "js")),      name="js")
     app.mount("/locales", StaticFiles(directory=str(static_dir / "locales")), name="locales")
     app.mount("/img",     StaticFiles(directory=str(static_dir / "img")),     name="img")
+    app.mount("/fonts",   StaticFiles(directory=str(static_dir / "fonts")),   name="fonts")
 
     @app.get("/")
     async def root(): return FileResponse(str(static_dir / "index.html"))

@@ -41,7 +41,7 @@
 
 ## Overview
 
-**Panopticon** is an all-in-one network security monitoring system designed for small to medium-sized network environments. It provides everything needed for network security monitoring in a single package—from Scapy-based real-time packet capture to 21 packet-based detection engines, 2 NetFlow-based detection engines, Kill Chain-based incident correlation, automated IP blocking (IRS), threat intelligence feed integration, AI-driven false positive reduction (AIAnalyzer), and a real-time web dashboard.
+**Panopticon** is an all-in-one network security monitoring system designed for small to medium-sized network environments. It provides everything needed for network security monitoring in a single package—from Scapy-based real-time packet capture to 22 packet-based detection engines, 2 NetFlow-based detection engines, Kill Chain-based incident correlation, automated IP blocking (IRS), threat intelligence feed integration, AI-driven false positive reduction (AIAnalyzer), and a real-time web dashboard.
 
 ### Motivation
 
@@ -203,7 +203,7 @@ Installing Panopticon in an environment with a standard consumer router and unma
 - **What is visible**: Own traffic, ARP broadcasts, DHCP, Multicast.
 - **What is NOT visible**: Any unicast traffic between other hosts.
 
-Consequently, only 3 out of 21 detection engines (ARP/DHCP/MAC Spoofing) will function effectively. The remaining 18 engines will stay dormant as packets never reach them.
+Consequently, only 3 out of 22 detection engines (ARP/DHCP/MAC Spoofing) will function effectively. The remaining 19 engines will stay dormant as packets never reach them.
 
 ### Deployment Topology Options
 
@@ -334,7 +334,7 @@ The dashboard displays visibility as `none` / `partial` / `full` based on unique
 | **Devices** | Network device list (MAC, IP, vendor, OS, packet count), device registration and editing |
 | **Blocklist** | Custom IP/domain blocklist management, threat feed statistics |
 | **Whitelist** | Allowlist management — add/remove IP, MAC, domain, IP Range entries; type filter and search. Whitelist entries are included in the AI analysis prompt to improve false positive detection |
-| **Engines** | Enable/disable toggle and real-time parameter editing for 21 detection engines |
+| **Engines** | Enable/disable toggle and real-time parameter editing for 22 detection engines |
 | **AI Analyzer** | AI false positive analysis history (verdict filter, threshold adjustment history), service status. Tab is only shown when `ai_analyzer.enabled: true` |
 
 ---

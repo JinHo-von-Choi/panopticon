@@ -9,17 +9,45 @@ var severityChart = null;
 var protocolChart = null;
 var enginesChart = null;
 
+/**
+ * 스타일시트에 정의된 디자인 토큰 값을 읽는다.
+ * 차트 색상이 테마 토큰과 어긋나지 않도록 하드코딩을 대신한다.
+ */
+function token(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return value.trim() || fallback;
+}
+
+function severityColors() {
+    return [
+        token('--critical', '#ff4757'),
+        token('--warning',  '#ffa502'),
+        token('--info',     '#3498db'),
+    ];
+}
+
+function seriesColors() {
+    return [
+        token('--chart-1', '#3498db'),
+        token('--chart-2', '#9b59b6'),
+        token('--chart-3', '#e67e22'),
+        token('--chart-4', '#1abc9c'),
+        token('--chart-5', '#f1c40f'),
+    ];
+}
+
 export async function loadStats() {
     try {
         const resp = await authFetch("/api/stats/summary");
         if (!resp || !resp.ok) return;
         const data = await resp.json();
-        
+
         updateCounter("stat-critical", data.severity_counts.CRITICAL);
         updateCounter("stat-warning", data.severity_counts.WARNING);
         updateCounter("stat-info", data.severity_counts.INFO);
         updateCounter("stat-packets", data.total_packets);
-        
+        updateCounter("stat-highrisk", data.high_risk_count);
+
         const visEl = document.getElementById("stat-visibility");
         if (visEl) {
             visEl.textContent = data.hosts_visible || "-";
@@ -48,6 +76,23 @@ function updateCounter(id, val) {
         el.textContent = abbreviate(n);
         el.title = n.toLocaleString();
     }
+}
+
+/**
+ * 실시간 알림 수신 시 심각도 카운터를 즉시 증가시킨다.
+ * 30초 주기 폴링을 기다리지 않고 KPI가 스트림을 따라가게 한다.
+ */
+export function bumpSeverityCounter(severity) {
+    const id = {
+        CRITICAL: "stat-critical",
+        WARNING:  "stat-warning",
+        INFO:     "stat-info",
+    }[severity];
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    const current = parseInt(el.title.replace(/,/g, ""), 10);
+    updateCounter(id, (Number.isNaN(current) ? 0 : current) + 1);
 }
 
 export async function loadCharts() {
@@ -80,7 +125,7 @@ function renderTrafficChart(data) {
             datasets: [{
                 label: 'Packets/min',
                 data: data.map(d => d.total_packets),
-                borderColor: '#3498db',
+                borderColor: token('--info', '#3498db'),
                 fill: true,
                 tension: 0.4
             }]
@@ -101,7 +146,7 @@ function renderSeverityChart(data) {
             labels: ['Critical', 'Warning', 'Info'],
             datasets: [{
                 data: [counts.CRITICAL, counts.WARNING, counts.INFO],
-                backgroundColor: ['#ff4757', '#ffa502', '#2ed573']
+                backgroundColor: severityColors()
             }]
         },
         options: { responsive: true, maintainAspectRatio: false }
@@ -120,7 +165,7 @@ function renderProtocolChart(data) {
             labels: labels,
             datasets: [{
                 data: values,
-                backgroundColor: ['#3498db', '#9b59b6', '#e67e22', '#1abc9c', '#f1c40f']
+                backgroundColor: seriesColors()
             }]
         },
         options: { responsive: true, maintainAspectRatio: false }
@@ -140,7 +185,7 @@ function renderEnginesChart(data) {
             datasets: [{
                 label: 'Alerts',
                 data: values,
-                backgroundColor: '#a29bfe'
+                backgroundColor: token('--accent', '#5f6fff')
             }]
         },
         options: {

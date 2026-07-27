@@ -71,6 +71,20 @@ class EngineRegistry:
                     and hasattr(obj, "name")
                     and obj.name
                 ):
+                    # 다른 모듈에서 정의된 클래스는 그 정의 모듈을 순회할 때만
+                    # 등록한다. 재수출된 클래스의 중복 등록을 방지한다.
+                    origin = obj.__module__
+                    if origin != full_name and not origin.startswith(full_name + "."):
+                        continue
+
+                    registered = self._engine_classes.get(obj.name)
+                    if registered is not None and registered is not obj:
+                        logger.warning(
+                            "Duplicate engine name '%s': %s conflicts with %s; keeping the first",
+                            obj.name, origin, registered.__module__,
+                        )
+                        continue
+
                     # 모든 엔진 클래스를 저장 (disabled 포함)
                     self._engine_classes[obj.name] = obj
 
@@ -179,6 +193,16 @@ class EngineRegistry:
     # ------------------------------------------------------------------
     # 엔진 정보 조회
     # ------------------------------------------------------------------
+
+    def get_config_keys(self, name: str) -> set[str] | None:
+        """엔진의 config_schema에 선언된 파라미터 키 집합을 반환한다.
+
+        엔진을 찾을 수 없으면 None, 스키마가 비어 있으면 빈 집합을 반환한다.
+        """
+        engine_cls = self._engine_classes.get(name)
+        if engine_cls is None:
+            return None
+        return set(getattr(engine_cls, "config_schema", {}) or {})
 
     def get_engine_info(self, name: str) -> dict[str, Any] | None:
         """단일 엔진의 상세 정보를 반환한다.

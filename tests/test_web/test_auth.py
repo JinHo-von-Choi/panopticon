@@ -146,11 +146,20 @@ class TestAuthManager:
         expired_token = jwt.encode(payload, mgr._secret, algorithm="HS256")
         assert mgr.verify_token(expired_token) is None
 
-    def test_disabled_when_no_password(self, tmp_path, monkeypatch):
-        """Auth should auto-disable when enabled=true but password is empty."""
+    def test_rejects_enabled_without_password(self, tmp_path, monkeypatch):
+        """enabled=true인데 비밀번호가 없으면 기동을 중단한다.
+
+        조용히 인증을 꺼버리면 운영자가 보호받고 있다고 오해하므로,
+        비밀번호 설정과 명시적 비활성화 중 하나를 선택하도록 강제한다.
+        """
         cfg = _make_auth_config(tmp_path, monkeypatch, enabled=True, password="")
-        mgr = AuthManager(cfg)
-        assert mgr.enabled is False
+        with pytest.raises(ValueError, match="auth.password"):
+            AuthManager(cfg)
+
+    def test_disabled_when_not_enabled(self, tmp_path, monkeypatch):
+        """enabled=false이면 비밀번호가 없어도 비활성 상태로 기동한다."""
+        cfg = _make_auth_config(tmp_path, monkeypatch, enabled=False, password="")
+        assert AuthManager(cfg).enabled is False
 
 
 class TestAuthEndpoints:
@@ -164,6 +173,7 @@ class TestAuthEndpoints:
             device_repo=device_repo,
             stats_repo=stats_repo,
             dispatcher=dispatcher,
+            auth_manager=AuthManager(cfg),
         )
 
     @pytest.fixture
