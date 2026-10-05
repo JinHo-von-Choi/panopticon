@@ -72,8 +72,14 @@ class Config:
         프로젝트 루트 기준 config/default.yaml을 기본 경로로 사용한다.
         환경변수 NETWATCHER_CONFIG로 경로를 오버라이드할 수 있다.
         .env 파일이 존재하면 자동으로 로드하여 환경변수를 설정한다.
+
+        ``NETWATCHER_SKIP_DOTENV=1`` 이면 .env 로드를 건너뛴다. 출시 게이트처럼
+        **배포 가능성 판정**에 쓰는 경로에서 필요하다 — 개발자의 로컬 .env 에
+        로그인 설정이 들어 있으면 같은 설정 파일이 배포 환경과 다른 판정을
+        받기 때문이다. 판정은 재현되어야 한다.
         """
-        load_dotenv()
+        if os.environ.get("NETWATCHER_SKIP_DOTENV", "").strip() not in ("1", "true", "yes"):
+            load_dotenv()
 
         if config_path is None:
             config_path = os.environ.get("NETWATCHER_CONFIG")

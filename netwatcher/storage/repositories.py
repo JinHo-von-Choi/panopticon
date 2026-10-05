@@ -857,3 +857,392 @@ class IncidentRepository:
             cutoff.isoformat(),
         )
         return int(result.split()[-1])
+
+
+class ConfigProposalRepository:
+    """config_proposals 테이블에 대한 CRUD (승인 큐, PR 10)."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert(
+        self,
+        engine: str,
+        params: dict,
+        reason: str = "",
+        source: str = "human",
+        before: dict | None = None,
+    ) -> int:
+        """제안을 등록하고 id를 반환한다."""
+        row_id = await self._db.pool.fetchval(
+            """INSERT INTO config_proposals (engine, params, reason, source, before)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING id""",
+            engine, params, reason, source, before,
+        )
+        return int(row_id)
+
+    async def get_by_id(self, proposal_id: int) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM config_proposals WHERE id = $1", proposal_id,
+        )
+        return dict(row) if row else None
+
+    async def list_recent(
+        self, limit: int = 50, status: str | None = None,
+    ) -> list[dict]:
+        """제안 목록을 반환한다. status 로 필터링할 수 있다."""
+        query = "SELECT * FROM config_proposals"
+        params: list = []
+        if status:
+            params.append(status)
+            query += f" WHERE status = ${len(params)}"
+        params.append(limit)
+        query += f" ORDER BY created_at DESC LIMIT ${len(params)}"
+        rows = await self._db.pool.fetch(query, *params)
+        return [dict(r) for r in rows]
+
+    async def list_pending(self, limit: int = 50) -> list[dict]:
+        return await self.list_recent(limit=limit, status="pending")
+
+    async def count_pending(self) -> int:
+        value = await self._db.pool.fetchval(
+            "SELECT COUNT(*) FROM config_proposals WHERE status = 'pending'"
+        )
+        return int(value or 0)
+
+    async def decide(
+        self,
+        proposal_id: int,
+        status: str,
+        decided_by: str,
+        decision_note: str = "",
+    ) -> bool:
+        """승인/거절을 기록한다.
+
+        이미 결정된 제안은 다시 결정할 수 없다. 어떤 제안이 승인됐는지가
+        감사 추적의 핵심이기 때문이다.
+        """
+        result = await self._db.pool.execute(
+            """UPDATE config_proposals
+               SET status = $2, decided_by = $3, decision_note = $4, decided_at = NOW()
+               WHERE id = $1 AND status = 'pending'""",
+            proposal_id, status, decided_by, decision_note,
+        )
+        return result.split()[-1] != "0"
+
+    async def mark_applied(
+        self, proposal_id: int, applied: bool, error: str | None = None,
+    ) -> None:
+        """승인 후 실제 적용 결과를 기록한다."""
+        await self._db.pool.execute(
+            """UPDATE config_proposals
+               SET applied = $2, apply_error = $3, status = $4
+               WHERE id = $1""",
+            proposal_id, applied, error,
+            "approved" if applied else "failed",
+        )
+
+
+class ReplayRepository:
+    """evidence / trace / replay_run 기록 (계획서 1장, PR 12).
+
+    리플레이는 운영 events 테이블에 쓰지 않는다. 결과는 `replay_results`
+    에만 저장한다 — 운영 경로와 섞이면 "격리됐다" 는 말이 거짓이 된다.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    # ------------------------------------------------------------------
+    # Evidence
+    # ------------------------------------------------------------------
+
+    async def insert_evidence(self, record: dict) -> int:
+        """판정 근거를 저장한다."""
+        return int(await self._db.pool.fetchval(
+            """INSERT INTO evidence_records
+                 (evidence_id, sensor_id, boot_id, engine, seq_from, seq_to,
+                  event_time, build_version, config_version, feed_version,
+                  whitelist_version, normalizer_version, features, verdicts,
+                  missing, expired)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+               RETURNING id""",
+            record["evidence_id"], record["sensor_id"], record["boot_id"],
+            record["engine"], record.get("seq_from"), record.get("seq_to"),
+            record.get("event_time"), record.get("build_version", ""),
+            record.get("config_version", ""), record.get("feed_version", ""),
+            record.get("whitelist_version", ""), record.get("normalizer_version", ""),
+            record.get("features", {}), record.get("verdicts", []),
+            record.get("missing", []), record.get("expired", False),
+        ))
+
+    async def get_evidence(self, evidence_id: str) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM evidence_records WHERE evidence_id = $1", evidence_id,
+        )
+        return dict(row) if row else None
+
+    async def list_evidence(self, engine: str | None = None, limit: int = 50) -> list[dict]:
+        if engine:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM evidence_records WHERE engine = $1 "
+                "ORDER BY created_at DESC LIMIT $2", engine, limit,
+            )
+        else:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM evidence_records ORDER BY created_at DESC LIMIT $1", limit,
+            )
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Trace
+    # ------------------------------------------------------------------
+
+    async def insert_trace(self, row: dict) -> int:
+        return int(await self._db.pool.fetchval(
+            """INSERT INTO replay_traces
+                 (trace_id, input_type, input_count, input_hash, order_key,
+                  tick_schedule, warmup, compat_snapshot, complete,
+                  payload_engines, size_bytes)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+               RETURNING id""",
+            row["trace_id"], row.get("input_type", "features"),
+            row.get("input_count", 0), row.get("input_hash", ""),
+            row.get("order_key", ""), row.get("tick_schedule", []),
+            row.get("warmup", {}), row.get("compat_snapshot", {}),
+            row.get("complete", True), row.get("payload_engines", []),
+            row.get("size_bytes", 0),
+        ))
+
+    async def get_trace(self, trace_id: str) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM replay_traces WHERE trace_id = $1", trace_id,
+        )
+        return dict(row) if row else None
+
+    async def get_trace_by_hash(self, input_hash: str) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM replay_traces WHERE input_hash = $1 "
+            "ORDER BY created_at DESC LIMIT 1", input_hash,
+        )
+        return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # ReplayRun
+    # ------------------------------------------------------------------
+
+    async def create_run(
+        self, trace_id: str, baseline_version: str, candidate_version: str,
+    ) -> int:
+        return int(await self._db.pool.fetchval(
+            """INSERT INTO replay_runs (trace_id, baseline_version, candidate_version)
+               VALUES ($1,$2,$3) RETURNING id""",
+            trace_id, baseline_version, candidate_version,
+        ))
+
+    async def mark_running(self, run_id: int) -> None:
+        await self._db.pool.execute(
+            "UPDATE replay_runs SET status = 'running', started_at = NOW() WHERE id = $1",
+            run_id,
+        )
+
+    async def finish_run(
+        self, run_id: int, status: str, *,
+        baseline_hash: str | None, candidate_hash: str | None,
+        reasons: list, comparable: bool,
+        budget: dict, error: str | None = None,
+    ) -> None:
+        await self._db.pool.execute(
+            """UPDATE replay_runs
+                  SET status = $2, baseline_result_hash = $3, candidate_result_hash = $4,
+                      non_comparable_reasons = $5, comparable = $6,
+                      budget_exceeded = $7, budget_detail = $8, error = $9,
+                      finished_at = NOW()
+                WHERE id = $1""",
+            run_id, status, baseline_hash, candidate_hash, reasons, comparable,
+            bool(budget.get("exceeded")), budget, error,
+        )
+
+    async def get_run(self, run_id: int) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM replay_runs WHERE id = $1", run_id,
+        )
+        return dict(row) if row else None
+
+    async def list_runs(self, limit: int = 50) -> list[dict]:
+        rows = await self._db.pool.fetch(
+            "SELECT * FROM replay_runs ORDER BY created_at DESC LIMIT $1", limit,
+        )
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Results (격리 저장)
+    # ------------------------------------------------------------------
+
+    async def insert_result(
+        self, run_id: int, side: str, engine: str, result_hash: str,
+        observations: list, unsupported: list,
+    ) -> None:
+        await self._db.pool.execute(
+            """INSERT INTO replay_results
+                 (replay_run_id, side, engine, result_hash, observation_count,
+                  observations, unsupported)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+            run_id, side, engine, result_hash, len(observations),
+            observations, unsupported,
+        )
+
+    async def list_results(self, run_id: int, side: str | None = None) -> list[dict]:
+        if side:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM replay_results WHERE replay_run_id = $1 AND side = $2 "
+                "ORDER BY engine", run_id, side,
+            )
+        else:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM replay_results WHERE replay_run_id = $1 ORDER BY side, engine",
+                run_id,
+            )
+        return [dict(r) for r in rows]
+
+
+class ResponseActionRepository:
+    """response_actions / response_receipts (계획서 2장, PR 13).
+
+    의도(intent) 와 사실(fact) 을 같은 행에 섞지 않는다. `requested` 에서
+    프로세스가 죽어도 "무엇을 하려 했는가" 는 남아야 재시작 조정기가
+    OS 와 대조할 수 있다.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def create_requested(
+        self, *, proposal_id: int | None, approval, idempotency_key: str,
+        mapping_confirmed_at=None,
+    ) -> int:
+        return int(await self._db.pool.fetchval(
+            """INSERT INTO response_actions
+                 (proposal_id, target, direction, ttl_seconds, state,
+                  approved_hash, base_version, approved_by, approved_at,
+                  idempotency_key, mapping_confirmed_at)
+               VALUES ($1,$2,$3,$4,'requested',$5,$6,$7,$8,$9,$10)
+               RETURNING id""",
+            proposal_id, approval.target, approval.direction, approval.ttl_seconds,
+            approval.approved_hash, approval.base_version, approval.approved_by,
+            approval.approved_at, idempotency_key, mapping_confirmed_at,
+        ))
+
+    async def get(self, action_id: int) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM response_actions WHERE id = $1", action_id,
+        )
+        return dict(row) if row else None
+
+    async def find_by_idempotency_key(self, key: str) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM response_actions WHERE idempotency_key = $1", key,
+        )
+        return dict(row) if row else None
+
+    async def list_recent(self, limit: int = 50) -> list[dict]:
+        rows = await self._db.pool.fetch(
+            "SELECT * FROM response_actions ORDER BY created_at DESC LIMIT $1", limit,
+        )
+        return [dict(r) for r in rows]
+
+    async def mark_applying(self, action_id: int, *, idempotency_key: str) -> None:
+        await self._db.pool.execute(
+            """UPDATE response_actions
+                  SET state = 'applying', idempotency_key = $2,
+                      attempt_count = attempt_count + 1, updated_at = NOW()
+                WHERE id = $1""",
+            action_id, idempotency_key,
+        )
+
+    async def finish(
+        self, action_id: int, *, state: str, expire_at=None,
+        rule_fingerprint: str | None = None, rule_tag: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        await self._db.pool.execute(
+            """UPDATE response_actions
+                  SET state = $2, expire_at = $3, rule_fingerprint = $4,
+                      rule_tag = COALESCE($5, rule_tag), last_error = $6,
+                      updated_at = NOW()
+                WHERE id = $1""",
+            action_id, state, expire_at, rule_fingerprint, rule_tag, error,
+        )
+
+    async def mark_unknown(self, action_id: int, error: str) -> None:
+        """확인 실패를 '실패'가 아니라 '알 수 없음' 으로 남긴다.
+
+        확인하지 못한 것을 실패로 기록하면 "적용 안 됐다" 고 오독되고,
+        성공으로 기록하면 "적용됐다" 고 오독된다. unknown 이 정답이다.
+        """
+        await self._db.pool.execute(
+            """UPDATE response_actions
+                  SET state = 'unknown', last_error = $2, updated_at = NOW()
+                WHERE id = $1""",
+            action_id, error,
+        )
+
+    async def add_receipt(
+        self, action_id: int, *, phase: str, outcome: str, detail: dict,
+    ) -> None:
+        await self._db.pool.execute(
+            """INSERT INTO response_receipts (action_id, phase, outcome, detail)
+               VALUES ($1,$2,$3,$4)""",
+            action_id, phase, outcome, detail,
+        )
+
+    async def list_receipts(self, action_id: int) -> list[dict]:
+        rows = await self._db.pool.fetch(
+            "SELECT * FROM response_receipts WHERE action_id = $1 "
+            "ORDER BY observed_at DESC", action_id,
+        )
+        return [dict(r) for r in rows]
+
+
+class ResponseProposalRepository:
+    """response_proposals (계획서 4장, PR 14)."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert(self, row: dict) -> int:
+        return int(await self._db.pool.fetchval(
+            """INSERT INTO response_proposals
+                 (event_id, engine, source_ip, evidence, visibility_state,
+                  visibility_reasons, target_mapping, match_scope,
+                  expected_assets, unconfirmed_assets, uncertainty,
+                  ttl_seconds, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               RETURNING id""",
+            row.get("event_id"), row.get("engine", ""), row["source_ip"],
+            row.get("evidence", {}), row.get("visibility_state", "unknown"),
+            row.get("visibility_reasons", []), row.get("target_mapping", {}),
+            row.get("match_scope", {}), row.get("expected_assets", []),
+            row.get("unconfirmed_assets", []), row.get("uncertainty", {}),
+            row["ttl_seconds"], row.get("created_by", "rules"),
+        ))
+
+    async def get(self, proposal_id: int) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM response_proposals WHERE id = $1", proposal_id,
+        )
+        return dict(row) if row else None
+
+    async def list_recent(self, limit: int = 50, status: str | None = None) -> list[dict]:
+        if status:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM response_proposals WHERE status = $1 "
+                "ORDER BY created_at DESC LIMIT $2", status, limit,
+            )
+        else:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM response_proposals ORDER BY created_at DESC LIMIT $1",
+                limit,
+            )
+        return [dict(r) for r in rows]

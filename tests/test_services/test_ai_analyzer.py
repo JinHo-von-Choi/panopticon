@@ -121,7 +121,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestTryAdjustThreshold:
-    """_try_adjust_threshold() 연속 카운터 및 상한 캡 검증."""
+    """_try_adjust_threshold() 연속 카운터 및 상한 캡 검증.
+
+    PR 03 이후 AI는 설정을 쓰지 않는다. 이 클래스는 cap 계산과 카운터
+    동작을 검증하되, 반영은 "제안 이벤트 기록"으로만 확인한다.
+    """
 
     def _make_service(self, consecutive_fp_threshold: int = 2,
                       max_pct: int = 20) -> AIAnalyzerService:
@@ -156,31 +160,37 @@ class TestTryAdjustThreshold:
         svc._registry.reload_engine.assert_not_called()
         assert svc._consecutive_fp["port_scan"] == 1
 
-    def test_adjusts_on_threshold_reached(self):
+    def test_records_proposal_on_threshold_reached(self):
         svc = self._make_service(consecutive_fp_threshold=2)
         svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
-        svc._registry.reload_engine.return_value = (True, None, [])
         adjustments = {"threshold": 15}
 
-        svc._try_adjust_threshold("port_scan", adjustments)  # 1회차
-        svc._try_adjust_threshold("port_scan", adjustments)  # 2회차 → 적용
+        with patch.object(svc, "_record_proposal") as record:
+            svc._try_adjust_threshold("port_scan", adjustments)  # 1회차
+            svc._try_adjust_threshold("port_scan", adjustments)  # 2회차 → 제안
 
-        svc._yaml_editor.update_engine_config.assert_called_once_with(
-            "port_scan", {"threshold": 12.0}  # 10 * 1.2 = 12 (캡: +20%)
-        )
+        # 핵심 계약: YAML/런타임 기록은 없다
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        svc._registry.reload_engine.assert_not_called()
+
+        # 대신 제안만 남는다 (캡: 10 * 1.2 = 12)
+        record.assert_called_once()
+        engine, capped, direction, _reason = record.call_args[0]
+        assert engine == "port_scan"
+        assert capped == {"threshold": 12.0}
+        assert direction == "상향"
         assert svc._consecutive_fp["port_scan"] == 0
 
     def test_cap_applied(self):
         """requested value가 cap보다 낮으면 requested value 그대로."""
         svc = self._make_service(consecutive_fp_threshold=1, max_pct=50)
         svc._yaml_editor.get_engine_config.return_value = {"threshold": 10}
-        svc._registry.reload_engine.return_value = (True, None, [])
 
-        svc._try_adjust_threshold("port_scan", {"threshold": 14})  # 14 < 10*1.5=15
+        with patch.object(svc, "_record_proposal") as record:
+            svc._try_adjust_threshold("port_scan", {"threshold": 14})  # 14 < 10*1.5=15
 
-        svc._yaml_editor.update_engine_config.assert_called_once_with(
-            "port_scan", {"threshold": 14}
-        )
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        assert record.call_args[0][1] == {"threshold": 14}
 
     def test_counter_resets_after_adjust(self):
         svc = self._make_service(consecutive_fp_threshold=1)
@@ -394,33 +404,37 @@ class TestTryLowerThreshold:
         svc._yaml_editor.update_engine_config.assert_not_called()
         assert svc._consecutive_mt["port_scan"] == 1
 
-    def test_lowers_on_threshold_reached(self):
+    def test_records_proposal_on_threshold_reached(self):
         svc = self._make_service(consecutive_mt_threshold=2, max_decrease_pct=10)
         svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
-        svc._registry.reload_engine.return_value = (True, None, [])
         adjustments = {"threshold": 10}
 
-        svc._try_lower_threshold("port_scan", adjustments)  # 1회차
-        svc._try_lower_threshold("port_scan", adjustments)  # 2회차 → 적용
+        with patch.object(svc, "_record_proposal") as record:
+            svc._try_lower_threshold("port_scan", adjustments)  # 1회차
+            svc._try_lower_threshold("port_scan", adjustments)  # 2회차 → 제안
+
+        # 민감도 하향은 탐지를 약화시키므로 승인 없이는 절대 적용되지 않는다
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        svc._registry.reload_engine.assert_not_called()
 
         # cap: max(10, 15 * (1 - 10/100)) = max(10, 13.5) = 13.5
-        svc._yaml_editor.update_engine_config.assert_called_once_with(
-            "port_scan", {"threshold": 13.5}
-        )
+        record.assert_called_once()
+        _engine, capped, direction, _reason = record.call_args[0]
+        assert capped == {"threshold": 13.5}
+        assert direction == "하향"
         assert svc._consecutive_mt["port_scan"] == 0
 
     def test_cap_prevents_extreme_decrease(self):
         """요청값이 cap보다 낮으면 cap값(덜 낮은 쪽)을 사용한다."""
         svc = self._make_service(consecutive_mt_threshold=1, max_decrease_pct=10)
         svc._yaml_editor.get_engine_config.return_value = {"threshold": 15}
-        svc._registry.reload_engine.return_value = (True, None, [])
 
         # requested=5 (너무 낮음), cap = 15 * 0.9 = 13.5 → max(5, 13.5) = 13.5
-        svc._try_lower_threshold("port_scan", {"threshold": 5})
+        with patch.object(svc, "_record_proposal") as record:
+            svc._try_lower_threshold("port_scan", {"threshold": 5})
 
-        svc._yaml_editor.update_engine_config.assert_called_once_with(
-            "port_scan", {"threshold": 13.5}
-        )
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        assert record.call_args[0][1] == {"threshold": 13.5}
 
     def test_counter_resets_after_adjust(self):
         svc = self._make_service(consecutive_mt_threshold=1)
@@ -490,7 +504,9 @@ class TestAnalysisLoop:
             adjustments={"threshold": 12.0},
         )
         await svc._apply_result(result)
-        svc._yaml_editor.update_engine_config.assert_called_once()
+        # PR 03: AI는 설정을 쓰지 않는다 (제안만)
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        svc._registry.reload_engine.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_uncertain_does_nothing(self):
@@ -598,7 +614,9 @@ class TestAnalysisLoop:
             adjustments={"entropy_threshold": 3.2},
         )
         await svc._apply_result(result)
-        svc._yaml_editor.update_engine_config.assert_called_once()
+        # PR 03: AI는 설정을 쓰지 않는다 (제안만)
+        svc._yaml_editor.update_engine_config.assert_not_called()
+        svc._registry.reload_engine.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_confirmed_threat_saves_reasoning(self):

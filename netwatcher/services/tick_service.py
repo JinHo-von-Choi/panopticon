@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from netwatcher.capture.sniffer import PacketSniffer
     from netwatcher.detection.registry import EngineRegistry
     from netwatcher.netflow.processor import FlowProcessor
+    from netwatcher.observability.observation import ObservationService
     from netwatcher.services.packet_processor import PacketProcessor
 
 logger = logging.getLogger("netwatcher.services.tick_service")
@@ -27,11 +28,13 @@ class TickService:
         registry: EngineRegistry,
         dispatcher: AlertDispatcher | None,
         sniffer: PacketSniffer | None = None,
+        observation: "ObservationService | None" = None,
     ) -> None:
         """틱 서비스를 초기화한다. 엔진 레지스트리, 디스패처, 스니퍼를 주입받는다."""
         self.registry        = registry
         self.dispatcher      = dispatcher
         self.sniffer         = sniffer
+        self._observation    = observation
         self._flow_processor: "FlowProcessor | None" = None
         self._worker_pool: "WorkerPool | None" = None
         self._packet_processor: "PacketProcessor | None" = None
@@ -42,6 +45,8 @@ class TickService:
     def set_sniffer(self, sniffer: PacketSniffer) -> None:
         """스니퍼 인스턴스를 나중에 주입한다."""
         self.sniffer = sniffer
+        if self._observation is not None:
+            self.sniffer.set_observation(self._observation)
 
     def set_flow_processor(self, processor: "FlowProcessor") -> None:
         """FlowProcessor 인스턴스를 나중에 주입한다."""
@@ -73,6 +78,20 @@ class TickService:
 
             import time
             now = time.time()
+
+            # ── 관측 heartbeat & 계측 갱신 (계획서 3장) ────────────────
+            # 이 틱이 살아 있다는 사실 자체가 heartbeat 다. 10초 안에
+            # 3번(기본) 이상 오지 않으면 관측 상태는 stale 이 된다.
+            if self._observation is not None:
+                self._observation.mark_heartbeat()
+                if self.dispatcher is not None:
+                    self._observation.set_queue_age(
+                        self.dispatcher.oldest_queue_age_seconds
+                    )
+                if self.sniffer is not None:
+                    self.sniffer.flush_observation()
+                    # 커널 drop 은 측정 가능하지만 앱 분모와 다르므로 별도로만 센다
+                    self.sniffer.kernel_probe.poll()
 
             # 멀티프로세스 모드: 워커에서 알림 수집
             if self._packet_processor is not None:

@@ -23,10 +23,11 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from netwatcher.alerts.dispatcher import AlertDispatcher
+    from netwatcher.detection.proposals import ProposalService
     from netwatcher.detection.registry import EngineRegistry
     from netwatcher.detection.whitelist import Whitelist
     from netwatcher.storage.repositories import EventRepository
@@ -128,6 +129,7 @@ class AIAnalyzerService:
         dispatcher: "AlertDispatcher",
         yaml_editor: "YamlConfigEditor | None",
         whitelist: "Whitelist | None" = None,
+        proposal_service: "ProposalService | None" = None,
     ) -> None:
         """서비스 의존성을 주입받아 초기화한다."""
         ai_cfg = config.section("ai_analyzer") or {}
@@ -138,6 +140,19 @@ class AIAnalyzerService:
         self._dispatcher  = dispatcher
         self._yaml_editor = yaml_editor
         self._whitelist   = whitelist
+        # 승인 큐 (PR 10). 주입되지 않으면 제안은 이벤트 로그로만 남는다.
+        self._proposal_service = proposal_service
+
+        # 쓰기 격리 (PR 03): AI는 설정을 "제안"만 한다.
+        # apply_mode 가 "apply" 면 기동을 거부한다 — 지원 프로필 계약이 같은
+        # 조건을 SUP-010 으로 잡지만, 이 클래스는 그것을 신뢰하지 않고
+        # 방어적으로 확인한다(설정 주입 경로가 여러 개일 수 있다).
+        self._apply_mode: str = str(ai_cfg.get("apply_mode", "propose"))
+        if self._apply_mode != "propose":
+            raise ValueError(
+                "ai_analyzer.apply_mode must be 'propose': the AI analyzer is not "
+                f"allowed to write engine config (got {self._apply_mode!r})"
+            )
 
         self._provider:         str = str(ai_cfg.get("provider", "copilot"))
         self._interval_seconds: int = int(ai_cfg.get("interval_minutes",  15)) * 60
@@ -165,14 +180,98 @@ class AIAnalyzerService:
     # 임계값 자동 조정                                                       #
     # ------------------------------------------------------------------ #
 
+    def _read_current_config(self, engine: str) -> dict[str, Any] | None:
+        """현재 엔진 설정을 읽는다. yaml_editor가 없으면 None."""
+        if self._yaml_editor is None:
+            logger.warning(
+                "[ai_analyzer] yaml_editor 없음 — 현재 설정 확인 불가, 제안만 기록한다"
+            )
+            return None
+        try:
+            return self._yaml_editor.get_engine_config(engine) or {}
+        except Exception:
+            logger.exception("[ai_analyzer] 엔진 설정 조회 실패: %s", engine)
+            return None
+
+    def _build_proposal(
+        self, engine: str, capped: dict[str, float], direction: str, reason: str,
+    ) -> dict[str, Any]:
+        """제안 이벤트의 payload를 만든다. 부작용 없는 순수 함수."""
+        return {
+            "engine": "ai_adjustment",
+            "severity": "INFO",
+            "title": f"[AI 제안] {engine} 임계값 {direction}",
+            "description": reason,
+            "metadata": {
+                "engine": engine,
+                "adjusted": capped,
+                "direction": direction,
+                "provider": self._provider,
+                "status": "proposed",
+                "applied": False,
+            },
+        }
+
+    def _record_proposal(
+        self, engine: str, capped: dict[str, float], direction: str, reason: str,
+    ) -> None:
+        """AI 제안을 이벤트 로그로 남긴다. 런타임·YAML에는 쓰지 않는다.
+
+        제안 이벤트에는 status=proposed 가 붙는다. 사람이 대시보드에서 승인하지
+        않으면 어떤 엔진 설정도 바뀌지 않는다.
+        """
+        payload = self._build_proposal(engine, capped, direction, reason)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is None:
+            logger.info(
+                "[ai_analyzer] 이벤트 루프 없음 — 제안만 로그: %s %s", engine, capped
+            )
+            return
+
+        # 승인 큐가 있으면 사람이 검토할 수 있도록 접수한다 (PR 10).
+        # 이벤트 로그만 남기면 제안이 갇힌다 — 반영 방법이 없다.
+        if self._proposal_service is not None:
+            asyncio.create_task(self._enqueue_proposal(engine, capped, direction, reason))
+
+        asyncio.create_task(self._event_repo.insert(**payload))
+
+    async def _enqueue_proposal(
+        self, engine: str, capped: dict[str, float], direction: str, reason: str,
+    ) -> None:
+        """AI 제안을 승인 큐에 넣는다. 실패해도 AI 분석 자체는 계속된다."""
+        from netwatcher.detection.proposals import ProposalError, SOURCE_AI
+
+        try:
+            proposal_id = await self._proposal_service.submit(
+                engine=engine,
+                params=dict(capped),
+                reason=reason,
+                source=SOURCE_AI,
+            )
+            logger.info(
+                "[ai_analyzer] 제안 접수됨 (id=%s, engine=%s, %s)",
+                proposal_id, engine, direction,
+            )
+        except ProposalError as exc:
+            # 스키마를 어기는 제안은 큐에 들어가지 않는다. 이게 정상이므로
+            # 분석 파이프라인 전체를 실패시키지 않는다.
+            logger.warning(
+                "[ai_analyzer] 제안이 큐에서 거부됨 (engine=%s): %s", engine, exc,
+            )
+        except Exception:
+            logger.exception("[ai_analyzer] 제안 접수 실패: %s", engine)
+
     def _try_adjust_threshold(
         self, engine: str, adjustments: dict[str, float],
     ) -> None:
-        """연속 오탐 카운터를 증가시키고, 임계값에 달하면 설정을 업데이트한다.
+        """연속 오탐 카운터를 증가시키고, 임계값에 달면 *제안*을 기록한다.
 
         - 연속 오탐 횟수가 fp_threshold 미만이면 카운터만 증가
-        - 임계값 달성 시 cap 적용 후 YamlConfigEditor + registry.reload_engine()
-        - yaml_editor가 None이면 WARNING 로그 후 skip
+        - 임계값 달성 시 cap 계산 후 제안 이벤트로 남긴다
+        - YAML/런타임 기록은 하지 않는다 (AI 쓰기 격리, PR 03)
         """
         key = engine
         self._consecutive_fp[key] = self._consecutive_fp.get(key, 0) + 1
@@ -184,71 +283,33 @@ class AIAnalyzerService:
             )
             return
 
-        if self._yaml_editor is None:
-            logger.warning("[ai_analyzer] yaml_editor 없음 — 임계값 조정 불가")
-            return
-
-        # 현재 엔진 설정 조회 및 cap 적용
-        try:
-            current_cfg = self._yaml_editor.get_engine_config(engine) or {}
-        except Exception:
-            logger.exception("[ai_analyzer] 엔진 설정 조회 실패: %s", engine)
-            return
+        current_cfg = self._read_current_config(engine)
 
         capped: dict[str, float] = {}
         for param, requested in adjustments.items():
-            current_val = current_cfg.get(param)
-            if current_val is None or not isinstance(current_val, (int, float)):
+            current_val = (current_cfg or {}).get(param)
+            if current_val is None or isinstance(current_val, bool) \
+                    or not isinstance(current_val, (int, float)):
                 capped[param] = requested
                 continue
             cap_val = current_val * (1 + self._max_pct / 100)
             capped[param] = min(requested, cap_val)
 
-        try:
-            self._yaml_editor.update_engine_config(engine, capped)
-        except Exception:
-            logger.exception("[ai_analyzer] config 업데이트 실패: %s", engine)
-            return
-
-        # 엔진 핫리로드
-        new_cfg = self._yaml_editor.get_engine_config(engine) or {}
-        ok, err, _ = self._registry.reload_engine(engine, new_cfg)
-        if ok:
-            logger.info("[ai_analyzer] 엔진 핫리로드 완료: %s %s", engine, capped)
-        else:
-            logger.error("[ai_analyzer] 엔진 핫리로드 실패: %s — %s", engine, err)
-
         self._consecutive_fp[key] = 0
-
-        # 조정 이력 저장 (동기 컨텍스트 → asyncio.create_task로 비동기 예약)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None:
-            asyncio.create_task(
-                self._event_repo.insert(
-                    engine="ai_adjustment",
-                    severity="INFO",
-                    title=f"[AI 조정] {engine} 임계값 자동 상향",
-                    description=str(capped),
-                    metadata={
-                        "engine": engine,
-                        "adjusted": capped,
-                        "provider": self._provider,
-                    },
-                )
-            )
+        self._record_proposal(
+            engine, capped, "상향",
+            f"연속 오탐 {self._fp_threshold}회 — 임계값 상향 제안 (적용은 승인 필요)",
+        )
 
     def _try_lower_threshold(
         self, engine: str, adjustments: dict[str, float],
     ) -> None:
-        """연속 미탐 카운터를 증가시키고, 임계값에 달하면 설정을 하향한다.
+        """연속 미탐 카운터를 증가시키고, 임계값에 달면 *제안*을 기록한다.
 
         - 연속 미탐 횟수가 mt_threshold 미만이면 카운터만 증가
-        - 임계값 달성 시 cap 적용 후 YamlConfigEditor + registry.reload_engine()
         - cap 방향: max(requested, current * (1 - pct/100)) — 너무 급격한 하향 방지
-        - yaml_editor가 None이면 WARNING 로그 후 skip
+        - YAML/런타임 기록은 하지 않는다 (AI 쓰기 격리, PR 03).
+          민감도 하향은 탐지를 약화시키므로 승인 없이는 절대 적용되지 않는다.
         """
         key = engine
         self._consecutive_mt[key] = self._consecutive_mt.get(key, 0) + 1
@@ -260,59 +321,24 @@ class AIAnalyzerService:
             )
             return
 
-        if self._yaml_editor is None:
-            logger.warning("[ai_analyzer] yaml_editor 없음 — 임계값 하향 불가")
-            return
-
-        try:
-            current_cfg = self._yaml_editor.get_engine_config(engine) or {}
-        except Exception:
-            logger.exception("[ai_analyzer] 엔진 설정 조회 실패: %s", engine)
-            return
+        current_cfg = self._read_current_config(engine)
 
         capped: dict[str, float] = {}
         for param, requested in adjustments.items():
-            current_val = current_cfg.get(param)
-            if current_val is None or not isinstance(current_val, (int, float)):
+            current_val = (current_cfg or {}).get(param)
+            if current_val is None or isinstance(current_val, bool) \
+                    or not isinstance(current_val, (int, float)):
                 capped[param] = requested
                 continue
             # 너무 급격한 하향 방지: requested와 cap 중 큰 값 선택
             cap_val = current_val * (1 - self._max_decrease_pct / 100)
             capped[param] = max(requested, cap_val)
 
-        try:
-            self._yaml_editor.update_engine_config(engine, capped)
-        except Exception:
-            logger.exception("[ai_analyzer] config 하향 업데이트 실패: %s", engine)
-            return
-
-        new_cfg = self._yaml_editor.get_engine_config(engine) or {}
-        ok, err, _ = self._registry.reload_engine(engine, new_cfg)
-        if ok:
-            logger.info("[ai_analyzer] 엔진 민감도 하향 완료: %s %s", engine, capped)
-        else:
-            logger.error("[ai_analyzer] 엔진 핫리로드 실패: %s — %s", engine, err)
-
         self._consecutive_mt[key] = 0
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None:
-            asyncio.create_task(
-                self._event_repo.insert(
-                    engine="ai_adjustment",
-                    severity="WARNING",
-                    title=f"[AI 미탐조정] {engine} 임계값 자동 하향",
-                    description=str(capped),
-                    metadata={
-                        "engine": engine,
-                        "adjusted": capped,
-                        "provider": self._provider,
-                    },
-                )
-            )
+        self._record_proposal(
+            engine, capped, "하향",
+            f"연속 미탐 {self._mt_threshold}회 — 민감도 하향 제안 (탐지 약화이므로 승인 필수)",
+        )
 
     # ------------------------------------------------------------------ #
     # AI CLI 실행                                                           #

@@ -3,7 +3,7 @@
  */
 
 import { authFetch } from '../core/api.js';
-import { esc, formatTime, formatBytes, renderPagination } from '../core/utils.js';
+import { esc, escAttr, textEl, formatTime, formatBytes, renderPagination } from '../core/utils.js';
 import { DEVICE_TYPE_MAP } from '../core/constants.js';
 
 export var whitelistData = { ips: [], macs: [], domains: [], ip_ranges: [] };
@@ -149,14 +149,15 @@ function renderDeviceRow(d) {
         <td>${esc(formatTime(d.first_seen))}</td>
         <td>${esc(formatTime(d.last_seen))}</td>
         <td>${(d.total_packets || 0).toLocaleString()}</td>
-        <td><button class="btn-detail" onclick="window.showDeviceDetail('${d.mac_address}')">Edit</button></td>
+        <td><button class="btn-detail" data-mac="${esc(d.mac_address)}">Edit</button></td>
     `;
     tr.addEventListener("click", () => window.showDeviceDetail(d.mac_address));
     return tr;
 }
 
 function renderRiskBadge(level, score) {
-    return `<span class="risk-badge risk-${level || "low"}">${(level || "low").toUpperCase()} (${score || 0})</span>`;
+    var safeLevel = String(level || "low").toLowerCase();
+    return `<span class="risk-badge risk-${esc(safeLevel)}">${esc(safeLevel.toUpperCase())} (${esc(score || 0)})</span>`;
 }
 
 function renderDeviceTypeChip(type) {
@@ -175,7 +176,10 @@ window.showDeviceDetail = async function(mac) {
         var resp = await authFetch("/api/devices/" + mac);
         var data = await resp.json();
         if (data.device) renderDeviceModalContent(data.device);
-    } catch (e) { body.innerHTML = "Error: " + e.message; }
+    } catch (e) {
+        body.textContent = "";
+        body.appendChild(textEl("Error: " + (e && e.message ? e.message : "unknown")));
+    }
 };
 
 function renderDeviceModalContent(dev) {
@@ -200,15 +204,15 @@ function renderDeviceModalContent(dev) {
             <div class="detail-section">
                 <h3>Technical Details</h3>
                 <div class="detail-grid">
-                    <div class="detail-label">MAC Address</div><div class="detail-value"><code>${dev.mac_address}</code></div>
-                    <div class="detail-label">IP Address</div><div class="detail-value">${dev.ip_address || "-"}</div>
-                    <div class="detail-label">Vendor</div><div class="detail-value">${dev.vendor || "-"}</div>
-                    <div class="detail-label">First Seen</div><div class="detail-value">${formatTime(dev.first_seen)}</div>
+                    <div class="detail-label">MAC Address</div><div class="detail-value"><code>${esc(dev.mac_address)}</code></div>
+                    <div class="detail-label">IP Address</div><div class="detail-value">${esc(dev.ip_address || "-")}</div>
+                    <div class="detail-label">Vendor</div><div class="detail-value">${esc(dev.vendor || "-")}</div>
+                    <div class="detail-label">First Seen</div><div class="detail-value">${esc(formatTime(dev.first_seen))}</div>
                 </div>
             </div>
             <div class="detail-section">
                 <h3>Exception (Whitelist)</h3>
-                <button type="button" class="btn ${isWhitelisted ? 'btn-accent' : ''}" onclick="window.handleWhitelistToggle('mac', '${dev.mac_address}')">
+                <button type="button" class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-mac="${esc(dev.mac_address)}">
                     ${isWhitelisted ? 'Remove from Whitelist' : 'Add to Whitelist'}
                 </button>
             </div>
@@ -218,6 +222,13 @@ function renderDeviceModalContent(dev) {
         </form>
     `;
     body.innerHTML = html;
+
+    var wlBtn = body.querySelector("[data-wl-mac]");
+    if (wlBtn) {
+        wlBtn.addEventListener("click", function () {
+            window.handleWhitelistToggle("mac", wlBtn.dataset.wlMac);
+        });
+    }
 }
 
 window.handleWhitelistToggle = async function(type, value) {

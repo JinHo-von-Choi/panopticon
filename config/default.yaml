@@ -45,7 +45,13 @@ netwatcher:
     format: "text"       # "text" or "json"
 
   web:
-    host: "0.0.0.0"
+    # 기본은 루프백 바인딩이다. 인증 없이 0.0.0.0 에 열면 LAN 전체가
+    # 비밀번호 없는 대시보드에 접근한다 — 지원 계약 SUP-020 이 이 구성을
+    # 거부한다. LAN 으로 노출하려면 아래 두 가지를 **둘 다** 명시하라.
+    #   1) web.host: "0.0.0.0"
+    #   2) auth.enabled: true + NETWATCHER_LOGIN_PASSWORD
+    # 둘 중 하나만 하면 기동 전에 거부된다.
+    host: "127.0.0.1"
     port: 38585
     enable_docs: false   # /docs, /openapi.json 활성화 여부
     tls:
@@ -80,6 +86,9 @@ netwatcher:
     cleanup_interval_hours: 6  # 정리 주기
 
   alerts:
+    # 종료 시 큐에 남은 알림을 배 emptying하는 최대 초 (PR 06).
+    # 이 시간 안에 처리되지 못한 알림은 경고와 함께 포기한다.
+    drain_timeout_seconds: 5
     rate_limit:
       window_seconds: 300  # 5 minutes
       max_per_key: 5
@@ -226,11 +235,16 @@ netwatcher:
       vt_api_key: ''
       yara_rules_dir: config/yara
       output_dir: data/extracted
+  # 지원 프로필 계약 (PR 01). 기동 시 위반이 있으면 어떤 컴포넌트도
+  # 시작되지 않고 종료한다. limited 는 첫 제한 릴리스의 프로필이다.
+  support:
+    profile: limited               # limited | full
+
   response:
     enabled: false
-    backend: "iptables"
-    chain_name: "NETWATCHER_BLOCK"
-    default_duration: 3600
+    backend: "iptables"            # enforcement 는 iptables 만 검증 완료
+    chain_name: "NETWATCHER_BLOCK" # INPUT 등 관측 범위 밖 체인은 거부
+    default_duration: 3600         # 0(영구차단) 은 미지원
     max_blocks: 1000
     whitelist: []
     auto_block_engines:
@@ -239,15 +253,16 @@ netwatcher:
     - "arp_spoof"
 
   ai_analyzer:
-    enabled: true                  # true로 설정 시 AI 오탐 분석 활성화
+    enabled: false                 # AI 오탐 분석 활성화 시 true (CLI 의존성 있음)
+    apply_mode: propose            # 반드시 propose — AI는 제안만 한다 (PR 03)
     provider: "gemini"             # AI 프로바이더: copilot | claude | codex | gemini | agent
     interval_minutes: 15           # 분석 실행 주기
     lookback_minutes: 30           # 분석 대상 시간 범위 (최근 N분)
     max_events: 50                 # AI에 전달할 최대 이벤트 수
-    consecutive_fp_threshold: 2    # 연속 오탐 판정 횟수 → 임계값 조정
-    max_threshold_increase_pct: 20 # 임계값 자동 상향 최대 폭 (%)
-    consecutive_mt_threshold: 2    # 연속 미탐 판정 횟수 → 임계값 하향
-    max_threshold_decrease_pct: 10 # 임계값 자동 하향 최대 폭 (%)
+    consecutive_fp_threshold: 2    # 연속 오탐 판정 횟수 → 상향 *제안*
+    max_threshold_increase_pct: 20 # 상향 제안 폭 상한 (%)
+    consecutive_mt_threshold: 2    # 연속 미탐 판정 횟수 → 하향 *제안*
+    max_threshold_decrease_pct: 10 # 하향 제안 폭 상한 (%)
     copilot_timeout_seconds: 180   # AI CLI 응답 타임아웃
 
   daily_report:
@@ -315,6 +330,10 @@ netwatcher:
       sample_rate: 0.01
     health_check:
       detailed: true
+    # 관측 범위 (계획서 3장): "경보 없음" 을 "문제 없음" 으로 읽히지 않게 한다.
+    # heartbeat 가 이 주기만큼 오지 않으면 센서는 stale 로 판정된다.
+    heartbeat_seconds: 10.0
+    missed_beats_to_stale: 3
 
   threatfeeds:
     config_path: "config/threatfeeds.yaml"

@@ -3,7 +3,7 @@
  */
 
 import { authFetch } from '../core/api.js';
-import { esc, formatTime, formatHexDump, showToast, renderPagination } from '../core/utils.js';
+import { esc, escAttr, formatTime, formatHexDump, showToast, renderPagination } from '../core/utils.js';
 import { whitelistData, toggleWhitelist } from './devices.js';
 
 var eventsPage = 0;
@@ -94,8 +94,12 @@ export function renderEventRow(ev) {
         <td>${esc(title)}</td>
         <td>${esc(ev.source_ip || ev.source_mac || "-")}</td>
         <td>${esc(ev.dest_ip || ev.dest_mac || "-")}</td>
-        <td><button class="btn-detail" onclick="window.showEventDetail(${evId})">Detail</button></td>
+        <td><button class="btn-detail" data-event-id="${escAttr(evId)}">Detail</button></td>
     `;
+    tr.querySelector("[data-event-id]").addEventListener("click", function (e) {
+        e.stopPropagation();
+        window.showEventDetail(evId);
+    });
     return tr;
 }
 
@@ -113,8 +117,61 @@ window.showEventDetail = async function(eventId) {
     } catch (e) { modalBody.innerHTML = '<div style="padding:20px">Error: ' + esc(e.message) + '</div>'; }
 };
 
+/**
+ * detail-grid 한 줄. value 는 이미 안전한 HTML 조각이거나 평문이다.
+ * 조각을 넘길 때는 htmlRow() 을, 평문은 row() 를 쓴다. row() 는 항상 이스케이프하므로
+ * 공격자가 제어하는 값이 HTML로 해석될 경로가 생기지 않는다(PR 02).
+ */
 function row(label, value) {
-    return `<div class="detail-label">${esc(label)}</div><div class="detail-value">${value || "-"}</div>`;
+    return `<div class="detail-label">${esc(label)}</div><div class="detail-value">${esc(value) || "-"}</div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 증거 봉투 (PR 09)
+// ────────────────────────────────────────────────────────────────────
+
+var EVIDENCE_LAYER_LABELS = {
+    summary:  { label: "요약",   hint: "무엇이 일어났는가" },
+    evidence: { label: "근거",   hint: "왜 그렇게 판단했는가" },
+    raw:      { label: "원자료", hint: "무엇을 관측했는가" }
+};
+
+/**
+ * 탐지 결과의 세 층(요약·근거·원자료)을 명시적으로 그린다.
+ *
+ * 이전에는 이 정보가 Technical Metadata JSON 안에 파묻혀 있어, 검토자가
+ * "이 탐지가 검증 가능한가" 를 한눈에 알 수 없었다. 없는 층은 숨기지 않고
+ * "없음" 으로 드러낸다 — 없는 근거를 지어내는 것보다 정직한 누락이 낫다.
+ */
+function renderEvidenceEnvelope(evidence) {
+    if (!evidence || typeof evidence !== "object") return "";
+
+    var layers = evidence.layers || {};
+    var complete = evidence.status === "complete";
+    var banner = complete
+        ? '<div class="evidence-envelope" data-status="complete">검증 가능한 탐지 — 세 층이 모두 있습니다</div>'
+        : '<div class="evidence-envelope" data-status="incomplete">검증 근거가 빠졌습니다: '
+          + '<span>' + esc((evidence.missing || []).map(function (k) {
+              return (EVIDENCE_LAYER_LABELS[k] || { label: k }).label;
+          }).join(", ")) + '</span></div>';
+
+    var rows = Object.keys(EVIDENCE_LAYER_LABELS).map(function (key) {
+        var meta = EVIDENCE_LAYER_LABELS[key];
+        var present = layers[key] === true;
+        return '<div class="detail-label">' + esc(meta.label)
+             + '<div class="detail-hint">' + esc(meta.hint) + '</div></div>'
+             + '<div class="detail-value"><span class="evidence-layer" data-present="'
+             + (present ? "yes" : "no") + '">'
+             + (present ? "있음" : "없음") + '</span></div>';
+    }).join("");
+
+    return '<div class="detail-section"><h3>증거 봉투</h3>' + banner
+         + '<div class="detail-grid">' + rows + '</div></div>';
+}
+
+/** 이미 구성한 HTML 조각을 그대로 넣는 경우에만 사용한다. */
+function htmlRow(label, valueHtml) {
+    return `<div class="detail-label">${esc(label)}</div><div class="detail-value">${valueHtml || "-"}</div>`;
 }
 
 function renderEventDetail(ev) {
@@ -135,7 +192,7 @@ function renderEventDetail(ev) {
     html += row("Event ID", ev.id);
     html += row("Timestamp", formatTime(ev.timestamp));
     html += row("Engine", ev.engine);
-    html += row("Severity", `<span class="severity-badge severity-${esc(ev.severity)}">${esc(ev.severity)}</span>`);
+    html += htmlRow("Severity", `<span class="severity-badge severity-${esc(ev.severity)}">${esc(ev.severity)}</span>`);
     html += '</div></div>';
 
     // Detection Reasoning
@@ -146,9 +203,9 @@ function renderEventDetail(ev) {
     // Network Info
     html += '<div class="detail-section"><h3>Network Information</h3><div class="detail-grid">';
     html += row("Source IP", ev.source_ip);
-    html += row("Source MAC", `<code>${esc(ev.source_mac)}</code>`);
+    html += htmlRow("Source MAC", `<code>${esc(ev.source_mac)}</code>`);
     html += row("Dest IP", ev.dest_ip);
-    html += row("Dest MAC", `<code>${esc(ev.dest_mac)}</code>`);
+    html += htmlRow("Dest MAC", `<code>${esc(ev.dest_mac)}</code>`);
     html += '</div></div>';
 
     // Packet Detail
@@ -179,6 +236,9 @@ function renderEventDetail(ev) {
         html += '</div>';
     }
 
+    // 증거 봉투: 요약 → 근거 → 원자료 (PR 09)
+    html += renderEvidenceEnvelope(ev.evidence);
+
     // Metadata
     if (ev.metadata && Object.keys(ev.metadata).length > 0) {
         html += '<div class="detail-section"><h3>Technical Metadata</h3>';
@@ -190,11 +250,18 @@ function renderEventDetail(ev) {
         var isWhitelisted = (whitelistData.ips || []).includes(ev.source_ip);
         var btnText = isWhitelisted ? window.i18next.t("whitelist.remove_ip") : window.i18next.t("whitelist.add_ip");
         html += `<div class="detail-section"><h3>Exception Management</h3><div style="display:flex;gap:10px;margin-top:8px">`;
-        html += `<button class="btn ${isWhitelisted ? 'btn-accent' : ''}" onclick="window.handleEventWhitelistToggle('ip', '${ev.source_ip}')">
-                 ${esc(btnText)} (${ev.source_ip})</button></div></div>`;
+        html += `<button class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-event-ip="${escAttr(ev.source_ip)}">
+                 ${esc(btnText)} (${esc(ev.source_ip)})</button></div></div>`;
     }
 
     modalBody.innerHTML = html;
+
+    var wlBtn = modalBody.querySelector("[data-wl-event-ip]");
+    if (wlBtn) {
+        wlBtn.addEventListener("click", function () {
+            window.handleEventWhitelistToggle("ip", wlBtn.dataset.wlEventIp);
+        });
+    }
 }
 
 function renderReasoning(ev) {

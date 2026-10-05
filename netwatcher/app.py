@@ -10,7 +10,9 @@ from netwatcher.alerts.dispatcher import AlertDispatcher
 from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.capture.sniffer import PacketSniffer
 from netwatcher.detection.correlator import AlertCorrelator
+from netwatcher.detection.proposals import ProposalService
 from netwatcher.detection.registry import EngineRegistry
+from netwatcher.observability.observation import ObservationService
 from netwatcher.response.blocker import BlockManager
 from netwatcher.services.maintenance import MaintenanceService
 from netwatcher.services.packet_processor import PacketProcessor
@@ -19,11 +21,13 @@ from netwatcher.services.tick_service import TickService
 from netwatcher.storage.database import Database
 from netwatcher.storage.repositories import (
     BlocklistRepository,
+    ConfigProposalRepository,
     DeviceRepository,
     EventRepository,
     IncidentRepository,
     TrafficStatsRepository,
 )
+from netwatcher.support import enforce_support
 from netwatcher.utils.config import Config
 from netwatcher.utils.logging_setup import setup_logging
 from netwatcher.utils.network import AsyncDNSResolver
@@ -31,6 +35,15 @@ from netwatcher.utils.yaml_editor import YamlConfigEditor
 from netwatcher.web.server import create_app
 
 logger = logging.getLogger("netwatcher.app")
+
+
+def _sensor_id(config) -> str:
+    """센서 식별자 — 관측 창이 어느 호스트의 것인지 구분한다."""
+    import socket
+
+    host = socket.gethostname() or "unknown"
+    iface = config.get("interface") or "auto"
+    return f"{host}/{iface}"
 
 
 class NetWatcher:
@@ -43,6 +56,10 @@ class NetWatcher:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.loop: asyncio.AbstractEventLoop | None = None
+        # 지원 프로필 계약. run() 에서 기동 직전에 검증한다.
+        self.support_contract = None
+        # 관측 범위. run() 에서 계측 지점과 함께 만든다.
+        self.observation: ObservationService | None = None
 
         # 핵심 컴포넌트
         self.db         = Database(config)
@@ -74,6 +91,12 @@ class NetWatcher:
         i18n.init(locales_dir, default_lang)
         
         logger.info("NetWatcher starting...")
+
+        # ── 지원 프로필 계약 (PR 01) ───────────────────────────────────
+        # 미지원 조합은 어떤 컴포넌트도 시작되기 전에 거부한다. enforcement나
+        # 검증 게이트가 통과한 것처럼 보이는 상태를 남기지 않기 위함이다.
+        self.support_contract = enforce_support(self.config)
+        logger.info("Support profile: %s", self.support_contract.profile)
 
         # ── 데이터베이스 & 리포지토리 ──────────────────────────────────
         await self.db.connect()
@@ -129,6 +152,18 @@ class NetWatcher:
         else:
             logger.info("BlockManager disabled")
 
+        obs_cfg = self.config.section("observability") or {}
+
+        # ── 관측 범위 (계획서 3장) ────────────────────────────────────────
+        # "경보 없음" 이 "문제 없음" 으로 읽히지 않게, 경보 옆에 무엇을
+        # 관측했고 무엇을 관측하지 못했는지 남긴다. 기동 시점에 만든다.
+        observation = ObservationService(
+            sensor_id=_sensor_id(self.config),
+            heartbeat_seconds=obs_cfg.get("heartbeat_seconds", 10.0),
+            missed_beats_to_stale=obs_cfg.get("missed_beats_to_stale", 3),
+        )
+        self.observation = observation
+
         # ── 알림 디스패처 ────────────────────────────────────────────────
         dispatcher = AlertDispatcher(
             config=self.config,
@@ -137,6 +172,7 @@ class NetWatcher:
             correlator=self.correlator,
             pcap_writer=self.pcap_writer,
             block_manager=block_manager,
+            observation=observation,
         )
         await dispatcher.start()
 
@@ -216,6 +252,7 @@ class NetWatcher:
 
         # ── 서비스 ────────────────────────────────────────────────────────
         packet_processor = PacketProcessor(
+            observation=observation,
             registry=self.registry,
             dispatcher=dispatcher,
             pcap_writer=self.pcap_writer,
@@ -227,6 +264,7 @@ class NetWatcher:
         tick_service = TickService(
             registry=self.registry,
             dispatcher=dispatcher,
+            observation=observation,
         )
         tick_service.set_worker_pool(worker_pool)
         tick_service.set_packet_processor(packet_processor)
@@ -245,6 +283,16 @@ class NetWatcher:
             incident_repo=incident_repo,
             feed_manager=feed_mgr,
             block_manager=block_manager,
+        )
+
+        # ── 설정 제안 승인 큐 (PR 10) ────────────────────────────────────
+        # AI 는 설정을 바꾸지 못한다. 제안만 큐에 올리고, 사람이 승인한
+        # 경우에만 검증된 경로로 반영된다.
+        proposal_repo = ConfigProposalRepository(self.db)
+        proposal_service = ProposalService(
+            registry=self.registry,
+            yaml_editor=self._yaml_editor,
+            proposal_repo=proposal_repo,
         )
 
         # ── 시그니처 엔진 (규칙 관리 API용) ───────────────────────────────
@@ -305,11 +353,58 @@ class NetWatcher:
                 dispatcher=dispatcher,
                 yaml_editor=self._yaml_editor,
                 whitelist=self.registry.whitelist,
+                proposal_service=proposal_service,
+            )
+
+        # ── 리플레이 실행·비교 (계획서 1장, PR 12) ───────────────────────
+        # 운영 Dispatcher 를 호출하지 않는 격리 실행이다. 같은 DB 를 쓰지만
+        # 운영 events 테이블이 아니라 replay_results 에만 기록한다.
+        from netwatcher.replay.runs import ReplayRunService
+        from netwatcher.storage.repositories import ReplayRepository
+
+        replay_service = ReplayRunService(ReplayRepository(self.db))
+
+        # ── 조치 생애주기 (계획서 2장, PR 13) ────────────────────────────
+        # OS 를 변경하는 백엔드는 없다. 계획서가 "검증된 만료 백엔드·권한
+        # 분리·적용 경로 증명이 하나라도 없으면 shadow/제안만 출시한다" 라고
+        # 했으므로, 지금은 shadow 실행기만 등록한다. 기존 iptables 자동 차단도
+        # 복구 검증 전까지 계속 비활성화한다.
+        from netwatcher.response.executor import build_executor, executor_capabilities
+        from netwatcher.storage.repositories import (
+            ResponseActionRepository,
+            ResponseProposalRepository,
+        )
+
+        response_repository = ResponseActionRepository(self.db)
+        response_proposal_repo = ResponseProposalRepository(self.db)
+
+        # 실행기 선택. nftables 은 구현되어 있지만 **커널 만료가 실측 확인되기
+        # 전까지는 스스로를 쓸 수 있다고 말하지 않는다.** 기동 시 자동 검증하면
+        # 라이브 장비 방화벽에 우리 테이블을 남기므로, 검증은 운영자가
+        #   sudo python -m netwatcher.verify_nftables
+        # 로 명시적으로 수행한다.
+        backend = (response_cfg or {}).get("backend", "shadow")
+        response_executor = build_executor(backend)
+        caps = executor_capabilities(backend, response_executor)
+        logger.info(
+            "Response executor: %s (applies_to_os=%s, kernel_expiry_verified=%s)",
+            caps["backend"], caps["applies_to_os"],
+            caps.get("kernel_expiry_verified"),
+        )
+        if caps["applies_to_os"] and not caps.get("kernel_expiry_verified"):
+            logger.warning(
+                "nftables 백엔드가 구현되어 있으나 커널 만료가 검증되지 않았다 — "
+                "적용 시 거부된다. sudo python -m netwatcher.verify_nftables 로 검증한다."
             )
 
         # ── 웹 서버 ───────────────────────────────────────────────────────
+        from netwatcher.observability.observation import KernelDropProbe
         from netwatcher.web.auth import AuthManager
         auth_manager = AuthManager(self.config)
+
+        # 대시보드와 스니퍼가 같은 프로브를 써야 "측정 불가" 와 "측정 안 함" 이
+        # 어긋나지 않는다.
+        kernel_probe = KernelDropProbe(observation)
 
         app = create_app(
             config=self.config,
@@ -329,6 +424,13 @@ class NetWatcher:
             yaml_editor=self._yaml_editor,
             flow_processor=flow_processor,
             ai_analyzer=ai_analyzer,
+            proposal_service=proposal_service,
+            observation_service=observation,
+            kernel_probe=kernel_probe,
+            replay_service=replay_service,
+            response_repository=response_repository,
+            response_executor=response_executor,
+            response_proposal_repo=response_proposal_repo,
         )
 
         import uvicorn
@@ -397,7 +499,10 @@ class NetWatcher:
         # ── DNS 리졸버 & 스니퍼 ──────────────────────────────────────────
         await self._dns_resolver.start()
 
-        sniffer = PacketSniffer(self.config, self.loop, packet_processor.on_packet)
+        sniffer = PacketSniffer(
+            self.config, self.loop, packet_processor.on_packet,
+            observation=observation, kernel_probe=kernel_probe,
+        )
         sniffer.start()
 
         # 스니퍼가 필요한 서비스에 주입

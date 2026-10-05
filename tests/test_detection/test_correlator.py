@@ -1,7 +1,32 @@
 """Tests for alert correlation engine."""
 
+import asyncio
+
 from netwatcher.detection.correlator import AlertCorrelator
 from netwatcher.detection.models import Alert, Severity
+
+
+class _FakeIncidentRepo:
+    """DB 와 같은 방식으로 id 를 부여하는 저장소 대역 (PR 05)."""
+
+    def __init__(self, first_id: int = 500) -> None:
+        self._next = first_id
+        self.rows: dict[int, dict] = {}
+        self.updates: list[tuple[int, dict]] = []
+        self.resolved: list[int] = []
+
+    async def insert(self, **fields) -> int:
+        row_id = self._next
+        self._next += 1
+        self.rows[row_id] = dict(fields)
+        return row_id
+
+    async def update(self, incident_id: int, **fields) -> None:
+        self.updates.append((incident_id, dict(fields)))
+
+    async def resolve(self, incident_id: int) -> bool:
+        self.resolved.append(incident_id)
+        return True
 
 
 def make_alert(engine: str, source_ip: str, severity: Severity = Severity.WARNING) -> Alert:
@@ -60,12 +85,17 @@ class TestAlertCorrelator:
         assert r2 is None
 
     def test_resolve_incident(self):
+        """해결 처리는 저장소가 부여한 id 로만 동작한다 (PR 05)."""
         a1 = make_alert("port_scan", "10.0.0.1")
         a2 = make_alert("lateral_movement", "10.0.0.1")
         self.correlator.process_alert(a1, event_id=1)
         incident = self.correlator.process_alert(a2, event_id=2)
 
         assert incident is not None
+        self.correlator.set_incident_repo(_FakeIncidentRepo())
+        asyncio.run(self.correlator.persist(incident))
+
+        assert incident.id is not None
         assert self.correlator.resolve_incident(incident.id)
 
         unresolved = self.correlator.get_incidents(include_resolved=False)
@@ -73,11 +103,27 @@ class TestAlertCorrelator:
         assert len(unresolved) == 0
         assert len(resolved) >= 1
 
+    def test_unpersisted_incident_has_no_resolvable_id(self):
+        """저장되지 않은 인시던트는 조회·해제 대상이 아니다."""
+        a1 = make_alert("port_scan", "10.0.0.1")
+        a2 = make_alert("lateral_movement", "10.0.0.1")
+        self.correlator.process_alert(a1, event_id=1)
+        incident = self.correlator.process_alert(a2, event_id=2)
+
+        assert incident is not None
+        assert incident.id is None
+        assert incident.to_dict()["persisted"] is False
+        assert self.correlator.get_incident(None) is None
+        assert self.correlator.resolve_incident(None) is False
+
     def test_get_incident_by_id(self):
         a1 = make_alert("port_scan", "10.0.0.1")
         a2 = make_alert("lateral_movement", "10.0.0.1")
         self.correlator.process_alert(a1, event_id=1)
         incident = self.correlator.process_alert(a2, event_id=2)
+
+        self.correlator.set_incident_repo(_FakeIncidentRepo())
+        asyncio.run(self.correlator.persist(incident))
 
         result = self.correlator.get_incident(incident.id)
         assert result is not None

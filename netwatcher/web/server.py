@@ -14,7 +14,7 @@ from netwatcher.web.routes.devices import create_devices_router
 from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
-def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None):
+def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None):
     web_cfg = config.section("web") if hasattr(config, 'section') else {}
     cors_cfg = web_cfg.get("cors", {}) if isinstance(web_cfg, dict) else {}
     allowed_origins = cors_cfg.get("allowed_origins", ["http://localhost:38585"])
@@ -27,7 +27,19 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
     # CORS & Auth Middleware
     app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["*"], allow_headers=["*"])
-    if auth_manager: app.add_middleware(AuthMiddleware, auth_manager=auth_manager)
+    if auth_manager:
+        app.add_middleware(AuthMiddleware, auth_manager=auth_manager)
+        # rbac.require_role() 이 토큰 role 클레임을 보려면 app.state 가 필요하다.
+        # 이게 없으면 권한 검사가 조용히 anonymous-admin 으로 통과한다(PR 03).
+        app.state.auth_manager = auth_manager
+
+    # 피드 신선도는 상태 경로에서 조회하므로 app.state 로 노출한다 (PR 07)
+    if feed_manager is not None:
+        app.state.feed_manager = feed_manager
+
+    # 관측 범위 (PR 11)
+    if observation_service is not None:
+        app.state.observation_service = observation_service
 
     # API Routers (Standardized Prefix)
     api_prefix = "/api"
@@ -67,6 +79,38 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
         from netwatcher.web.routes.ai_analyzer import create_ai_analyzer_router
         app.include_router(create_ai_analyzer_router(ai_analyzer), prefix=api_prefix)
 
+    if response_proposal_repo is not None:
+        from netwatcher.web.routes.response_proposals import (
+            create_response_proposals_router,
+        )
+        app.include_router(
+            create_response_proposals_router(response_proposal_repo), prefix=api_prefix,
+        )
+
+    if response_repository is not None and response_executor is not None:
+        from netwatcher.web.routes.response import create_response_router
+        app.include_router(
+            create_response_router(response_repository, response_executor),
+            prefix=api_prefix,
+        )
+
+    if replay_service is not None:
+        from netwatcher.web.routes.replay import create_replay_router
+        app.include_router(create_replay_router(replay_service), prefix=api_prefix)
+
+    if observation_service is not None:
+        from netwatcher.web.routes.observation import create_observation_router
+        app.include_router(
+            create_observation_router(observation_service, kernel_probe),
+            prefix=api_prefix,
+        )
+
+    if proposal_service:
+        from netwatcher.web.routes.proposals import create_proposals_router
+        app.include_router(
+            create_proposals_router(proposal_service), prefix=api_prefix
+        )
+
     # Threat Hunting
     from netwatcher.hunting.ioc_correlator import IOCCorrelator
     from netwatcher.hunting.mitre_navigator import MITRENavigator
@@ -83,6 +127,45 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     @app.get("/health")
     async def health_check():
         return {"status": "healthy"}
+
+    @app.get("/api/support-profile")
+    async def support_profile():
+        """현재 설정이 지원하는 배포 조합과 위반 사항을 노출한다 (PR 01).
+
+        대시보드가 "차단이 실제로 적용된다"고 오인하지 않도록, enforcement
+        백엔드·프로필·위반 목록을 함께 반환한다.
+
+        위협 피드 상태(PR 07)도 함께 노출한다. 갱신 루프가 살아 있어도 모든
+        다운로드가 실패하면 threat_intel 엔진은 아무것도 탐지하지 못하므로,
+        "작동 중" 과 "지표가 최신" 을 구분해 보여준다.
+
+        관측 상태(PR 11)도 함께 노출한다. **계약 통과와 실제 관측은 별개다.**
+        프로필이 유효해도 센서가 stale 이면 대시보드는 그 사실을 함께 보여줘야
+        한다. 상세 조회는 ``GET /api/observation`` 을 사용한다.
+        """
+        from netwatcher.support import SupportContract
+
+        payload = SupportContract(config).describe()
+
+        observation = app.state.__dict__.get("observation_service")
+        if observation is not None:
+            # 계약 통과와 실제 관측은 별개다. 프로필이 유효해도 센서가
+            # stale 이면 대시보드는 그 사실을 함께 보여줘야 한다.
+            payload["observation"] = observation.snapshot()
+
+        manager = app.state.__dict__.get("feed_manager")
+        if manager is not None:
+            health = manager.feed_health()
+            payload["feeds"] = health
+            if health["status"] != "ok":
+                payload["violations"] = list(payload["violations"]) + [
+                    v.as_dict() for v in manager.health_as_violations()
+                ]
+                payload["profile_note"] = (
+                    "위반이 있어도 기동은 하지만, threat_intel 은 지표가 없어 "
+                    "탐지하지 않는다"
+                )
+        return payload
 
     # Static Assets
     app.mount("/css",     StaticFiles(directory=str(static_dir / "css")),     name="css")

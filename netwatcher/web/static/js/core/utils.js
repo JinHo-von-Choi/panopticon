@@ -2,11 +2,42 @@
  * NetWatcher Dashboard Utilities
  */
 
+var HTML_ESCAPES = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+    "`": "&#96;"
+};
+
+/**
+ * 텍스트 → HTML 이스케이프.
+ *
+ * 이전 구현은 div.textContent → div.innerHTML 왕복을 썼다. textContent는
+ * &, <, > 만 이스케이프하므로 속성값 컨텍스트(`title="${esc(x)}"`)에서
+ * 따옴표 탈출이 가능했다. 여기서는 따옴표/백틱/역슬래시까지 처리한다.
+ */
 export function esc(str) {
-    if (!str) return "";
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
+    if (str === null || str === undefined) return "";
+    return String(str).replace(/[&<>"'`]/g, function (ch) {
+        return HTML_ESCAPES[ch];
+    });
+}
+
+/**
+ * 값이 아닌 DOM 노드로 안전하게 출력한다. 문자열 조립이 필요 없는 모든
+ * 렌더링 경로에서 이 함수를 우선 사용한다(PR 02).
+ */
+export function textEl(value) {
+    var el = document.createElement("span");
+    el.textContent = value === null || value === undefined ? "" : String(value);
+    return el;
+}
+
+/** 속성값 전용 이스케이프. esc() 와 동일하지만 의도를 명시한다. */
+export function escAttr(value) {
+    return esc(value);
 }
 
 export function formatTime(ts) {

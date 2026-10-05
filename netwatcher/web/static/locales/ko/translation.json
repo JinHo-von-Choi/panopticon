@@ -32,7 +32,8 @@
     "engines": "탐지 엔진",
     "ai_analyzer": "AI 분석기",
     "incidents": "인시던트",
-    "defense": "방어"
+    "defense": "방어",
+    "governance": "Governance"
   },
   "toolbar": {
     "all_severities": "모든 심각도",

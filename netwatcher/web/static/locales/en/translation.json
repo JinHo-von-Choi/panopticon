@@ -32,7 +32,8 @@
     "engines": "Engines",
     "ai_analyzer": "AI Analyzer",
     "incidents": "Incidents",
-    "defense": "Defense"
+    "defense": "Defense",
+    "governance": "Governance"
   },
   "toolbar": {
     "all_severities": "All Severities",

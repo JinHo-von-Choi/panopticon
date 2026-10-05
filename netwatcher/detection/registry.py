@@ -194,6 +194,17 @@ class EngineRegistry:
     # 엔진 정보 조회
     # ------------------------------------------------------------------
 
+    def get_engine_schema(self, name: str) -> dict[str, Any] | None:
+        """엔진의 config_schema 원본 dict를 반환한다.
+
+        검증 계층(PR 03)이 스키마를 직접 읽어야 하므로 get_config_keys()의
+        키 집합이 아닌 스키마 자체를 노출한다. 미등록 엔진이면 None.
+        """
+        engine_cls = self._engine_classes.get(name)
+        if engine_cls is None:
+            return None
+        return getattr(engine_cls, "config_schema", {}) or {}
+
     def get_config_keys(self, name: str) -> set[str] | None:
         """엔진의 config_schema에 선언된 파라미터 키 집합을 반환한다.
 

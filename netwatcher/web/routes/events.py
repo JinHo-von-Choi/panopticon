@@ -103,7 +103,8 @@ def create_events_router(
     ):
         events = await event_repo.list_recent(limit=limit, offset=offset, severity=severity, engine=engine, since=since, until=until, search=q, source_ip=source_ip)
         total = await event_repo.count(severity=severity, engine=engine, since=since, until=until, search=q, source_ip=source_ip)
-        return {"events": events, "total": total}
+        # 목록에서도 봉투를 함께 준다 — 목록에서 "근거 없는 탐지"를 걸러낼 수 있어야 한다
+        return {"events": [_with_evidence(e) for e in events], "total": total}
 
     @router.get("/export")
     async def export_events(
@@ -131,6 +132,41 @@ def create_events_router(
     async def get_event(event_id: int):
         event = await event_repo.get_by_id(event_id)
         if not event: return JSONResponse({"error": "Event not found"}, status_code=404)
-        return {"event": event}
+        return {"event": _with_evidence(event)}
 
     return router
+
+
+# ------------------------------------------------------------------
+# 증거 봉투 (PR 09)
+# ------------------------------------------------------------------
+
+def _with_evidence(row: dict) -> dict:
+    """이벤트 행에 증거 봉투(요약→근거→원자료)를 붙인다.
+
+    ``metadata["evidence"]`` 를 그대로 신뢰하지 않고 **읽을 때 다시 판정**한다.
+    계약이 도입되기 전에 저장된 행에도 같은 판정이 적용되어야 "이건 검증 가능한
+    탐지인가" 를 과거 데이터에도 물을 수 있다.
+    """
+    from netwatcher.detection.evidence import classify_alert
+
+    out = dict(row)
+    metadata = out.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    # confidence 는 파이프라인이 저장을 위해 붙인 값이라 근거에서 제외한다
+    evidence_metadata = {
+        k: v for k, v in metadata.items() if k != "evidence"
+    }
+
+    class _Row:
+        title = out.get("title", "")
+        description = out.get("description", "")
+        reasoning = out.get("reasoning")
+        packet_info = out.get("packet_info") or {}
+        metadata = evidence_metadata
+
+    report = classify_alert(_Row)
+    out["evidence"] = report.as_dict()
+    return out

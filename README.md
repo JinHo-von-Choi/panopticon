@@ -783,6 +783,44 @@ SPAN 구성 방법, 배포 토폴로지 옵션(관리형 스위치 / 라우터 �
 - **CORS**: 허용 오리진 제한
 - **Rate Limiting**: 인증 엔드포인트 속도 제한
 - **Security Headers**: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
+- **기본 바인딩은 루프백**: `web.host: 127.0.0.1`. LAN 노출은
+  `web.host: 0.0.0.0` **과** `auth.enabled: true` 를 함께 명시해야 하며,
+  둘 중 하나만 하면 기동 전에 거부된다 (지원 계약 SUP-020)
+
+### 이 도구가 하지 않는 것
+
+기능 목록만 보면 놓치므로 먼저 적는다.
+
+| 하지 않는 것 | 이유 |
+|-|-|
+| 방화벽 변경 | 검증된 만료 백엔드가 없다. `response.enabled` 는 꺼져 있다 |
+| "경보 없음 = 안전" | 관측 범위(`observed/partial/stale/unknown`)로 구분한다 |
+| AI 승인 | AI 는 설정 제안만 올린다. 승인·scope·TTL 은 사람이 정한다 |
+| 자동 조치 | 예외 정책은 제안일 뿐이다. 승인 없이는 실행되지 않는다 |
+
+상세: [docs/OPERATIONS-GUIDE.md](docs/OPERATIONS-GUIDE.md),
+설계 근거: [docs/GOVERNANCE.md](docs/GOVERNANCE.md).
+
+### 관측 범위 · 리플레이 · 조치 제안 API
+
+| 엔드포인트 | 역할 | 설명 |
+|-|-|-|
+| `GET /api/observation` | viewer | 관측 상태 + 판정 근거 + 단계별 손실 |
+| `GET /api/support-profile` | viewer | 지원 프로필, 위반, 피드 신선도, 관측 요약 |
+| `GET /api/response/capabilities` | viewer | 이 배포가 실제로 무엇을 할 수 있는지 |
+| `POST /api/change-proposals/{id}/approve` | admin | 승인 (OS 미변경) |
+| `POST /api/response-actions/{id}/activate` | admin | 적용 — 승인 해시 불일치 시 409 |
+| `POST /api/response-proposals` | analyst | 최소 대응 제안 (제안만) |
+| `GET /api/response-proposals/{id}/impact` | viewer | 확정 범위 / 미확인 범위 분리 |
+| `POST /api/replay-runs` | analyst | 리플레이 실행 (비동기) |
+| `GET /api/replay-runs/{id}/diff` | viewer | 두 버전 차이 + 비교 불가 사유 |
+
+### 출시 게이트
+
+`python scripts/gates.py` — 13개 게이트. 각 게이트는 "맞았는지" 가 아니라
+**"이 상태로 배포해도 되는가"** 를 판정한다. G0-11(리플레이 격리),
+G0-12(강제 주장 정직성), G0-13(스키마 정합성)은 **작동하지 않는 것을
+확인하는** 게이트다.
 
 ---
 
