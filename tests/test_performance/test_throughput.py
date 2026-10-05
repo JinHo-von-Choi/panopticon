@@ -29,7 +29,16 @@ def _make_tcp_packet(src_ip="192.168.1.100", dst_ip="10.0.0.1", sport=12345, dpo
 
 class TestEngineThroughput:
     def test_engine_throughput(self, config):
-        """Measure throughput: 10000 packets through EngineRegistry."""
+        """Measure throughput: 10000 packets through EngineRegistry.
+
+        워밍업 패스를 하나 둔다. 첫 패킷의 처리에는 엔진 초기 상태 생성
+        (윈도우 버퍼, 초기 지표)이 섞이는데, 그것을 시간에 포함하면 측정값이
+        코드 상태가 아니라 **측정 순서** 를 재게 된다.
+
+        기준(1000 pps)은 낮추지 않는다. 이 테스트의 목적은 엔진이 느려졌는지
+        를 잡는 것이고, 느려진 걸 통과시키기 위한 수치를 고치는 것은
+        측정 고기를 고쳐 먹는 것이다. 대신 측정에서 순서 효과를 제거한다.
+        """
         registry = EngineRegistry(config)
         registry.discover_and_register()
 
@@ -37,6 +46,10 @@ class TestEngineThroughput:
             _make_tcp_packet(dport=80 + (i % 100))
             for i in range(10000)
         ]
+
+        # 워밍업 — 측정 대상이 아니다
+        for pkt in packets[:200]:
+            registry.process_packet(pkt)
 
         start = time.monotonic()
         total_alerts = 0
@@ -48,8 +61,18 @@ class TestEngineThroughput:
         pps = len(packets) / elapsed if elapsed > 0 else float("inf")
         print(f"\nEngine throughput: {pps:.0f} packets/sec ({elapsed:.3f}s for {len(packets)} packets, {total_alerts} alerts)")
 
-        # Baseline: should process at least 1000 pps
-        assert pps > 1000, f"Engine throughput too low: {pps:.0f} pps"
+        # 기준(1000 pps)은 낮추지 않는다. 이 테스트의 목적은 엔진이 느려졌는지
+        # 를 잡는 것이고, 느려진 걸 통과시키려고 수치를 고치는 것은 측정 고기를
+        # 고쳐 먹는 것이다. 대신 실패하면 원인을 추측하지 않게 값을 그대로 남긴다.
+        #
+        # 주의: **벽시계 측정**이다. 같은 코드라도 머신이 바쁘면 떨어진다.
+        # 고립 실행과 전체 스위트 동시 실행에서 결과가 다르면 먼저 부하를
+        # 의심한다 — 코드가 느려진 것이 아닐 수 있다.
+        assert pps > 1000, (
+            f"Engine throughput too low: {pps:.0f} pps "
+            f"({elapsed:.3f}s / {len(packets)} packets). 기준 1000 pps. "
+            f"고립 실행 값과 비교해 부하 영향인지 코드 회귀인지 구분한다."
+        )
 
     def test_rate_limiter_throughput(self):
         """Measure rate limiter throughput: 100000 allow() calls."""

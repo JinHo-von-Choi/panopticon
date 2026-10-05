@@ -11,6 +11,11 @@ from scapy.all import ARP, DNS, TCP, UDP, Packet
 from netwatcher.detection.models import Alert, Severity
 from netwatcher.detection.utils import get_ip_addrs
 from netwatcher.inventory import hostname_resolver, port_tracker
+from netwatcher.observability.observation import (
+    KIND_ACCEPTED,
+    KIND_RECEIVED,
+    STAGE_ENGINE,
+)
 from netwatcher.utils.geoip import enrich_alert_metadata
 from netwatcher.utils.network import mac_vendor_lookup
 from netwatcher.utils.packet_info import extract_packet_info, guess_os
@@ -24,6 +29,7 @@ if TYPE_CHECKING:
     from netwatcher.alerts.dispatcher import AlertDispatcher
     from netwatcher.capture.pcap_writer import PCAPWriter
     from netwatcher.capture.pool import WorkerPool
+    from netwatcher.observability.observation import ObservationService
     from netwatcher.detection.registry import EngineRegistry
     from netwatcher.utils.network import AsyncDNSResolver
 
@@ -45,6 +51,7 @@ class PacketProcessor:
         pcap_writer: PCAPWriter,
         dns_resolver: AsyncDNSResolver,
         worker_pool: WorkerPool | None = None,
+        observation: "ObservationService | None" = None,
     ) -> None:
         """패킷 프로세서를 초기화한다. 레지스트리, 디스패처, PCAP 기록기 등을 주입받는다."""
         self.registry     = registry
@@ -52,6 +59,7 @@ class PacketProcessor:
         self.pcap_writer  = pcap_writer
         self._dns_resolver = dns_resolver
         self._worker_pool  = worker_pool
+        self._observation  = observation
 
         # 트래픽 카운터 (플러시 간격 단위)
         self._pkt_count  = 0
@@ -172,7 +180,11 @@ class PacketProcessor:
 
     def _run_engines_local(self, packet: Packet) -> None:
         """단일프로세스 모드: 로컬에서 엔진을 실행하고 알림을 디스패치한다."""
+        if self._observation is not None:
+            self._observation.record(STAGE_ENGINE, KIND_RECEIVED)
         alerts = self.registry.process_packet(packet)
+        if self._observation is not None and alerts:
+            self._observation.record(STAGE_ENGINE, KIND_ACCEPTED, len(alerts))
         for alert in alerts:
             alert.packet_info = extract_packet_info(packet)
             enrich_alert_metadata(alert.metadata, alert.source_ip, alert.dest_ip)

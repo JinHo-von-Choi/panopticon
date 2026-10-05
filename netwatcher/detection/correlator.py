@@ -50,8 +50,13 @@ _KILL_CHAIN_ORDER = _ATK_KILL_CHAIN_ORDER
 
 @dataclass
 class Incident:
-    """상관분석된 알림 그룹."""
-    id: int
+    """상관분석된 알림 그룹.
+
+    ``id`` 는 **DB 가 부여하는 식별자**다 (PR 05). 인메모리 카운터를 쓰면
+    프로세스 재시작 후 다시 1부터 시작해 기존 행과 충돌하고, 그 결과
+    ``UPDATE incidents SET ... WHERE id = $1`` 이 엉뚱한 인시던트를 덮어쓴다.
+    따라서 id 는 삽입이 완료될 때까지 ``None`` 이다.
+    """
     severity: Severity
     title: str
     description: str
@@ -60,6 +65,7 @@ class Incident:
     engines: set[str] = field(default_factory=set)
     kill_chain_stages: list[str] = field(default_factory=list)
     rule: str = ""
+    id: int | None = None
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -72,6 +78,7 @@ class Incident:
         """인시던트를 딕셔너리로 직렬화한다."""
         return {
             "id": self.id,
+            "persisted": self.id is not None,
             "severity": self.severity.value,
             "title": self.title,
             "description": self.description,
@@ -102,9 +109,9 @@ class AlertCorrelator:
         self._burst_window    = burst_window
         self._incident_repo   = incident_repo
 
-        # 인메모리 캐시 (빠른 조회를 위해 최근 100개 인시던트로 제한)
+        # 인메모리 캐시 (빠른 조회를 위해 최근 100개 인시던트로 제한).
+        # id 는 DB 가 부여한다 — 인메모리 카운터로 대체하지 않는다 (PR 05).
         self._incidents: list[Incident] = []
-        self._next_id = 1
 
         # 상관분석용 최근 알림: source_ip -> deque of (timestamp, alert_info)
         self._recent_alerts: dict[str, deque[tuple[float, dict[str, Any]]]] = defaultdict(deque)
@@ -271,7 +278,6 @@ class AlertCorrelator:
             )
 
         incident = Incident(
-            id=self._next_id,
             severity=max_severity,
             title=title,
             description=desc,
@@ -281,44 +287,90 @@ class AlertCorrelator:
             kill_chain_stages=stages or [],
             rule=rule,
         )
-        self._next_id += 1
         self._incidents.append(incident)
 
         # 인메모리 캐시를 100개 인시던트로 제한
         if len(self._incidents) > 100:
             self._incidents = self._incidents[-100:]
 
-        # DB에 영속화
-        self._persist_create(incident)
-
+        # DB 삽입은 async_process_alert() 가 수행한다. id 를 여기서 임의로
+        # 만들지 않는다 — DB 가 부여한 값을 그대로 받아야 한다 (PR 05).
         logger.info(
-            "Incident #%d created: %s (rule=%s, alerts=%d)",
-            incident.id, incident.title, rule, len(incident.alert_ids),
+            "Incident created (unpersisted): %s (rule=%s, alerts=%d)",
+            incident.title, rule, len(incident.alert_ids),
         )
 
         return incident
 
-    def _persist_create(self, incident: Incident) -> None:
-        """새 인시던트를 DB에 영속화한다 (fire-and-forget)."""
+    async def async_process_alert(
+        self, alert: Alert, event_id: int | None = None,
+    ) -> Incident | None:
+        """상관분석 후 인시던트를 **await 로 영속화**한다.
+
+        호출자가 반환하는 인시던트는 이미 DB id 를 갖고 있다. 대시보드와
+        WebSocket 이 같은 식별자를 보게 되어, 인메모리 id 로 DB 행을 잘못
+        집게 쓰는 문제가 사라진다.
+        """
+        incident = self.process_alert(alert, event_id)
+        if incident is None:
+            return None
+        await self.persist(incident)
+        return incident
+
+    async def persist(self, incident: Incident) -> None:
+        """아직 저장되지 않은 인시던트를 저장하고 DB id 를 채워 넣는다."""
+        if incident.id is not None:
+            # 이미 저장됨 → 변경분만 반영
+            await self._persist_update_async(incident)
+            return
         if self._incident_repo is None:
+            logger.debug(
+                "incident store 미설정: 인시던트 %r 은 영속화되지 않는다", incident.title,
+            )
+            return
+        try:
+            incident.id = await self._incident_repo.insert(
+                severity=incident.severity.value,
+                title=incident.title,
+                description=incident.description,
+                alert_ids=incident.alert_ids,
+                source_ips=sorted(incident.source_ips),
+                engines=sorted(incident.engines),
+                kill_chain_stages=incident.kill_chain_stages,
+                rule=incident.rule,
+            )
+        except Exception:
+            logger.exception("인시던트 영속화 실패: %s", incident.title)
+
+    def _persist_create(self, incident: Incident) -> None:
+        """새 인시던트를 DB에 영속화한다 (fire-and-forget).
+
+        호출자를 되돌려야 하는 id 를 얻지 못하므로, 결과적으로 id 는 채워지지
+        않는다. 정상 경로는 :meth:`persist` 를 쓰는 것이다.
+        """
+        if self._incident_repo is None or incident.id is not None:
             return
         import asyncio
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(
-                self._incident_repo.insert(
-                    severity=incident.severity.value,
-                    title=incident.title,
-                    description=incident.description,
-                    alert_ids=incident.alert_ids,
-                    source_ips=sorted(incident.source_ips),
-                    engines=sorted(incident.engines),
-                    kill_chain_stages=incident.kill_chain_stages,
-                    rule=incident.rule,
-                )
-            )
+            loop.create_task(self.persist(incident))
         except RuntimeError:
             pass
+
+    async def _persist_update_async(self, incident: Incident) -> None:
+        """인시던트 업데이트를 DB에 반영한다 (id 가 확인된 경우만)."""
+        if self._incident_repo is None or incident.id is None:
+            return
+        try:
+            await self._incident_repo.update(
+                incident_id=incident.id,
+                severity=incident.severity.value,
+                alert_ids=incident.alert_ids,
+                engines=sorted(incident.engines),
+                kill_chain_stages=incident.kill_chain_stages,
+            )
+        except Exception:
+            logger.exception("인시던트 업데이트 실패: id=%s", incident.id)
 
     def _persist_update(self, incident: Incident) -> None:
         """인시던트 업데이트를 DB에 영속화한다 (fire-and-forget)."""
@@ -351,9 +403,15 @@ class AlertCorrelator:
         return result
 
     def resolve_incident(self, incident_id: int) -> bool:
-        """인시던트를 해결 완료로 표시한다."""
+        """인시던트를 해결 완료로 표시한다.
+
+        id 가 None 인(미영속) 인시던트는 조회 대상이 아니다. DB id 로만
+        매칭하므로 재시작 후에도 엉뚱한 인시던트를 건드리지 않는다.
+        """
+        if incident_id is None:
+            return False
         for inc in self._incidents:
-            if inc.id == incident_id:
+            if inc.id is not None and inc.id == incident_id:
                 inc.resolved = True
                 # DB에 해결 상태 영속화
                 if self._incident_repo is not None:
@@ -407,7 +465,9 @@ class AlertCorrelator:
 
     def get_incident(self, incident_id: int) -> dict | None:
         """ID로 단일 인시던트를 조회하여 딕셔너리로 반환한다."""
+        if incident_id is None:
+            return None
         for inc in self._incidents:
-            if inc.id == incident_id:
+            if inc.id is not None and inc.id == incident_id:
                 return inc.to_dict()
         return None

@@ -96,7 +96,12 @@ class AuthManager:
         return self._enabled
 
     def authenticate(self, username: str, password: str) -> str | None:
-        """자격증명 검증 후 JWT 토큰을 반환한다. 실패 시 None."""
+        """자격증명 검증 후 JWT 토큰을 반환한다. 실패 시 None.
+
+        단일 사용자 스키마이므로 role 클레임은 항상 ``admin`` 이다.
+        여러 역할을 구분해 발급하는 경로는 아직 지원 프로필 밖이다
+        (``auth.multi_user`` 는 지원 계약이 거부한다).
+        """
         if not hmac.compare_digest(username, self._username):
             return None
         if self._password_hash is None:
@@ -106,6 +111,7 @@ class AuthManager:
         now = datetime.now(timezone.utc)
         payload = {
             "sub": username,
+            "role": "admin",
             "iat": now,
             "exp": now + timedelta(hours=self._expire_hours),
         }

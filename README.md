@@ -778,11 +778,50 @@ SPAN 구성 방법, 배포 토폴로지 옵션(관리형 스위치 / 라우터 �
 
 ### 보안
 
-- **JWT 인증**: 로그인 필수 (토큰 유효기간 24시간)
+- **JWT 인증**: `auth.enabled: true` 일 때 로그인 필요 (토큰 유효기간 24시간).
+  기본값은 꺼짐이며, 이때는 바인딩이 루프백으로 제한된다
 - **CSP**: 인라인 스크립트 차단, CDN 화이트리스트
 - **CORS**: 허용 오리진 제한
 - **Rate Limiting**: 인증 엔드포인트 속도 제한
 - **Security Headers**: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
+- **기본 바인딩은 루프백**: `web.host: 127.0.0.1`. LAN 노출은
+  `web.host: 0.0.0.0` **과** `auth.enabled: true` 를 함께 명시해야 하며,
+  둘 중 하나만 하면 기동 전에 거부된다 (지원 계약 SUP-020)
+
+### 이 도구가 하지 않는 것
+
+기능 목록만 보면 놓치므로 먼저 적는다.
+
+| 하지 않는 것 | 이유 |
+|-|-|
+| 기본 자동 차단 | nftables 백엔드는 구현되어 있지만 만료가 실측 검증되기 전에는 `shadow` 로 동작한다. `response.enabled` 는 꺼져 있다 |
+| "경보 없음 = 안전" | 관측 범위(`observed/partial/stale/unknown`)로 센서 상태를 함께 표시한다 |
+| AI 승인 | AI 는 설정 제안만 올린다. 승인·대상 범위·TTL 은 사람이 정한다 |
+| 좁히지 못한 범위의 대체 | 범위를 좁히지 못하면 제안하지 않는다. 넓은 IP 차단으로 바꾸지 않는다 |
+
+상세: [docs/OPERATIONS-GUIDE.md](docs/OPERATIONS-GUIDE.md),
+설계 근거: [docs/GOVERNANCE.md](docs/GOVERNANCE.md).
+
+### 관측 범위 · 리플레이 · 조치 제안 API
+
+| 엔드포인트 | 역할 | 설명 |
+|-|-|-|
+| `GET /api/observation` | viewer | 관측 상태 + 판정 근거 + 단계별 손실 |
+| `GET /api/support-profile` | viewer | 지원 프로필, 위반, 피드 신선도, 관측 요약 |
+| `GET /api/response/capabilities` | viewer | 이 배포가 실제로 무엇을 할 수 있는지 |
+| `POST /api/change-proposals/{id}/approve` | admin | 승인 (OS 미변경) |
+| `POST /api/response-actions/{id}/activate` | admin | 적용 — 승인 해시 불일치 시 409 |
+| `POST /api/response-proposals` | analyst | 최소 대응 제안 (제안만) |
+| `GET /api/response-proposals/{id}/impact` | viewer | 확정 범위 / 미확인 범위 분리 |
+| `POST /api/replay-runs` | analyst | 리플레이 실행 (비동기) |
+| `GET /api/replay-runs/{id}/diff` | viewer | 두 버전 차이 + 비교 불가 사유 |
+
+### 출시 게이트
+
+`python scripts/gates.py` — 13개 게이트. 각 게이트는 "맞았는지" 가 아니라
+**"이 상태로 배포해도 되는가"** 를 판정한다. G0-11(리플레이 격리),
+G0-12(강제 주장 정직성), G0-13(스키마 정합성)은 **작동하지 않는 것을
+확인하는** 게이트다.
 
 ---
 
@@ -1220,9 +1259,9 @@ Panopticon은 보안 도구이지만 그 자체도 공격 대상이 될 수 있�
 | 항목 | 현재 동작 | 권고 사항 |
 |------|----------|----------|
 | 로그인 rate limit | IP당 10회/분 슬라이딩 윈도우 | 계정 락아웃은 없음. 외부 노출 시 Nginx 앞단 fail2ban 병행 권장 |
-| 관리자 계정 | 단일 계정 (`username: admin` 기본값), 역할 모델 없음 | 배포 즉시 `username`과 `NETWATCHER_LOGIN_PASSWORD`를 변경할 것 |
-| 권한 모델 | 로그인한 단일 사용자가 모든 권한 보유 | 다중 역할(읽기 전용/관리자 분리)은 미구현 |
-| 대시보드 노출 범위 | 기본 포트 38585, `host: 0.0.0.0` | 인터넷 직접 노출 금지. VPN/리버스 프록시 뒤에서 운영 권장 |
+| 관리자 계정 | 단일 계정 (`username: admin` 기본값) | 배포 즉시 `username`과 `NETWATCHER_LOGIN_PASSWORD`를 변경할 것 |
+| 권한 모델 | JWT `role` 클레임으로 viewer / analyst / admin 3단계 | 계정 자체는 단일이다. 다중 사용자 관리는 `auth.multi_user` 필요 |
+| 대시보드 노출 범위 | 기본 포트 38585, `host: 127.0.0.1` | LAN 노출 시 `host: 0.0.0.0` 과 인증을 함께 켠다. 인터넷 직접 노출 금지 |
 | API 인증 우회 | `auth.enabled: false` 시 전체 무인증 | 테스트 외에는 반드시 `enabled: true` 유지 |
 
 ---

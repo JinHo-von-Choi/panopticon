@@ -3,7 +3,7 @@
  */
 
 import { authFetch } from '../core/api.js';
-import { esc, formatTime, renderPagination } from '../core/utils.js';
+import { esc, escAttr, formatTime, renderPagination } from '../core/utils.js';
 
 var blPage = 0;
 var blTotal = 0;
@@ -41,9 +41,12 @@ export async function loadBlocklist(page) {
                 <td>${esc(b.source)}</td>
                 <td>${esc(b.notes || "-")}</td>
                 <td>${esc(formatTime(b.created_at || new Date().toISOString()))}</td>
-                <td><button class="btn-detail" style="background:var(--critical)" onclick="window.removeBlock('${b.type}', '${b.value}')">Delete</button></td>
+                <td><button class="btn-detail" style="background:var(--critical)" data-remove-type="${escAttr(b.type)}" data-remove-value="${escAttr(b.value)}">Delete</button></td>
             `;
             body.appendChild(tr);
+            tr.querySelector("[data-remove-type]").addEventListener("click", () => {
+                window.removeBlock(b.type, b.value);
+            });
         });
 
         renderSummary(blTotal, data.entries.length, { type, source, search });

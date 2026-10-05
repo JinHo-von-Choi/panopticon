@@ -41,6 +41,63 @@ _SHARED_PLATFORM_DOMAINS: set[str] = {
 }
 
 
+class FeedUpdateSummary:
+    """한 번의 피드 갱신 결과."""
+
+    def __init__(
+        self,
+        succeeded: bool,
+        delivered: int,
+        from_cache: int,
+        failed: int,
+        blocked_ips: int,
+        blocked_domains: int,
+        last_update_epoch: float,
+    ) -> None:
+        self.succeeded = succeeded
+        self.delivered = delivered
+        self.from_cache = from_cache
+        self.failed = failed
+        self.blocked_ips = blocked_ips
+        self.blocked_domains = blocked_domains
+        self.last_update_epoch = last_update_epoch
+
+    def as_dict(self) -> dict:
+        return {
+            "succeeded": self.succeeded,
+            "downloaded": self.delivered,
+            "from_cache": self.from_cache,
+            "failed": self.failed,
+            "blocked_ips": self.blocked_ips,
+            "blocked_domains": self.blocked_domains,
+            "last_update_epoch": self.last_update_epoch,
+        }
+
+
+class _FeedAccumulator:
+    """갱신 중인 피드 상태를 담는 임시 집합.
+
+    라이브 집합과 분리해 두고, 갱신이 성공했을 때만 교체한다. 그래야 다운로드가
+    전부 실패해도 기존의 유효한 차단 목록이 보존된다.
+    """
+
+    def __init__(self) -> None:
+        self.ips: set[str] = set()
+        self.domains: set[str] = set()
+        self.ja3: set[str] = set()
+        self.ja3_to_malware: dict[str, str] = {}
+        self.ip_to_feed: dict[str, str] = {}
+        self.domain_to_feed: dict[str, str] = {}
+        # 피드별 결과: "downloaded" | "cached" | "failed"
+        self.outcomes: dict[str, str] = {}
+
+    def record(self, name: str, outcome: str) -> None:
+        self.outcomes[name] = outcome
+
+    def fail(self, name: str) -> None:
+        self.outcomes[name] = "failed"
+
+
 class FeedManager:
     """위협 인텔리전스 피드를 다운로드, 파싱, 캐싱한다."""
 
@@ -71,6 +128,12 @@ class FeedManager:
         # 각 지표가 어느 피드에서 왔는지 추적
         self._ip_to_feed: dict[str, str] = {}
         self._domain_to_feed: dict[str, str] = {}
+
+        # 마지막 갱신 시도/결과 (정직한 신선도 보고용, PR 07)
+        self._last_summary: FeedUpdateSummary | None = None
+        self._last_attempt_epoch: float = 0.0
+        self._feed_outcomes: dict[str, str] = {}
+        self._pending_outcomes: dict[str, str] = {}
 
     def get_blocked_ips(self) -> set[str]:
         return self._blocked_ips.copy()
@@ -173,44 +236,178 @@ class FeedManager:
         entries.sort(key=lambda e: (e["source"] != "Custom", e["type"], e["value"]))
         return entries[offset:offset + limit], total
 
-    async def update_all(self) -> None:
-        """구성된 모든 피드를 다운로드하고 파싱한다."""
+    async def update_all(self) -> "FeedUpdateSummary":
+        """구성된 모든 피드를 다운로드하고 파싱한다.
+
+        실패해도 기존 차단 목록을 버리지 않는다 (PR 07).
+
+        이전 구현은 갱신 **전에** 라이브 집합을 먼저 비웠다. 그 뒤 모든 다운로드가
+        실패하면(네트워크 단절) threat_intel 엔진이 아무 지표도 보지 못해
+        **탐지가 전부 멈춘 상태가 되는 대신**, `last_update_epoch` 은 "방금 갱신됨"으로
+        갱신되어 건강 신호가 거짓말을 했다. 감시 도구가 조용히 그만 보는 것이
+        가장 나쁜 실패 형태이므로 다음을 지킨다.
+
+        1. 새 상태를 별도 집합에 쌓는다 (라이브 집합을 건드리지 않는다)
+        2. 실제로 콘텐츠를 받은 피드가 하나라도 있을 때만 원자적으로 교체한다
+        3. 하나도 받지 못하면 기존 상태를 유지하고 갱신 실패로 기록한다
+        4. ``last_update_epoch`` 은 실제 갱신이 성공했을 때만 전진한다
+
+        Returns:
+            갱신 결과 요약.
+        """
         import time as _time
 
         logger.info("Updating %d threat feeds...", len(self._sources))
 
-        # 피드 재로드 전 커스텀 전용으로 초기화 (in-place 변형으로 참조 보존)
-        self._blocked_ips.clear()
-        self._blocked_ips.update(self._custom_ips)
-        self._blocked_domains.clear()
-        self._blocked_domains.update(self._custom_domains)
-        self._blocked_ja3.clear()
-        self._ja3_to_malware.clear()
-        self._ip_to_feed.clear()
-        self._ip_to_feed.update({ip: "Custom" for ip in self._custom_ips})
-        self._domain_to_feed.clear()
-        self._domain_to_feed.update({d: "Custom" for d in self._custom_domains})
+        acc = _FeedAccumulator()
+        acc.ips.update(self._custom_ips)
+        acc.domains.update(self._custom_domains)
+        acc.ip_to_feed.update({ip: "Custom" for ip in self._custom_ips})
+        acc.domain_to_feed.update({d: "Custom" for d in self._custom_domains})
 
         import asyncio
 
         async def _safe_update(source: FeedSource) -> None:
             try:
-                await self._update_feed(source)
+                await self._update_feed(source, acc)
             except Exception:
                 logger.exception("Failed to update feed: %s", source.name)
+                acc.fail(source.name)
 
         await asyncio.gather(*[_safe_update(s) for s in self._sources])
+
+        delivered = [n for n, o in acc.outcomes.items() if o == "downloaded"]
+        cached = [n for n, o in acc.outcomes.items() if o == "cached"]
+
+        # 아무 피드도 콘텐츠를 제공하지 못했다면 기존 상태를 유지한다.
+        if not delivered and not cached:
+            summary = FeedUpdateSummary(
+                succeeded=False,
+                delivered=0,
+                from_cache=0,
+                failed=len(self._sources),
+                blocked_ips=len(self._blocked_ips),
+                blocked_domains=len(self._blocked_domains),
+                last_update_epoch=self.last_update_epoch,
+            )
+            self._pending_outcomes = dict(acc.outcomes)
+            self._record_status(summary, ok=False)
+            logger.error(
+                "모든 위협 피드 갱신 실패 — 기존 차단 목록 %d IP / %d 도메인을 유지한다",
+                len(self._blocked_ips), len(self._blocked_domains),
+            )
+            return summary
+
+        # 원자적 교체: 여기까지는 라이브 집합을 건드리지 않았다
+        self._blocked_ips = acc.ips
+        self._blocked_domains = acc.domains
+        self._blocked_ja3 = acc.ja3
+        self._ja3_to_malware = acc.ja3_to_malware
+        self._ip_to_feed = acc.ip_to_feed
+        self._domain_to_feed = acc.domain_to_feed
 
         self.last_update_epoch = _time.time()
         self._save_meta()
 
+        summary = FeedUpdateSummary(
+            succeeded=True,
+            delivered=len(delivered),
+            from_cache=len(cached),
+            failed=sum(1 for o in acc.outcomes.values() if o == "failed"),
+            blocked_ips=len(self._blocked_ips),
+            blocked_domains=len(self._blocked_domains),
+            last_update_epoch=self.last_update_epoch,
+        )
+        self._pending_outcomes = dict(acc.outcomes)
+        self._record_status(summary, ok=True)
+
         logger.info(
             "Threat feeds updated: %d blocked IPs, %d blocked domains, "
-            "%d JA3 fingerprints",
+            "%d JA3 fingerprints (downloaded=%d, cached=%d, failed=%d)",
             len(self._blocked_ips),
             len(self._blocked_domains),
             len(self._blocked_ja3),
+            summary.delivered,
+            summary.from_cache,
+            summary.failed,
         )
+        return summary
+
+    def _record_status(self, summary: "FeedUpdateSummary", ok: bool) -> None:
+        """피드 상태를 갱신하고 Prometheus 메트릭에 반영한다."""
+        self._last_summary = summary
+        self._last_attempt_epoch = summary.last_update_epoch or self._last_attempt_epoch
+        self._feed_outcomes = dict(getattr(self, "_pending_outcomes", {}) or {})
+        try:
+            from netwatcher.web.metrics import feed_last_update
+            # 실패한 갱신이므로 이전 성공 시각을 그대로 유지한다
+            feed_last_update.set(self.last_update_epoch)
+        except ImportError:
+            pass
+
+    def feed_health(self, stale_after_hours: float = 12.0) -> dict:
+        """피드 신선도를 정직하게 보고한다 (PR 07).
+
+        "갱신 작업은 돌고 있다" 와 "지표가 최신이다" 는 다른 문제다. 실행 중이어도
+        모든 다운로드가 실패한 상태일 수 있으므로, 마지막 **성공** 시각과 성공
+        여부를 함께 노출한다.
+        """
+        import time as _time
+
+        now = _time.time()
+        age_hours = None
+        if self.last_update_epoch:
+            age_hours = (now - self.last_update_epoch) / 3600.0
+
+        stale = age_hours is None or age_hours > stale_after_hours
+        summary = self._last_summary
+        return {
+            # 실행 중이어도 데이터가 오래되면 stale 로 보고한다
+            "status": "stale" if stale else "ok",
+            "last_success_epoch": self.last_update_epoch,
+            "age_hours": round(age_hours, 2) if age_hours is not None else None,
+            "stale_after_hours": stale_after_hours,
+            "blocked_ips": len(self._blocked_ips),
+            "blocked_domains": len(self._blocked_domains),
+            "blocked_ja3": len(self._blocked_ja3),
+            "custom_ips": len(self._custom_ips),
+            "last_attempt": summary.as_dict() if summary else None,
+            "outcomes": dict(self._feed_outcomes),
+        }
+
+    def is_stale(self, stale_after_hours: float = 12.0) -> bool:
+        """피드 데이터가 오래되었으면 True."""
+        health = self.feed_health(stale_after_hours)
+        return health["status"] == "stale"
+
+    def health_as_violations(self, stale_after_hours: float = 12.0) -> list:
+        """피드 상태가 나쁘면 지원 계약 위반 목록으로 바꾼다 (PR 07).
+
+        "갱신 루프가 살아 있다" 와 "지표가 최신이다" 는 다르다. threat_intel 엔진은
+        피드가 비면 조용히 아무것도 탐지하지 않으므로, 그 상태를 기동/상태 경로에서
+        숨기지 않는다.
+        """
+        from netwatcher.support import Violation
+
+        health = self.feed_health(stale_after_hours)
+        if health["status"] != "stale":
+            return []
+
+        age = health["age_hours"]
+        if age is None:
+            message = "위협 피드가 한 번도 성공적으로 갱신된 적이 없다"
+            remediation = "threat_intel 엔진을 끄거나, 네트워크·피드 URL 을 점검한다"
+        else:
+            message = f"위협 피드 데이터가 {age}시간 전 상태로 정체되어 있다"
+            remediation = "피드 다운로드 실패 원인(네트워크·인증·URL)을 확인한다"
+
+        return [Violation(
+            code="SUP-060",
+            path="threatfeeds",
+            message=message,
+            remediation=remediation,
+        )]
+
 
     def _load_meta(self) -> dict[str, dict[str, str]]:
         """디스크에서 피드별 HTTP 메타데이터(ETag, Last-Modified)를 로드한다."""
@@ -228,7 +425,7 @@ class FeedManager:
         except OSError:
             logger.warning("피드 메타 파일 저장 실패")
 
-    async def _update_feed(self, source: FeedSource) -> None:
+    async def _update_feed(self, source: FeedSource, acc: _FeedAccumulator) -> None:
         """단일 피드를 다운로드하고 파싱한다 (조건부 요청 지원)."""
         cache_file = self._cache_dir / f"{source.name.replace(' ', '_').lower()}.txt"
 
@@ -239,7 +436,7 @@ class FeedManager:
                 "피드 URL이 내부 주소를 대상으로 하여 차단됨: %s (%s)",
                 source.name, source.url,
             )
-            self._load_from_cache(source, cache_file)
+            self._load_from_cache(source, cache_file, acc)
             return
 
         # 이전 메타데이터에서 조건부 요청 헤더 구성
@@ -260,14 +457,14 @@ class FeedManager:
                 ) as resp:
                     if resp.status == 304:
                         logger.info("Feed %s: not modified (304), using cache", source.name)
-                        self._load_from_cache(source, cache_file)
+                        self._load_from_cache(source, cache_file, acc)
                         return
 
                     if resp.status != 200:
                         logger.warning(
                             "Feed %s returned HTTP %d", source.name, resp.status
                         )
-                        self._load_from_cache(source, cache_file)
+                        self._load_from_cache(source, cache_file, acc)
                         return
 
                     content = await resp.text()
@@ -285,26 +482,38 @@ class FeedManager:
 
         except Exception:
             logger.warning("Failed to download feed %s, using cache", source.name)
-            self._load_from_cache(source, cache_file)
+            self._load_from_cache(source, cache_file, acc)
             return
 
-        self._parse_and_store(source, content)
+        self._parse_and_store(source, content, acc)
 
-    def _load_from_cache(self, source: FeedSource, cache_file: Path) -> None:
+    def _load_from_cache(
+        self, source: FeedSource, cache_file: Path, acc: _FeedAccumulator,
+    ) -> None:
         """로컬 캐시 파일에서 피드를 로드한다."""
         if cache_file.exists():
-            content = cache_file.read_text()
-            self._parse_and_store(source, content)
+            try:
+                content = cache_file.read_text()
+            except OSError:
+                logger.warning("캐시 읽기 실패: %s", source.name)
+                acc.fail(source.name)
+                return
+            self._parse_and_store(source, content, acc)
+            acc.record(source.name, "cached")
         else:
             logger.warning("No cache available for feed: %s", source.name)
+            acc.fail(source.name)
 
-    def _parse_and_store(self, source: FeedSource, content: str) -> None:
+    def _parse_and_store(
+        self, source: FeedSource, content: str, acc: _FeedAccumulator,
+    ) -> None:
         """피드 콘텐츠를 파싱하고 피드 출처와 함께 차단 목록에 추가한다."""
         # JA3 피드는 악성코드 매핑을 위한 별도 처리 필요
         if source.feed_type == "ja3":
             ja3_set, ja3_map = parse_ja3_feed(content, source.comment_prefix)
-            self._blocked_ja3.update(ja3_set)
-            self._ja3_to_malware.update(ja3_map)
+            acc.ja3.update(ja3_set)
+            acc.ja3_to_malware.update(ja3_map)
+            acc.record(source.name, "downloaded")
             logger.info(
                 "Feed %s: loaded %d JA3 fingerprints", source.name, len(ja3_set)
             )
@@ -313,9 +522,10 @@ class FeedManager:
         entries = parse_feed(content, source)
 
         if source.feed_type == "ip":
-            self._blocked_ips.update(entries)
+            acc.ips.update(entries)
             for ip in entries:
-                self._ip_to_feed[ip] = source.name
+                acc.ip_to_feed[ip] = source.name
+            acc.record(source.name, "downloaded")
             logger.info("Feed %s: loaded %d IPs", source.name, len(entries))
         elif source.feed_type in ("domain", "url"):
             # URL 유형 피드에서 공유 호스팅 플랫폼을 필터링한다.
@@ -335,9 +545,10 @@ class FeedManager:
                     )
                 entries = filtered
 
-            self._blocked_domains.update(entries)
+            acc.domains.update(entries)
             for domain in entries:
-                self._domain_to_feed[domain] = source.name
+                acc.domain_to_feed[domain] = source.name
+            acc.record(source.name, "downloaded")
             logger.info("Feed %s: loaded %d domains", source.name, len(entries))
 
     @staticmethod

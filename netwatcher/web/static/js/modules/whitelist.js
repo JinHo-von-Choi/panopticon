@@ -3,7 +3,7 @@
  */
 
 import { authFetch } from '../core/api.js';
-import { esc, showToast } from '../core/utils.js';
+import { esc, showToast, escAttr } from '../core/utils.js';
 
 let _whitelistData = { ips: [], ip_ranges: [], macs: [], domains: [], domain_suffixes: [] };
 let _filterType    = "";
@@ -53,7 +53,9 @@ function renderWhitelistTable() {
             `<td><span class="type-tag">${esc(type)}</span></td>` +
             `<td><code>${esc(value)}</code></td>` +
             `<td><button class="btn-detail" style="background:var(--critical)" ` +
-                `onclick="window.removeWhitelistEntry('${esc(type)}','${esc(value)}')">Delete</button></td>`;
+                `data-wl-remove type="${escAttr(type)}" value="${escAttr(value)}">Delete</button></td>`;
+        tr.querySelector("[data-wl-remove]")
+            .addEventListener("click", () => window.removeWhitelistEntry(type, value));
         tbody.appendChild(tr);
     });
 }

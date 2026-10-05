@@ -15,10 +15,21 @@ from netwatcher.alerts.rate_limiter import RateLimiter
 from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.detection.correlator import AlertCorrelator
 from netwatcher.detection.models import Alert, Severity
+from netwatcher.observability.observation import (
+    DROP_SOURCE_APP,
+    KIND_ACCEPTED,
+    KIND_DROPPED,
+    KIND_RECEIVED,
+    KIND_SUPPRESSED,
+    STAGE_ALERT,
+    STAGE_DB,
+    STAGE_RESULT_QUEUE,
+)
 from netwatcher.storage.repositories import DeviceRepository, EventRepository
 from netwatcher.utils.config import Config
 
 if TYPE_CHECKING:
+    from netwatcher.observability.observation import ObservationService
     from netwatcher.response.blocker import BlockManager
 
 logger = logging.getLogger("netwatcher.alerts.dispatcher")
@@ -45,6 +56,7 @@ class AlertDispatcher:
         correlator: AlertCorrelator | None = None,
         pcap_writer: PCAPWriter | None = None,
         block_manager: BlockManager | None = None,
+        observation: "ObservationService | None" = None,
     ) -> None:
         """설정, 리포지토리, 알림 채널 등 의존성을 초기화한다."""
         self._config        = config
@@ -55,6 +67,10 @@ class AlertDispatcher:
         self._block_manager = block_manager
         self._queue: asyncio.Queue[Alert] = asyncio.Queue(maxsize=10000)
         self._task: asyncio.Task | None = None
+
+        # 관측 범위 (계획서 3장). 경보 옆에 누락을 표시한다.
+        self._observation = observation
+        self._oldest_enqueued_at: float | None = None
 
         # 자동 차단 엔진 화이트리스트 (이 엔진들만 자동 차단을 트리거함)
         response_cfg = config.section("response") or {}
@@ -70,6 +86,8 @@ class AlertDispatcher:
         )
         # 주기적 정리 카운터
         self._cleanup_counter = 0
+        # 종료 배 emptying 중인지 (PR 06)
+        self._stopping = False
 
         # 알림 채널
         channels_config = config.section("alerts").get("channels", {})
@@ -93,27 +111,100 @@ class AlertDispatcher:
         self._task = asyncio.create_task(self._consumer_loop())
         logger.info("AlertDispatcher started")
 
-    async def stop(self) -> None:
-        """디스패처를 중지한다."""
-        if self._task:
+    async def stop(self, drain_timeout: float | None = None) -> None:
+        """디스패처를 중지한다.
+
+        큐에 남아 있는 알림을 먼저 배 emptying 비운 뒤 소비자를 멈춘다.
+        이전 구현은 소비자를 즉시 cancel 해서, 큐에 쌓인 알림(DB 미저장,
+        미브로드캐스트, 미차단)을 그대로 버렸다. 종료 경로에서 탐지 결과를
+        잃는 것은 영속성 결함이다 (PR 06).
+
+        Args:
+            drain_timeout: 배 emptying에 쓸 최대 초. None 이면 설정값을 쓰고,
+                그것도 없으면 기본값을 쓴다. 배 emptying이 끝나도 남은 알림은
+                경고와 함께 포기한다 (무한 대기 금지).
+        """
+        timeout = drain_timeout
+        if timeout is None:
+            alerts_cfg = self._config.section("alerts") or {}
+            timeout = float(alerts_cfg.get("drain_timeout_seconds", 5.0))
+
+        remaining = self._queue.qsize()
+        if remaining:
+            logger.info(
+                "Draining %d pending alert(s) before shutdown (timeout=%.1fs)",
+                remaining, timeout,
+            )
+
+        self._stopping = True
+        if self._task is not None:
+            # drain_timeout 안에 큐가 비면 소비자가 스스로 끝나도록 신호를 준다
+            try:
+                await asyncio.wait_for(
+                    self._queue.join(), timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                left = self._queue.qsize()
+                if left:
+                    logger.warning(
+                        "Shutdown drain timed out: %d alert(s) will not be persisted",
+                        left,
+                    )
+            except Exception:
+                logger.debug("Queue join failed during drain", exc_info=True)
+
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        else:
+            # 소비자가 아직 시작되지 않았다면 큐를 직접 비운다
+            dropped = 0
+            while True:
+                try:
+                    self._queue.get_nowait()
+                    dropped += 1
+                    self._queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            if dropped:
+                logger.warning("Dispatcher stopped with %d unprocessed alert(s)", dropped)
+
         logger.info("AlertDispatcher stopped")
 
     def enqueue(self, alert: Alert) -> None:
         """스레드 안전 큐 삽입 (스니퍼 콜백에서 호출)."""
+        observation = self._observation
+        if observation is not None:
+            observation.record(STAGE_RESULT_QUEUE, KIND_RECEIVED)
         try:
+            if self._oldest_enqueued_at is None:
+                self._oldest_enqueued_at = time.monotonic()
             self._queue.put_nowait(alert)
         except asyncio.QueueFull:
+            # 큐 포화는 앱 결정이다. 커널 drop 과 합산하지 않는다.
+            if observation is not None:
+                observation.record(
+                    STAGE_RESULT_QUEUE, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP,
+                )
             logger.warning("Alert queue full, dropping alert: %s", alert.title)
             try:
                 from netwatcher.web.metrics import alerts_queue_depth
                 # 큐 깊이가 이미 최대치
             except ImportError:
                 pass
+
+    @property
+    def oldest_queue_age_seconds(self) -> float | None:
+        """큐에 가장 오래 머문 알림의 나이.
+
+        큐 깊이만으로는 "얼마나 밀렸는지" 를 알 수 없다. 관측 상태가
+        `partial` 인 이유를 설명할 때 이 값을 쓴다.
+        """
+        if self._oldest_enqueued_at is None:
+            return None
+        return max(0.0, time.monotonic() - self._oldest_enqueued_at)
 
     def subscribe_ws(self) -> asyncio.Queue:
         """WebSocket 구독자를 등록한다. 읽기용 큐를 반환한다."""
@@ -129,6 +220,8 @@ class AlertDispatcher:
         """큐에서 알림을 처리한다."""
         while True:
             alert = await self._queue.get()
+            if self._queue.empty():
+                self._oldest_enqueued_at = None
 
             # 큐 깊이 메트릭 업데이트
             try:
@@ -141,6 +234,9 @@ class AlertDispatcher:
                 await self._process_alert(alert)
             except Exception:
                 logger.exception("Error processing alert: %s", alert.title)
+            finally:
+                # 반드시 task_done() 을 호출해야 stop() 의 배 emptying이 진행된다
+                self._queue.task_done()
 
             # 100개 알림마다 주기적 속도 제한기 정리
             self._cleanup_counter += 1
@@ -153,6 +249,10 @@ class AlertDispatcher:
         # 1. 속도 제한
         if not self._rate_limiter.allow(alert.rate_limit_key):
             logger.debug("Rate limited: %s", alert.rate_limit_key)
+            if self._observation is not None:
+                # 억제는 손실이 아니다. "알림 없음" 이 "탐지 없음" 이 되므로
+                # 경보 옆에 그 사실을 남긴다.
+                self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
             try:
                 from netwatcher.web.metrics import alerts_rate_limited
                 alerts_rate_limited.inc()
@@ -162,6 +262,20 @@ class AlertDispatcher:
 
         # 저장을 위해 metadata에 confidence 포함
         alert.metadata["confidence"] = alert.confidence
+
+        # 탐지 결과 계약 (PR 08): 요약 → 근거 → 원자료 세 층을 판정하고 기록한다.
+        # 누락이 있어도 저장은 막지 않는다. 대신 metadata["evidence"] 로 드러내
+        # "근거 없는 탐지"를 걸러낼 수 있게 한다.
+        if self._observation is not None:
+            self._observation.record(STAGE_ALERT, KIND_RECEIVED)
+
+        from netwatcher.detection.evidence import apply_evidence_contract
+        evidence = apply_evidence_contract(alert)
+        if not evidence.complete:
+            logger.debug(
+                "탐지 결과 계약 미충족 (engine=%s, 누락=%s): %s",
+                alert.engine, ",".join(evidence.missing), alert.title,
+            )
 
         # Prometheus 알림 카운터
         try:
@@ -191,6 +305,16 @@ class AlertDispatcher:
             )
         except Exception:
             logger.exception("Failed to save alert to DB")
+
+        if self._observation is not None:
+            if event_id is not None:
+                self._observation.record(STAGE_DB, KIND_ACCEPTED)
+                self._observation.mark_durable_event()
+            else:
+                # DB 저장이 실패했는데 아무 표시가 없으면 "경보가 없다" 와 구분되지 않는다
+                self._observation.record(
+                    STAGE_DB, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP,
+                )
 
         # 2b. 행동 레이블 — metadata에 host_label이 있으면 devices 테이블에 기록
         host_label = alert.metadata.get("host_label")
@@ -244,7 +368,9 @@ class AlertDispatcher:
         # 6. 알림 상관 분석
         if self._correlator and event_id:
             try:
-                incident = self._correlator.process_alert(alert, event_id)
+                # await 로 영속화해 DB 가 부여한 id 를 인시던트가 갖게 한다 (PR 05).
+                # 이렇게 해야 WebSocket/대시보드가 보는 id 와 DB 행이 일치한다.
+                incident = await self._correlator.async_process_alert(alert, event_id)
                 if incident:
                     # 인시던트를 WebSocket으로 브로드캐스트
                     inc_msg = json.dumps({

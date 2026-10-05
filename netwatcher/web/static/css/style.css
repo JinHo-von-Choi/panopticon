@@ -1949,3 +1949,165 @@ textarea.input-search {
     color: var(--accent);
     border-bottom-color: var(--accent);
 }
+
+/* ── 증거 봉투 (PR 09) ─────────────────────────────────────────────
+   탐지 결과의 요약·근거·원자료 세 층을 명시한다. 없는 층은 숨기지
+   않고 "없음" 으로 드러낸다 — 검토자가 검증 가능 여부를 한눈에
+   판단할 수 있어야 한다.                                          */
+.evidence-envelope {
+    margin: 8px 0 12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+.evidence-envelope[data-status="complete"] {
+    background: rgba(46, 213, 115, 0.12);
+    border: 1px solid rgba(46, 213, 115, 0.35);
+    color: var(--text);
+}
+/* 근거가 빠진 탐지: 조용히 넘어가면 안 되므로 눈에 띄게 표시한다 */
+.evidence-envelope[data-status="incomplete"] {
+    background: rgba(255, 165, 0, 0.12);
+    border: 1px solid rgba(255, 165, 0, 0.45);
+    color: #ffb84d;
+}
+.evidence-envelope span {
+    font-weight: 600;
+}
+.evidence-layer {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+.evidence-layer[data-present="yes"] {
+    background: rgba(46, 213, 115, 0.15);
+    color: #2ed573;
+}
+.evidence-layer[data-present="no"] {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-dim);
+    text-decoration: line-through;
+}
+.detail-hint {
+    font-size: 0.78rem;
+    font-weight: 400;
+    color: var(--text-dim);
+    margin-top: 2px;
+}
+
+/* ── 관측 범위 / 제안 승인 (PR 11) ─────────────────────────────
+   "이 도구가 무엇을 하는가" 와 "무엇을 바꿀 수 있는가" 를 한 화면에.
+   위반과 실패를 숨기지 않는 것이 이 화면의 목적이다.            */
+.scope-hint {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin: 4px 0 12px;
+    line-height: 1.6;
+}
+.scope-summary {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 14px;
+}
+.scope-summary-row {
+    display: flex;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.scope-summary-row:last-child { border-bottom: none; }
+.scope-label {
+    min-width: 160px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+.scope-value { font-weight: 600; }
+.scope-summary[data-status="warn"] .scope-value[data-value="violations"] {
+    color: var(--warning);
+}
+.scope-value[data-feed-status="stale"] { color: var(--warning); }
+.scope-value[data-feed-status="ok"]     { color: #2ed573; }
+
+.scope-violations h4 {
+    color: var(--warning);
+    margin: 0 0 8px;
+    font-size: 0.95rem;
+}
+.scope-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+.scope-table th,
+.scope-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+}
+.scope-table th { color: var(--text-dim); font-weight: 600; }
+.scope-clean {
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: rgba(46, 213, 115, 0.10);
+    border: 1px solid rgba(46, 213, 115, 0.30);
+    font-size: 0.88rem;
+    line-height: 1.6;
+}
+.scope-clean strong { color: #2ed573; }
+.scope-note {
+    margin-top: 10px;
+    font-size: 0.82rem;
+    color: var(--warning);
+}
+.proposals-count { font-size: 0.8rem; color: var(--text-dim); margin-left: 8px; }
+.proposal-applied { color: #2ed573; font-weight: 600; }
+.proposal-failed  { color: var(--critical); font-weight: 600; }
+.proposal-decided-by { color: var(--text-dim); font-size: 0.8rem; }
+.proposal-error {
+    margin-top: 4px;
+    color: var(--critical);
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+}
+
+/* 관측 범위 (PR 11) */
+.scope-value[data-obs-state="observed"] { color: #2ed573; }
+.scope-value[data-obs-state="partial"]  { color: var(--warning); }
+.scope-value[data-obs-state="stale"],
+.scope-value[data-obs-state="unknown"] { color: var(--critical); }
+.scope-reasons,
+.scope-loss,
+.scope-unmeasured { margin-top: 12px; }
+.scope-reasons h4,
+.scope-loss h4,
+.scope-unmeasured h4 {
+    color: var(--text-dim);
+    margin: 0 0 6px;
+    font-size: 0.9rem;
+}
+.scope-reasons ul,
+.scope-unmeasured ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    color: var(--text);
+}
+.scope-unmeasured {
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+.scope-unknown {
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: rgba(255, 71, 87, 0.10);
+    border: 1px solid rgba(255, 71, 87, 0.30);
+    font-size: 0.88rem;
+}
+.scope-nowrap { white-space: nowrap; color: var(--text-dim); }

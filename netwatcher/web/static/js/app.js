@@ -14,6 +14,7 @@ import { loadDefense, registerDefenseListeners } from './modules/defense.js';
 import { registerHuntListeners } from './modules/hunting.js';
 import { initAiAnalyzerTab, loadAiAnalyzerStatus, loadAiLogs, registerAiAnalyzerListeners } from './modules/ai_analyzer.js';
 import { loadWhitelist, registerWhitelistListeners } from './modules/whitelist.js';
+import { loadSupportProfile, loadProposals, loadObservation } from './modules/governance.js';
 
 var ws = null;
 var statsInterval = null;
@@ -126,6 +127,7 @@ function registerListeners() {
             if (target === "blocklist")    loadBlocklist(0);
             if (target === "whitelist")    loadWhitelist();
             if (target === "ai-analyzer") { loadAiAnalyzerStatus(); loadAiLogs(0); }
+            if (target === "governance")    { loadSupportProfile(); loadObservation(); loadProposals(); }
         });
     });
 

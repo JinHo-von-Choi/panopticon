@@ -1,0 +1,119 @@
+name: gates
+
+# 계획서 G0 게이트를 CI 로 강제한다.
+#
+# 원칙: 게이트는 "맞았는지"가 아니라 "이 상태로 배포해도 되는지"를 판정한다.
+# 검증 통과를 enforcement 통과로 취급하지 않는다 (PR 01).
+#
+# G0-4 는 실제 DB 가 있어야 통과하므로 PostgreSQL 서비스를 함께 띄운다.
+# DB 가 없으면 G0-4 가 실패하는 것이 의도된 동작이다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: netwatcher_test
+          POSTGRES_USER: netwatcher
+          POSTGRES_PASSWORD: netwatcher
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netwatcher"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NETWATCHER_DB_HOST: localhost
+      NETWATCHER_DB_PORT: "5432"
+      NETWATCHER_DB_NAME: netwatcher_test
+      NETWATCHER_DB_USER: netwatcher
+      NETWATCHER_DB_PASSWORD: netwatcher
+      # 로컬 .env 유입을 막는다. 게이트는 배포되는 설정 파일 그 자체를 심판해야
+      # 하며, 판정은 어느 PC 에서 돌든 같아야 한다 (scripts/gates.py 도 같은 값을
+      # 설정한다). 인증 환경변수는 여기서 덮어쓰지 않는다 — 배포 파일의 상태를
+      # 그대로 판정하기 위해서다. 테스트는 conftest 가 자체적으로 처리한다.
+      NETWATCHER_SKIP_DOTENV: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Apply migrations (G0-4 pre-step)
+        run: python -m alembic upgrade head
+
+      - name: Run release gates (G0)
+        run: python scripts/gates.py
+
+  db-deploy-check:
+    # 깨끗한 DB 에서 마이그레이션이 끝까지 도는지만 별도로 확인한다.
+    # 008 마이그레이션이 실제로 한 번도 성공한 적이 없었다.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: netwatcher_fresh
+          POSTGRES_USER: netwatcher
+          POSTGRES_PASSWORD: netwatcher
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netwatcher"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NETWATCHER_DB_HOST: localhost
+      NETWATCHER_DB_PORT: "5432"
+      NETWATCHER_DB_NAME: netwatcher_fresh
+      NETWATCHER_DB_USER: netwatcher
+      NETWATCHER_DB_PASSWORD: netwatcher
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Upgrade to head on a clean database
+        run: python -m alembic upgrade head
+
+      - name: Downgrade one step and upgrade again
+        # 전환 마이그레이션이 왕복 가능한지 확인한다 (데이터 보존 경로).
+        run: |
+          python -m alembic downgrade -1
+          python -m alembic upgrade head
+
+      - name: Migration static guards
+        run: python -m pytest tests/test_utils/test_migrations.py -q
