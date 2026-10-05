@@ -4,6 +4,7 @@
 
 - approve 와 activate 가 **분리**되어 있다 (approve 는 OS 를 건드리지 않는다)
 - 승인 후 값이 바뀌면 activate 가 **409** 다
+- 거절된 요청이 적용 속도 제한을 소모하지 않는다
 - 재시도가 **만료를 늘리지 않는다**
 - shadow 실행기 결과가 **success 로 표시되지 않는다**
 - admin 만 승인/적용할 수 있다
@@ -22,6 +23,7 @@ import pytest
 from fastapi import FastAPI
 
 from netwatcher.response.executor import ShadowExecutor
+from netwatcher.response.lifecycle import LifecycleError
 from netwatcher.storage.repositories import ResponseActionRepository
 from netwatcher.web.auth import AuthManager
 from netwatcher.web.rbac import Role
@@ -340,3 +342,80 @@ async def test_fresh_mapping_allows_activation(db) -> None:
         assert resp.status_code == 200, resp.text
         # 그래도 적용 성공은 아니다 — shadow 다
         assert resp.json()["verified"] is False
+
+
+# ------------------------------------------------------------------
+# 429 — 적용 속도 제한 (계획서 2장 초기 제한: 분당 1개)
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_second_activation_within_minute_is_rejected(db) -> None:
+    """분당 1개를 넘으면 거절한다.
+
+    429 는 OS 를 건드리기 전에 난다. 거절된 조치의 상태는 `requested`
+    그대로여야 한다. 실패한 적용이 남으면 안 된다.
+    """
+    app = _app(db)
+    fresh = datetime.now(timezone.utc)
+    async with _client(app) as client:
+        first = await _approve(client, mapping_confirmed_at=fresh.isoformat())
+        ok = await client.post(
+            f"/api/response-actions/{first['action_id']}/activate",
+            json=_approve_body(), headers=_h(Role.ADMIN),
+        )
+        assert ok.status_code == 200, ok.text
+
+        second = await _approve(client, mapping_confirmed_at=fresh.isoformat())
+        limited = await client.post(
+            f"/api/response-actions/{second['action_id']}/activate",
+            json=_approve_body(), headers=_h(Role.ADMIN),
+        )
+        assert limited.status_code == 429, limited.text
+
+        detail = (await client.get(
+            f"/api/response-actions/{second['action_id']}",
+            headers=_h(Role.VIEWER),
+        )).json()
+
+    # 거절은 실행이 아니다 — 기록이 남지 않는다
+    assert detail["action"]["state"] == "requested"
+    assert detail["receipts"] == []
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_raises_http_429() -> None:
+    """RateLimiter 자체가 계획서의 초기 제한값을 지키는지."""
+    from netwatcher.response.lifecycle import RateLimiter
+
+    limiter = RateLimiter()
+    limiter.acquire(1)
+    with pytest.raises(LifecycleError) as caught:
+        limiter.acquire(2)
+    assert caught.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_rejected_request_does_not_consume_rate_limit(db) -> None:
+    """409 로 거절된 요청은 상한을 소모하지 않는다.
+
+    매핑이 오래된 요청은 OS 를 건드리지 않았다. 그 요청이 상한을 먹으면
+    실제로 적용할 수 있는 조치까지 429 로 막힌다. 거절과 실행을 구분해야
+    상한이 안전장치로 남는다.
+    """
+    app = _app(db)
+    stale = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with _client(app) as client:
+        rejected = await _approve(client, mapping_confirmed_at=stale.isoformat())
+        blocked = await client.post(
+            f"/api/response-actions/{rejected['action_id']}/activate",
+            json=_approve_body(), headers=_h(Role.ADMIN),
+        )
+        assert blocked.status_code == 409
+
+        fresh = datetime.now(timezone.utc)
+        allowed = await _approve(client, mapping_confirmed_at=fresh.isoformat())
+        resp = await client.post(
+            f"/api/response-actions/{allowed['action_id']}/activate",
+            json=_approve_body(), headers=_h(Role.ADMIN),
+        )
+    assert resp.status_code == 200, resp.text

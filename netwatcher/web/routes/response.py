@@ -37,6 +37,7 @@ from netwatcher.response.lifecycle import (
     STATE_UNKNOWN,
     Approval,
     LifecycleError,
+    RateLimiter,
     assert_mapping_fresh,
     candidate_hash,
     is_protected,
@@ -84,6 +85,11 @@ def create_response_router(
 ) -> APIRouter:
     """조치 생애주기 라우터."""
     router = APIRouter(tags=["response"])
+
+    # 적용 횟수 제한 (계획서 2장 초기 제한: 동시 3개 · 분당 1개).
+    # 라우터 인스턴스 단위라 프로세스 안에서만 유효하다. 여러 프로세스로
+    # 같은 장비를 다룰 때는 Redis 기반 제한으로 바꿔야 한다.
+    limiter = RateLimiter()
 
     @router.get("/response/capabilities")
     async def capabilities(_role: str = Depends(require_role(Role.VIEWER))) -> dict[str, Any]:
@@ -195,11 +201,22 @@ def create_response_router(
                 max_age_seconds=MAPPING_STALE_SECONDS,
             )
 
+            # 속도 제한은 위 검사들을 통과한 뒤에 건다. 409 로 거절된 요청은
+            # OS 를 건드리지 않았으므로 상한을 소모하지 않는다.
+            try:
+                limiter.acquire(action_id)
+            except LifecycleError as exc:
+                # 거절이므로 실행 기록을 남기지 않는다. 실행하지 않은 것을
+                # 미확인 실행으로 기록하면 확인 필요 없는 조치가 쌓인다.
+                raise _http(exc) from exc
+
             await repository.mark_applying(action_id, idempotency_key=key)
             result = executor.apply(request)
         except LifecycleError as exc:
             await repository.mark_unknown(action_id, str(exc))
             raise _http(exc) from exc
+        finally:
+            limiter.release(action_id)
 
         expire_at = set_expire_once(action.get("expire_at"), req.ttl_seconds)
         state = (
