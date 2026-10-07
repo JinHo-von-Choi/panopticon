@@ -526,6 +526,7 @@ class NetWatcher:
 
         def _signal_handler() -> None:
             logger.info("Shutdown signal received")
+            sniffer.stop_accepting()
             stop_event.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -544,27 +545,36 @@ class NetWatcher:
 
         # ── 종료 ──────────────────────────────────────────────────────────
         logger.info("Shutting down...")
+        from netwatcher.services.shutdown import ShutdownBudget, stop_workers
+        budget = ShutdownBudget(self.config.get("shutdown.timeout_seconds", 10))
+        sniffer.stop_accepting()
         if flow_collector is not None:
-            flow_collector.stop()
-        sniffer.stop()
-        worker_pool.stop()
-        await tick_service.stop()
-        await stats_flush.stop()
-        await maintenance.stop()
-        self.registry.shutdown()
-        await self._dns_resolver.stop()
-        if daily_reporter:
-            await daily_reporter.stop()
-        if asset_monitor:
-            await asset_monitor.stop()
-        if ai_analyzer:
-            await ai_analyzer.stop()
-        if checkpoint_service is not None:
-            await checkpoint_service.stop()
-        await ha_manager.stop()
+            await budget.run("flow_input", lambda: asyncio.to_thread(flow_collector.stop), limit=.5)
+        await budget.run("capture", lambda: asyncio.to_thread(sniffer.stop, min(1, budget.remaining)), limit=1)
+        await budget.run("tick", tick_service.stop, limit=.5)
+        await budget.run("workers", lambda: stop_workers(worker_pool, packet_processor, min(.8, budget.remaining)), limit=1)
+        await budget.run("stats", lambda: stats_flush.stop(flush=True), limit=1)
+        logger.info("Shutdown stats confirmation: %s", stats_flush.status())
+        await budget.run("maintenance", maintenance.stop, limit=.5)
+        await budget.run("dns", self._dns_resolver.stop, limit=.5)
+        for name, service in (("daily_report", daily_reporter), ("asset_monitor", asset_monitor),
+                              ("ai_analyzer", ai_analyzer), ("checkpoint", checkpoint_service)):
+            if service is not None:
+                await budget.run(name, service.stop, limit=.5)
+        await budget.run("ha", ha_manager.stop, limit=.5)
+        await budget.run("engines", lambda: asyncio.to_thread(self.registry.shutdown), limit=.5)
+        await budget.run("alerts", lambda: dispatcher.stop(drain_timeout=min(2, budget.remaining)), limit=2)
+        logger.info("Shutdown alert work remaining: queued=%d evidence_bytes=%d",
+                    dispatcher._queue.qsize(),
+                    dispatcher._evidence_writer.pending_bytes if dispatcher._evidence_writer else 0)
         server.should_exit = True
-        await server_task
-        await dispatcher.stop()
-        await redis_client.close()
-        await self.db.close()
+        async def stop_web():
+            await server_task
+        if not await budget.run("web", stop_web, limit=1):
+            server.force_exit = True
+            server_task.cancel()
+        await budget.run("redis", redis_client.close, limit=.5)
+        if not await budget.run("database", self.db.close, limit=.5):
+            self.db.terminate()
+        logger.info("Shutdown unconfirmed stages: %s", budget.unconfirmed)
         logger.info("NetWatcher stopped")

@@ -69,7 +69,7 @@ class WorkerPool:
 
         self._alive = True
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 5, preserve_results: bool = False) -> None:
         """모든 워커를 정상 종료한다."""
         if self._single_process or not self._alive:
             self._alive = False
@@ -81,19 +81,26 @@ class WorkerPool:
             except Exception:
                 logger.warning("워커 %d sentinel 전송 실패", wid)
 
+        deadline = time.monotonic() + max(0, timeout)
         for wid, p in enumerate(self._workers):
-            p.join(timeout=5)
+            p.join(timeout=max(0, deadline - time.monotonic()))
             if p.is_alive():
                 logger.warning("워커 %d 타임아웃 -- terminate()", wid)
                 p.terminate()
 
         self._workers.clear()
         for q in self._input_queues:
+            q.cancel_join_thread()
             q.close()
         self._input_queues.clear()
-        self._result_queue.close()
+        if not preserve_results:
+            self.close_results()
         self._alive = False
         logger.info("워커 풀 종료 완료")
+
+    def close_results(self) -> None:
+        self._result_queue.cancel_join_thread()
+        self._result_queue.close()
 
     # ------------------------------------------------------------------
     # Packet routing

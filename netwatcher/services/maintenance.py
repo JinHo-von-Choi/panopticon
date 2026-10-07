@@ -74,9 +74,11 @@ class MaintenanceService:
 
     async def stop(self) -> None:
         """모든 유지보수 루프 태스크를 취소하고 정리한다."""
-        for task in (self._retention_task, self._feed_task, self._block_task):
+        tasks = [task for task in (self._retention_task, self._feed_task, self._block_task) if task]
+        for task in tasks:
             if task:
                 task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._retention_task = None
         self._feed_task      = None
         self._block_task     = None

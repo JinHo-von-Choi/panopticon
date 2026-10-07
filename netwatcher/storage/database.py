@@ -139,6 +139,12 @@ class Database:
             self._pool = None
             logger.info("PostgreSQL pool closed")
 
+    def terminate(self) -> None:
+        """종료 예산이 소진된 풀을 즉시 닫는다. 미완료 쿼리의 확정을 주장하지 않는다."""
+        if self._pool is not None:
+            self._pool.terminate()
+            self._pool = None
+
     @property
     def pool(self) -> asyncpg.Pool:
         """커넥션 풀을 반환한다. 미연결 시 RuntimeError를 발생시킨다."""

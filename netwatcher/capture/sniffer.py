@@ -61,6 +61,7 @@ class PacketSniffer:
         self._queued_wire_bytes = 0
         self._dropped_count = 0
         self._drain_scheduled = False
+        self._accepting = True
 
         # 커널(softnet) drop 측정 — capture 단계 손실의 다른 주체 (계획서 3장).
         # 대시보드가 같은 프로브의 지원 여부를 함께 보여주므로 주입 가능하게 한다.
@@ -94,6 +95,8 @@ class PacketSniffer:
 
     def _on_packet(self, pkt: Packet) -> None:
         """스니퍼 스레드에서 호출됨; 크기 제한 버퍼를 통해 asyncio 루프로 브릿지한다."""
+        if not self._accepting:
+            return
         original = getattr(pkt, "original", b"")
         size = len(original) if original else len(pkt)
         schedule = False
@@ -180,6 +183,7 @@ class PacketSniffer:
 
     def start(self) -> None:
         """백그라운드 스레드에서 패킷 스니퍼를 시작한다."""
+        self._accepting = True
         bpf = build_bpf_filter(self._extra_bpf)
         logger.info(
             "Starting sniffer on iface=%s promisc=%s bpf='%s'",
@@ -202,11 +206,18 @@ class PacketSniffer:
         self._sniffer.start()
         logger.info("Sniffer started")
 
-    def stop(self) -> None:
+    def stop_accepting(self) -> None:
+        """시그널에서 신규 입력을 즉시 거부한다."""
+        self._accepting = False
+
+    def stop(self, timeout: float = 2) -> None:
         """스니퍼를 중지한다."""
         self.flush_observation()
         if self._sniffer:
-            self._sniffer.stop()
+            self._sniffer.stop(join=False)
+            self._sniffer.join(timeout=max(0, timeout))
+            if self._sniffer.thread.is_alive():
+                logger.warning("Capture thread shutdown unconfirmed")
             if self._dropped_count > 0:
                 logger.warning(
                     "Sniffer stopped. Total dropped packets: %d", self._dropped_count

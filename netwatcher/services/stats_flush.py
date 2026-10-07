@@ -71,7 +71,7 @@ class StatsFlushService:
             return
         self._task = asyncio.create_task(self._loop())
 
-    async def stop(self) -> None:
+    async def stop(self, flush: bool = False) -> None:
         """통계 플러시 루프 태스크를 취소하고 정리한다."""
         if self._task:
             self._task.cancel()
@@ -80,6 +80,8 @@ class StatsFlushService:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if flush:
+            await self.flush_once()
         if self._pending_stats or self._pending_devices:
             logger.warning("Unconfirmed snapshots at shutdown: stats=%s devices=%d",
                            self._pending_stats is not None,

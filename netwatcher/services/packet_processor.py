@@ -191,15 +191,15 @@ class PacketProcessor:
             if self.dispatcher:
                 self.dispatcher.enqueue(alert)
 
-    def collect_worker_alerts(self) -> None:
+    def collect_worker_alerts(self) -> int:
         """멀티프로세스 워커에서 수집한 Alert dict를 디스패처로 전달한다.
 
         주기적으로 호출되어야 한다 (tick_service 또는 stats_flush에서).
         """
         if self._worker_pool is None or not self._worker_pool.is_multiprocess:
-            return
+            return 0
         if not self.dispatcher:
-            return
+            return 0
 
         alert_dicts = self._worker_pool.collect_alerts()
         for d in alert_dicts:
@@ -226,6 +226,8 @@ class PacketProcessor:
                 self.dispatcher.enqueue(alert)
             except Exception:
                 logger.exception("워커 Alert 역직렬화 실패: %s", d)
+
+        return len(alert_dicts)
 
     def snapshot_and_reset_counters(self) -> dict[str, int]:
         """현재 카운터 값을 반환하고 0으로 초기화한다.

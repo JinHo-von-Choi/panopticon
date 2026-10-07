@@ -98,3 +98,35 @@ async def test_real_postgres_aggregation_and_pcap_share_committed_event_id(event
     assert state["state"] == "persisted"
     assert Path(state["path"]).name.startswith(f"event_{row['id']}_")
     assert state["sha256"] == hashlib.sha256(Path(state["path"]).read_bytes()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_deadline_includes_failed_state_write(tmp_path, caplog):
+    import time
+    writer = PCAPWriter(str(tmp_path))
+    writer.add_packet(IP(src='192.0.2.1', dst='192.0.2.2') / TCP())
+    entered, release = threading.Event(), threading.Event()
+    def blocked(*args):
+        entered.set()
+        release.wait(2)
+        return None
+    writer.write_snapshot = blocked
+    async def stalled_state(*args):
+        await asyncio.sleep(10)
+    repo = AsyncMock()
+    repo.update_pcap_state.side_effect = stalled_state
+    service = EvidenceWriter(writer, repo)
+    service.submit(1, make_alert())
+    try:
+        for _ in range(100):
+            if entered.is_set():
+                break
+            await asyncio.sleep(.01)
+        assert entered.is_set()
+        started = time.monotonic()
+        await service.stop(timeout=.04)
+        assert time.monotonic() - started < .15
+        assert 'shutdown unconfirmed' in caplog.text
+        assert service.pending_bytes == 0
+    finally:
+        release.set()

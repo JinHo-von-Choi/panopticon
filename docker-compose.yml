@@ -2,6 +2,7 @@ services:
   netwatcher:
     build: .
     container_name: netwatcher
+    stop_grace_period: 15s
     restart: unless-stopped
     network_mode: host
     cap_add:

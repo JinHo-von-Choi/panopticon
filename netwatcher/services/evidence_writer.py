@@ -2,9 +2,13 @@
 
 import asyncio
 import hashlib
+import logging
 import time
 from itertools import count
 from netwatcher.detection.models import Severity
+
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceWriter:
@@ -20,6 +24,7 @@ class EvidenceWriter:
         self.cooldown = max(1, cooldown)
         self.recent = {}
         self.task = None
+        self._shutdown_deadline = None
 
     def start(self):
         if self.task is None:
@@ -52,7 +57,8 @@ class EvidenceWriter:
 
     async def _store_state(self, event_id, state):
         try:
-            async with asyncio.timeout(2):
+            timeout = 2 if self._shutdown_deadline is None else max(0, min(2, self._shutdown_deadline - time.monotonic()))
+            async with asyncio.timeout(timeout):
                 await self.repository.update_pcap_state(event_id, state)
         except Exception:
             pass  # DB 상태는 pending으로 남는다. 영속화 성공을 꾸며내지 않는다.
@@ -89,10 +95,13 @@ class EvidenceWriter:
     async def stop(self, timeout=2):
         if self.task is None:
             return
+        self._shutdown_deadline = time.monotonic() + max(0, timeout)
         try:
             await asyncio.wait_for(self.queue.join(), max(0, timeout))
         except TimeoutError:
             pass
+        if self.pending_bytes:
+            logger.warning("Evidence shutdown unconfirmed: queued=%d bytes=%d; active file thread may continue", self.queue.qsize(), self.pending_bytes)
         self.task.cancel()
         try:
             await self.task

@@ -11,6 +11,9 @@ Environment=LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 PYTHONIOENCODING=utf-8
 ExecStart=/opt/netwatcher/.venv/bin/python -m netwatcher
 Restart=on-failure
 RestartSec=5
+# 앱 종료 예산 10초 이후의 프로세스/스레드 정리 경계
+TimeoutStopSec=15
+KillMode=control-group
 StandardOutput=journal
 StandardError=journal
 

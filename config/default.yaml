@@ -360,3 +360,7 @@ netwatcher:
 
   threatfeeds:
     config_path: "config/threatfeeds.yaml"
+
+  # 전체 종료 예산. 커널 D-state의 강제 해제를 보장하지 않는다.
+  shutdown:
+    timeout_seconds: 10
