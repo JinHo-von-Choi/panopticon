@@ -37,6 +37,7 @@ class HealthChecker:
         redis_client: Any = None,
         observation: Any = None,
         timeout_seconds: float = 2.0,
+        stats_flush: Any = None,
     ) -> None:
         self._database     = database
         self._dispatcher   = dispatcher
@@ -46,6 +47,7 @@ class HealthChecker:
         self._start_time   = time.monotonic()
         self._observation = observation
         self._timeout_seconds = timeout_seconds
+        self._stats_flush = stats_flush
 
     def set_sniffer(self, sniffer: Any) -> None:
         self._sniffer = sniffer
@@ -180,4 +182,9 @@ class HealthChecker:
                 components["observation"] = {"status": "unknown", "reason": type(exc).__name__}
         required = ("database", "sniffer", "engines", "alert_queue", "observation")
         result["ready"] = all(components[name]["status"] == "healthy" for name in required)
+        if self._stats_flush is not None:
+            components["stats_flush"] = self._stats_flush.status()
+            result["ready"] = result["ready"] and components["stats_flush"]["status"] == "healthy"
+        if not result["ready"] and result["overall_status"] == "healthy":
+            result["overall_status"] = "degraded"
         return result

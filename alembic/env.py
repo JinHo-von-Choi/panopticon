@@ -13,8 +13,10 @@ from pathlib import Path
 from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, pool, text
+from sqlalchemy.engine import URL
 
-load_dotenv()
+if not os.environ.get("NETWATCHER_SKIP_DOTENV"):
+    load_dotenv()
 
 config = context.config
 
@@ -47,11 +49,12 @@ def _build_database_url() -> str:
         except Exception:
             pass
 
-    if password:
-        from urllib.parse import quote_plus
-        password = quote_plus(str(password))
-        return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
-    return f"postgresql+psycopg2://{user}@{host}:{port}/{database}"
+    socket_host = str(host).startswith("/")
+    return URL.create(
+        "postgresql+psycopg2", username=str(user), password=str(password) if password else None,
+        host=None if socket_host else str(host), port=int(port), database=str(database),
+        query={"host": str(host)} if socket_host else {},
+    ).render_as_string(hide_password=False)
 
 
 def _get_search_path() -> str:

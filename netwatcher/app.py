@@ -417,7 +417,7 @@ class NetWatcher:
         from netwatcher.observability.health import HealthChecker
         from netwatcher.web.audit_log import AuditLogger
         health_checker = HealthChecker(database=self.db, dispatcher=dispatcher,
-                                       registry=self.registry, observation=observation)
+                                       registry=self.registry, observation=observation, stats_flush=stats_flush)
         app = create_app(
             config=self.config,
             event_repo=event_repo,

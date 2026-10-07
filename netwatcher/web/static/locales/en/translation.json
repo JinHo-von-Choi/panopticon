@@ -614,6 +614,7 @@
     "close": "Close",
     "find_screen": "Find a screen",
     "no_devices": "No assets observed. Check sensor readiness and observation scope.",
-    "no_device_match": "No matching assets. Adjust the search and filters."
+    "no_device_match": "No matching assets. Adjust the search and filters.",
+    "stats_unavailable": "Statistics persistence is delayed. Check storage health."
   }
 }

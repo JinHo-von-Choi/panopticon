@@ -24,6 +24,7 @@ export async function loadConsoleState() {
         const components = data.components || {};
         const checks = [['database', 'db_unavailable'], ['sniffer', 'sensor_unavailable'],
                         ['engines', 'engines_unavailable'], ['alert_queue', 'queue_unavailable']];
+        if (components.stats_flush) checks.push(['stats_flush', 'stats_unavailable']);
         const failed = checks.find(([name]) => components[name]?.status !== 'healthy');
         reason.textContent = data.ready ? t('ready_reason') : failed ? t(failed[1]) :
             components.observation?.reasons?.[0] || t('observation_unavailable');

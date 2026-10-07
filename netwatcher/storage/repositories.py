@@ -314,7 +314,7 @@ class DeviceRepository:
             mac_address, ip_address, hostname, vendor, now, now, packet_bytes, os_hint,
         )
 
-    async def batch_upsert(self, device_buffer: dict[str, dict]) -> None:
+    async def batch_upsert(self, device_buffer: dict[str, dict], flush_id=None) -> None:
         """인메모리 버퍼에서 디바이스를 일괄 upsert한다.
 
         device_buffer: mac -> {
@@ -339,6 +339,13 @@ class DeviceRepository:
         now = _now_utc()
         async with self._db.pool.acquire() as conn:
             async with conn.transaction():
+                if flush_id is not None:
+                    claimed = await conn.fetchval(
+                        "INSERT INTO flush_receipts(flush_id, kind) VALUES($1, 'devices') "
+                        "ON CONFLICT DO NOTHING RETURNING flush_id", flush_id,
+                    )
+                    if claimed is None:
+                        return
                 for mac, info in device_buffer.items():
                     sources: dict = info.get("hostname_sources") or {}
                     # hostname 컬럼: sources 우선순위 → 기존 역방향DNS hostname 순
@@ -681,6 +688,26 @@ class TrafficStatsRepository:
         """데이터베이스 인스턴스를 주입받아 초기화한다."""
         self._db = db
 
+    async def insert_snapshot(self, flush_id, timestamp, **counters) -> None:
+        """영수증과 통계를 한 SQL로 확정한다. 같은 스냅샷의 재시도는 가산하지 않는다."""
+        await self._db.pool.execute(
+            """WITH receipt AS (
+                   INSERT INTO flush_receipts(flush_id, kind) VALUES($1, 'traffic_stats')
+                   ON CONFLICT DO NOTHING RETURNING flush_id
+               ) INSERT INTO traffic_stats
+                 (timestamp, total_packets, total_bytes, tcp_count, udp_count, arp_count, dns_count)
+               SELECT $2, $3, $4, $5, $6, $7, $8 FROM receipt
+               ON CONFLICT(timestamp) DO UPDATE SET
+                 total_packets = traffic_stats.total_packets + EXCLUDED.total_packets,
+                 total_bytes = traffic_stats.total_bytes + EXCLUDED.total_bytes,
+                 tcp_count = traffic_stats.tcp_count + EXCLUDED.tcp_count,
+                 udp_count = traffic_stats.udp_count + EXCLUDED.udp_count,
+                 arp_count = traffic_stats.arp_count + EXCLUDED.arp_count,
+                 dns_count = traffic_stats.dns_count + EXCLUDED.dns_count""",
+            flush_id, timestamp, *(counters.get(key, 0) for key in (
+                "total_packets", "total_bytes", "tcp_count", "udp_count", "arp_count", "dns_count")),
+        )
+
     async def insert(
         self,
         timestamp: str,
@@ -748,6 +775,7 @@ class TrafficStatsRepository:
 
     async def delete_older_than(self, days: int) -> int:
         """지정된 일수보다 오래된 트래픽 통계를 삭제한다."""
+        await self._db.pool.execute("DELETE FROM flush_receipts WHERE created_at < NOW() - INTERVAL '7 days'")
         cutoff = _now_utc() - timedelta(days=days)
         result = await self._db.pool.execute(
             "DELETE FROM traffic_stats WHERE timestamp < $1",

@@ -372,7 +372,17 @@ RESPONSE_PROPOSALS_INDEXES = [
     "ON response_proposals(status, created_at DESC);",
 ]
 
+FLUSH_RECEIPTS_TABLE = """
+CREATE TABLE IF NOT EXISTS flush_receipts (
+    flush_id UUID PRIMARY KEY,
+    kind TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_flush_receipts_created ON flush_receipts(created_at);
+"""
+
 ALL_SCHEMAS = [
+    FLUSH_RECEIPTS_TABLE,
     EVENTS_TABLE,
     *EVENTS_INDEXES,
     DEVICES_TABLE,

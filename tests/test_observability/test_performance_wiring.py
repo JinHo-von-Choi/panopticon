@@ -194,17 +194,16 @@ async def test_stats_write_success_and_failure_are_instrumented(fail):
         drain_device_buffer=lambda: [],
     )
     config = Config({"engines": {"traffic_anomaly": {"stats_interval_minutes": .001}}})
-    service = StatsFlushService(config, SimpleNamespace(insert=insert), None, processor)
+    service = StatsFlushService(config, SimpleNamespace(insert_snapshot=insert), None, processor)
     await service.start()
     task = service._task
     try:
         await asyncio.wait_for(inserted.wait(), 1)
         if fail:
-            with pytest.raises(RuntimeError, match="unavailable"):
-                await task
+            assert not task.done()
+            assert service._pending_stats is not None
         assert value("netwatcher_db_write_total", operation) - before == 1
     finally:
         await service.stop()
-        if not fail:
-            with pytest.raises(asyncio.CancelledError):
-                await task
+        with pytest.raises(asyncio.CancelledError):
+            await task

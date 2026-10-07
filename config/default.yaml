@@ -87,6 +87,9 @@ netwatcher:
     incidents_days: 180        # 인시던트 보존 일수
     cleanup_interval_hours: 6  # 정리 주기
 
+  storage:
+    max_pending_age_seconds: 300
+
   evidence:
     directory: "data/pcaps"
     buffer_packets: 1000
