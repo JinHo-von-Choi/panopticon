@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from netwatcher.alerts.channels.discord import DiscordChannel
@@ -27,6 +28,7 @@ from netwatcher.observability.observation import (
 )
 from netwatcher.storage.repositories import DeviceRepository, EventRepository
 from netwatcher.utils.config import Config
+from netwatcher.web import metrics
 
 if TYPE_CHECKING:
     from netwatcher.observability.observation import ObservationService
@@ -71,6 +73,7 @@ class AlertDispatcher:
         # 관측 범위 (계획서 3장). 경보 옆에 누락을 표시한다.
         self._observation = observation
         self._oldest_enqueued_at: float | None = None
+        self._enqueue_times: deque[float] = deque()
 
         # 자동 차단 엔진 화이트리스트 (이 엔진들만 자동 차단을 트리거함)
         response_cfg = config.section("response") or {}
@@ -164,12 +167,17 @@ class AlertDispatcher:
             while True:
                 try:
                     self._queue.get_nowait()
+                    if self._enqueue_times:
+                        self._enqueue_times.popleft()
                     dropped += 1
                     self._queue.task_done()
                 except asyncio.QueueEmpty:
                     break
             if dropped:
                 logger.warning("Dispatcher stopped with %d unprocessed alert(s)", dropped)
+
+        self._oldest_enqueued_at = self._enqueue_times[0] if self._enqueue_times else None
+        self.refresh_queue_metrics()
 
         logger.info("AlertDispatcher stopped")
 
@@ -179,10 +187,12 @@ class AlertDispatcher:
         if observation is not None:
             observation.record(STAGE_RESULT_QUEUE, KIND_RECEIVED)
         try:
-            if self._oldest_enqueued_at is None:
-                self._oldest_enqueued_at = time.monotonic()
             self._queue.put_nowait(alert)
+            self._enqueue_times.append(time.monotonic())
+            self._oldest_enqueued_at = self._enqueue_times[0]
+            self.refresh_queue_metrics()
         except asyncio.QueueFull:
+            metrics.alerts_queue_dropped.inc()
             # 큐 포화는 앱 결정이다. 커널 drop 과 합산하지 않는다.
             if observation is not None:
                 observation.record(
@@ -206,6 +216,15 @@ class AlertDispatcher:
             return None
         return max(0.0, time.monotonic() - self._oldest_enqueued_at)
 
+    def refresh_queue_metrics(self) -> None:
+        """현재 큐 깊이와 대기 시간을 관측 API·Prometheus에 반영한다."""
+        age = self.oldest_queue_age_seconds or 0.0
+        depth = self._queue.qsize()
+        metrics.alerts_queue_depth.set(depth)
+        metrics.alerts_queue_age.set(age)
+        if self._observation is not None:
+            self._observation.set_queue_metrics(STAGE_RESULT_QUEUE, depth, age)
+
     def subscribe_ws(self) -> asyncio.Queue:
         """WebSocket 구독자를 등록한다. 읽기용 큐를 반환한다."""
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -220,8 +239,11 @@ class AlertDispatcher:
         """큐에서 알림을 처리한다."""
         while True:
             alert = await self._queue.get()
-            if self._queue.empty():
-                self._oldest_enqueued_at = None
+            if self._enqueue_times:
+                enqueued_at = self._enqueue_times.popleft()
+                metrics.alerts_queue_wait.observe(max(0.0, time.monotonic() - enqueued_at))
+            self._oldest_enqueued_at = self._enqueue_times[0] if self._enqueue_times else None
+            self.refresh_queue_metrics()
 
             # 큐 깊이 메트릭 업데이트
             try:
@@ -248,6 +270,7 @@ class AlertDispatcher:
         """알림 한 건에 대해 속도 제한, DB 저장, 로깅, 브로드캐스트, webhook 전체 파이프라인을 실행한다."""
         # 1. 속도 제한
         if not self._rate_limiter.allow(alert.rate_limit_key):
+            metrics.alerts_suppressed.labels(reason="rate_limit").inc()
             logger.debug("Rate limited: %s", alert.rate_limit_key)
             if self._observation is not None:
                 # 억제는 손실이 아니다. "알림 없음" 이 "탐지 없음" 이 되므로
@@ -286,6 +309,9 @@ class AlertDispatcher:
 
         # 2. DB 삽입
         event_id = None
+        insert_started = time.monotonic()
+        if self._observation is not None:
+            self._observation.record(STAGE_DB, KIND_RECEIVED)
         try:
             event_id = await self._event_repo.insert(
                 engine=alert.engine,
@@ -305,6 +331,10 @@ class AlertDispatcher:
             )
         except Exception:
             logger.exception("Failed to save alert to DB")
+        finally:
+            result = "committed" if event_id is not None else "failed"
+            metrics.event_store_duration.labels(result=result).observe(time.monotonic() - insert_started)
+            metrics.event_store_total.labels(result=result).inc()
 
         if self._observation is not None:
             if event_id is not None:

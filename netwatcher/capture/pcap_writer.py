@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from scapy.all import IP, Packet, wrpcap
+from netwatcher.web import metrics
 
 logger = logging.getLogger("netwatcher.capture.pcap_writer")
 
@@ -81,7 +82,16 @@ class PCAPWriter:
         filepath = self._output_dir / filename
 
         try:
-            wrpcap(str(filepath), matching)
+            started = time.monotonic()
+            try:
+                wrpcap(str(filepath), matching)
+            except Exception:
+                metrics.pcap_operations.labels(operation="write", result="failed").inc()
+                raise
+            else:
+                metrics.pcap_operations.labels(operation="write", result="ok").inc()
+            finally:
+                metrics.pcap_duration.labels(operation="write").observe(time.monotonic() - started)
             logger.info(
                 "PCAP captured: %s (%d packets)", filename, len(matching)
             )
@@ -96,20 +106,26 @@ class PCAPWriter:
 
     def _enforce_storage_limit(self) -> None:
         """전체 저장 용량이 제한을 초과하면 가장 오래된 PCAP 파일을 삭제한다."""
+        started = time.monotonic()
         try:
             pcap_files = sorted(
                 self._output_dir.glob("*.pcap"),
                 key=lambda p: p.stat().st_mtime,
             )
             total_size = sum(f.stat().st_size for f in pcap_files)
+            metrics.pcap_operations.labels(operation="scan", result="ok").inc()
 
             while total_size > self._max_storage_bytes and pcap_files:
                 oldest = pcap_files.pop(0)
                 total_size -= oldest.stat().st_size
                 oldest.unlink()
+                metrics.pcap_operations.labels(operation="delete", result="ok").inc()
                 logger.info("Deleted old PCAP: %s", oldest.name)
         except Exception:
+            metrics.pcap_operations.labels(operation="retention", result="failed").inc()
             logger.exception("Error enforcing PCAP storage limit")
+        finally:
+            metrics.pcap_duration.labels(operation="retention").observe(time.monotonic() - started)
 
     def get_pcap_path(self, event_id: int) -> str | None:
         """이벤트 ID에 해당하는 PCAP 파일을 찾는다."""

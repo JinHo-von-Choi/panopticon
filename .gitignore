@@ -91,6 +91,7 @@ docs/*
 !docs/plans/
 docs/plans/*
 !docs/plans/2026-10-05-plan-review-stage1.md
+!docs/plans/2026-10-07-panopticon-improvement-strategy.md
 
 # ============================================================
 # 프로젝트 특수 파일

@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from netwatcher.utils.geoip import enrich_alert_metadata
+from netwatcher.observability.loop_monitor import LoopMonitor
 
 if TYPE_CHECKING:
     from netwatcher.alerts.dispatcher import AlertDispatcher
@@ -39,6 +40,7 @@ class TickService:
         self._worker_pool: "WorkerPool | None" = None
         self._packet_processor: "PacketProcessor | None" = None
         self._task: asyncio.Task | None = None
+        self._loop_monitor = LoopMonitor()
         self._restart_attempts: int = 0
         self._next_restart_at: float = 0.0
 
@@ -62,13 +64,19 @@ class TickService:
 
     async def start(self) -> None:
         """틱 루프 비동기 태스크를 시작한다."""
+        await self._loop_monitor.start()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
         """틱 루프 태스크를 취소하고 정리한다."""
         if self._task:
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
             self._task = None
+        await self._loop_monitor.stop()
 
     async def _loop(self) -> None:
         """1초 주기로 엔진 틱을 발생시키고 스니퍼 상태를 모니터링하는 메인 루프."""
@@ -85,6 +93,7 @@ class TickService:
             if self._observation is not None:
                 self._observation.mark_heartbeat()
                 if self.dispatcher is not None:
+                    self.dispatcher.refresh_queue_metrics()
                     self._observation.set_queue_age(
                         self.dispatcher.oldest_queue_age_seconds
                     )

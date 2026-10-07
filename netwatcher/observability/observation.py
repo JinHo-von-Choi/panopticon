@@ -140,6 +140,7 @@ class ObservationService:
         )
         # 카운터는 패킷 처리 스레드에서 갱신되고 HTTP 스레드에서 읽힌다
         self._lock = threading.Lock()
+        self._queues: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # 수집
@@ -192,6 +193,16 @@ class ObservationService:
         with self._lock:
             self._window.queue_age_seconds = seconds
 
+    def set_queue_metrics(self, stage: str, depth: int, age: float, wire_bytes: int | None = None) -> None:
+        """큐 대기 상태. wire_bytes 는 Python 객체 메모리 크기가 아니다."""
+        with self._lock:
+            self._queues[stage] = {
+                "depth": depth, "oldest_age_seconds": age,
+                "wire_bytes": wire_bytes,
+                "memory_bytes": None,
+                "memory_note": "객체 메모리는 프로세스 RSS로 별도 측정한다",
+            }
+
     def set_expected_scope_version(self, version: int) -> None:
         with self._lock:
             self._window.expected_scope_version = version
@@ -217,6 +228,7 @@ class ObservationService:
             window = self._window
             received_total = sum(s.received for s in window.stages.values())
             stages = {name: c.as_dict() for name, c in window.stages.items()}
+            queues = {name: dict(values) for name, values in self._queues.items()}
 
         now = time.time()
         reasons: list[str] = []
@@ -283,6 +295,7 @@ class ObservationService:
             "observed_traffic": received_total,
             "no_traffic_observed": no_traffic,
             "stages": stages,
+            "queues": queues,
             "loss": loss,
             "unsupported_measurements": list(window.unsupported),
         }

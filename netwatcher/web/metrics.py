@@ -12,6 +12,21 @@ packets_dropped = Counter("netwatcher_packets_dropped", "Packets dropped by back
 alerts_total        = Counter("netwatcher_alerts_total", "Alerts generated", ["engine", "severity"])
 alerts_rate_limited = Counter("netwatcher_alerts_rate_limited", "Rate-limited alerts")
 alerts_queue_depth  = Gauge("netwatcher_alerts_queue_depth", "Current alert queue depth")
+alerts_queue_age = Gauge("netwatcher_alerts_queue_age_seconds", "Age of oldest queued alert")
+alerts_queue_wait = Histogram("netwatcher_alerts_queue_wait_seconds", "Alert enqueue to dequeue duration")
+alerts_queue_dropped = Counter("netwatcher_alerts_queue_dropped", "Alerts rejected by full queue")
+alerts_suppressed = Counter("netwatcher_alerts_suppressed", "Suppressed alerts", ["reason"])
+input_queue_depth = Gauge("netwatcher_input_queue_depth", "Queued capture packets")
+input_queue_wire_bytes = Gauge("netwatcher_input_queue_wire_bytes", "Queued packet wire bytes, excluding Python object overhead")
+input_queue_age = Gauge("netwatcher_input_queue_age_seconds", "Age of oldest queued capture packet")
+capture_received = Counter("netwatcher_capture_received", "Packets received by capture callback")
+capture_app_dropped = Counter("netwatcher_capture_app_dropped", "Packets dropped at application input queue")
+event_loop_lag = Histogram("netwatcher_event_loop_lag_seconds", "Event loop scheduling delay", buckets=(.001, .005, .01, .025, .05, .1, .25, .5, 1, 5))
+event_store_duration = Histogram("netwatcher_event_store_seconds", "Event insert including commit", ["result"])
+event_store_total = Counter("netwatcher_event_store", "Event insert outcomes", ["result"])
+db_write_total = Counter("netwatcher_db_write", "Database write outcomes", ["operation", "result"])
+pcap_operations = Counter("netwatcher_pcap_operations", "PCAP filesystem operations", ["operation", "result"])
+pcap_duration = Histogram("netwatcher_pcap_operation_seconds", "PCAP filesystem operation duration", ["operation"])
 
 # --- 웹훅 ---
 webhook_duration = Histogram(

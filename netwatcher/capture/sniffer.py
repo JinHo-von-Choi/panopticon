@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections import deque
 from typing import TYPE_CHECKING, Callable
 
@@ -15,11 +16,13 @@ from netwatcher.observability.observation import (
     DROP_SOURCE_APP,
     KIND_DROPPED,
     KIND_RECEIVED,
+    KIND_ACCEPTED,
     STAGE_CAPTURE,
     STAGE_INPUT_QUEUE,
     KernelDropProbe,
 )
 from netwatcher.utils.config import Config
+from netwatcher.web import metrics
 
 if TYPE_CHECKING:
     from netwatcher.observability.observation import ObservationService
@@ -54,7 +57,8 @@ class PacketSniffer:
         self._extra_bpf = config.get("bpf_filter", "")
 
         # 배압 제어 버퍼
-        self._packet_buffer: deque[Packet] = deque(maxlen=50000)
+        self._packet_buffer: deque[tuple[Packet, int, float]] = deque(maxlen=50000)
+        self._queued_wire_bytes = 0
         self._dropped_count = 0
         self._drain_scheduled = False
 
@@ -90,19 +94,22 @@ class PacketSniffer:
 
     def _on_packet(self, pkt: Packet) -> None:
         """스니퍼 스레드에서 호출됨; 크기 제한 버퍼를 통해 asyncio 루프로 브릿지한다."""
+        original = getattr(pkt, "original", b"")
+        size = len(original) if original else len(pkt)
+        schedule = False
         with self._obs_lock:
             self._obs_capture_received += 1
-        if len(self._packet_buffer) >= self._packet_buffer.maxlen:
-            self._dropped_count += 1
-            # 버퍼가 가득 찬 것은 앱 결정이다. 커널 drop 과 합산하지 않는다.
-            with self._obs_lock:
+            if len(self._packet_buffer) >= self._packet_buffer.maxlen:
+                self._dropped_count += 1
                 self._obs_queue_dropped += 1
-            return
-        self._packet_buffer.append(pkt)
-        with self._obs_lock:
+                return
+            self._packet_buffer.append((pkt, size, time.monotonic()))
+            self._queued_wire_bytes += size
             self._obs_queue_received += 1
-        if not self._drain_scheduled:
-            self._drain_scheduled = True
+            if not self._drain_scheduled:
+                self._drain_scheduled = True
+                schedule = True
+        if schedule:
             try:
                 self._loop.call_soon_threadsafe(self._drain_buffer)
             except RuntimeError:
@@ -115,8 +122,6 @@ class PacketSniffer:
         도착한 패킷이 다음 배치로 넘어갈 뿐 유실되지 않는다.
         """
         observation = self._observation
-        if observation is None:
-            return
         with self._obs_lock:
             capture_received = self._obs_capture_received
             queue_received = self._obs_queue_received
@@ -124,11 +129,27 @@ class PacketSniffer:
             self._obs_capture_received = 0
             self._obs_queue_received = 0
             self._obs_queue_dropped = 0
+            depth = len(self._packet_buffer)
+            wire_bytes = self._queued_wire_bytes
+            age = max(0.0, time.monotonic() - self._packet_buffer[0][2]) if depth else 0.0
+
+        metrics.capture_received.inc(capture_received)
+        metrics.capture_app_dropped.inc(queue_dropped)
+        metrics.input_queue_depth.set(depth)
+        metrics.input_queue_wire_bytes.set(wire_bytes)
+        metrics.input_queue_age.set(age)
+        if observation is None:
+            return
+        observation.set_queue_metrics(STAGE_INPUT_QUEUE, depth, age, wire_bytes)
 
         if capture_received:
             observation.record(STAGE_CAPTURE, KIND_RECEIVED, capture_received)
         if queue_received:
-            observation.record(STAGE_INPUT_QUEUE, KIND_RECEIVED, queue_received)
+            # 입력에 시도된 전체 건수가 앱 drop 의 분모다.
+            observation.record(STAGE_INPUT_QUEUE, KIND_RECEIVED, queue_received + queue_dropped)
+            observation.record(STAGE_INPUT_QUEUE, KIND_ACCEPTED, queue_received)
+        elif queue_dropped:
+            observation.record(STAGE_INPUT_QUEUE, KIND_RECEIVED, queue_dropped)
         if queue_dropped:
             observation.record(
                 STAGE_INPUT_QUEUE, KIND_DROPPED, queue_dropped, drop_source=DROP_SOURCE_APP,
@@ -136,25 +157,26 @@ class PacketSniffer:
 
     def _drain_buffer(self) -> None:
         """버퍼링된 패킷을 패킷 콜백으로 배출한다 (asyncio 루프에서 실행)."""
-        self._drain_scheduled = False
         batch_limit = 500  # 배출 주기당 최대 500개 패킷 처리
-        for _ in range(batch_limit):
-            if not self._packet_buffer:
-                break
-            try:
-                pkt = self._packet_buffer.popleft()
-            except IndexError:
-                break
-            self._packet_callback(pkt)
-        # 계측은 배출 성공 여부와 무관하게 항상 반영한다
-        self.flush_observation()
-        # 아직 남은 패킷이 있으면 다음 배출을 스케줄링
-        if self._packet_buffer:
-            self._drain_scheduled = True
-            try:
-                self._loop.call_soon_threadsafe(self._drain_buffer)
-            except RuntimeError:
-                pass
+        try:
+            for _ in range(batch_limit):
+                with self._obs_lock:
+                    if not self._packet_buffer:
+                        break
+                    pkt, size, _ = self._packet_buffer.popleft()
+                    self._queued_wire_bytes -= size
+                self._packet_callback(pkt)
+        finally:
+            self.flush_observation()
+            # 콜백 실패 뒤에도 큐가 영구 정지하지 않도록 다음 배출을 예약한다.
+            with self._obs_lock:
+                schedule = bool(self._packet_buffer)
+                self._drain_scheduled = schedule
+            if schedule:
+                try:
+                    self._loop.call_soon_threadsafe(self._drain_buffer)
+                except RuntimeError:
+                    pass
 
     def start(self) -> None:
         """백그라운드 스레드에서 패킷 스니퍼를 시작한다."""

@@ -202,10 +202,10 @@ def test_sniffer_backpressure_is_app_drop():
         s.flush_observation()
 
         entry = obs.snapshot()["loss"]["per_stage"][STAGE_INPUT_QUEUE]
-        assert entry["received"] == 2
+        assert entry["received"] == 5
         assert entry["app_dropped"] == 3
         assert entry["kernel_dropped"] == 0
-        assert entry["app_loss_ratio"] == pytest.approx(3 / 2)
+        assert entry["app_loss_ratio"] == pytest.approx(3 / 5)
     finally:
         loop.close()
 

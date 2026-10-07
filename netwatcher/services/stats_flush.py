@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ except ImportError:
     _packets_dropped = None
 
 from netwatcher.services import visibility as _visibility
+from netwatcher.web import metrics
 
 if TYPE_CHECKING:
     from netwatcher.capture.sniffer import PacketSniffer
@@ -69,7 +71,14 @@ class StatsFlushService:
             counters = self.packet_processor.snapshot_and_reset_counters()
             # distinct_src_macs는 DB 스키마에 없으므로 별도 추출 후 제거
             distinct_src_macs = counters.pop("distinct_src_macs", 0)
-            await self.stats_repo.insert(timestamp=ts, **counters)
+            started = time.monotonic()
+            stored = False
+            try:
+                await self.stats_repo.insert(timestamp=ts, **counters)
+                stored = True
+            finally:
+                metrics.db_query_duration.labels(operation="traffic_stats_insert").observe(time.monotonic() - started)
+                metrics.db_write_total.labels(operation="traffic_stats", result="ok" if stored else "failed").inc()
             _visibility.state.update(distinct_src_macs, counters["total_packets"])
             logger.debug(
                 "Stats flushed: %d pkts, %d bytes, %d distinct MACs",
@@ -79,14 +88,20 @@ class StatsFlushService:
             # 디바이스 버퍼 플러시 (일괄 upsert)
             batch = self.packet_processor.drain_device_buffer()
             if batch:
+                started = time.monotonic()
+                stored = False
                 try:
                     await self.device_repo.batch_upsert(batch)
+                    stored = True
                     # 활성 디바이스 메트릭 업데이트
                     if _active_devices is not None:
                         count = await self.device_repo.count()
                         _active_devices.set(count)
                 except Exception:
                     logger.exception("Device batch upsert failed")
+                finally:
+                    metrics.db_query_duration.labels(operation="device_batch_upsert").observe(time.monotonic() - started)
+                    metrics.db_write_total.labels(operation="devices", result="ok" if stored else "failed").inc()
 
             # 스니퍼 드롭 패킷 메트릭 업데이트
             if self.sniffer and _packets_dropped is not None:
