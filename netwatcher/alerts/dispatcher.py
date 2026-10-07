@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from netwatcher.alerts.channels.discord import DiscordChannel
 from netwatcher.alerts.channels.slack import SlackChannel
 from netwatcher.alerts.channels.telegram import TelegramChannel
-from netwatcher.alerts.rate_limiter import RateLimiter
+from netwatcher.alerts.rate_limiter import RateLimiter, EventBudget
 from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.detection.correlator import AlertCorrelator
 from netwatcher.detection.models import Alert, Severity
@@ -86,6 +86,11 @@ class AlertDispatcher:
         self._rate_limiter = RateLimiter(
             window_seconds=rl_config.get("window_seconds", 300),
             max_count=rl_config.get("max_per_key", 5),
+        )
+        budget_cfg = config.section("alerts").get("event_budget", {})
+        self._event_budget = EventBudget(
+            normal=budget_cfg.get("normal_per_minute", 120),
+            critical_reserve=budget_cfg.get("critical_reserve_per_minute", 30),
         )
         # 주기적 정리 카운터
         self._cleanup_counter = 0
@@ -268,6 +273,8 @@ class AlertDispatcher:
 
     async def _process_alert(self, alert: Alert) -> None:
         """알림 한 건에 대해 속도 제한, DB 저장, 로깅, 브로드캐스트, webhook 전체 파이프라인을 실행한다."""
+        if self._observation is not None:
+            self._observation.record(STAGE_ALERT, KIND_RECEIVED)
         # 1. 속도 제한
         if not self._rate_limiter.allow(alert.rate_limit_key):
             metrics.alerts_suppressed.labels(reason="rate_limit").inc()
@@ -284,13 +291,19 @@ class AlertDispatcher:
             return
 
         # 저장을 위해 metadata에 confidence 포함
+        if not self._event_budget.allow(critical=alert.severity == Severity.CRITICAL):
+            metrics.alerts_suppressed.labels(reason="global_budget").inc()
+            if self._observation is not None:
+                self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
+            return
+
         alert.metadata["confidence"] = alert.confidence
 
         # 탐지 결과 계약 (PR 08): 요약 → 근거 → 원자료 세 층을 판정하고 기록한다.
         # 누락이 있어도 저장은 막지 않는다. 대신 metadata["evidence"] 로 드러내
         # "근거 없는 탐지"를 걸러낼 수 있게 한다.
         if self._observation is not None:
-            self._observation.record(STAGE_ALERT, KIND_RECEIVED)
+            self._observation.record(STAGE_ALERT, KIND_ACCEPTED)
 
         from netwatcher.detection.evidence import apply_evidence_contract
         evidence = apply_evidence_contract(alert)

@@ -88,6 +88,9 @@ netwatcher:
     cleanup_interval_hours: 6  # 정리 주기
 
   alerts:
+    event_budget:
+      normal_per_minute: 120
+      critical_reserve_per_minute: 30
     # 종료 시 큐에 남은 알림을 배 emptying하는 최대 초 (PR 06).
     # 이 시간 안에 처리되지 못한 알림은 경고와 함께 포기한다.
     drain_timeout_seconds: 5
