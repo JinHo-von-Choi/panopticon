@@ -100,7 +100,9 @@ async def run(args: argparse.Namespace) -> dict:
     }
     config = Config({
         "postgresql": pg, "whitelist": {},
-        "alerts": {"rate_limit": {"window_seconds": 300, "max_per_key": 5}, "channels": {}},
+        "alerts": {"rate_limit": {"window_seconds": 300, "max_per_key": 5}, "channels": {},
+                   "aggregation": {"enabled": True, "window_seconds": 60, "max_keys": 10000},
+                   "batch": {"enabled": True, "size": 100}},
         "engines": {"signature": {"enabled": False}},
     })
     admin = await asyncpg.connect(host=pg["host"], port=pg["port"], database=pg["database"],
@@ -165,6 +167,7 @@ async def run(args: argparse.Namespace) -> dict:
                         engine="port_scan", severity=Severity.WARNING,
                         title=f"synthetic {i}" if args.scenario == "unique-key" else "synthetic repeated",
                         description="queue workload, not an engine verdict", source_ip="198.18.0.2",
+                        metadata={"detection_type": f"synthetic_unique_{i}"} if args.scenario == "unique-key" else {},
                     ))
                 injected = due
         stop.set()
@@ -179,6 +182,9 @@ async def run(args: argparse.Namespace) -> dict:
         elapsed = time.monotonic() - started
         async with db.pool.acquire() as conn:
             persisted = await conn.fetchval("SELECT COUNT(*) FROM events")
+            injected_count = await conn.fetchval("""SELECT COALESCE(SUM(
+                COALESCE((metadata->'aggregation'->>'count')::int, 1)), 0) FROM events
+                WHERE description='queue workload, not an engine verdict'""")
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         usage = resource.getrusage(resource.RUSAGE_SELF)
         report = {
@@ -194,7 +200,7 @@ async def run(args: argparse.Namespace) -> dict:
             "requested_pps": args.pps, "emitted_packets": emitted,
             "planned_packets": math.ceil(args.duration_seconds * args.pps),
             "source_errors": source_errors, "injected_alerts": injected,
-            "persisted_events": persisted, "cpu_seconds": time.process_time() - cpu_start,
+            "persisted_events": persisted, "persisted_injected_summary_count": injected_count, "cpu_seconds": time.process_time() - cpu_start,
             "peak_rss_bytes": usage.ru_maxrss * 1024 if sys.platform != "darwin" else usage.ru_maxrss,
             "pcap_enabled": args.pcap, "engines": [e.name for e in registry.engines],
             "config_sha256": hashlib.sha256(json.dumps({k: v for k, v in config.raw.items() if k != "postgresql"}, sort_keys=True).encode()).hexdigest(),

@@ -21,6 +21,12 @@ def _make_event(n: int = 0) -> dict:
     }
 
 
+async def _wait_for_rows(repo, count):
+    async with asyncio.timeout(2):
+        while len(await repo.list_recent(limit=100)) < count:
+            await asyncio.sleep(.01)
+
+
 @pytest.mark.asyncio
 async def test_enqueue_accumulates(event_repo: EventRepository):
     """batch_size에 도달하지 않으면 DB에 즉시 삽입되지 않는다."""
@@ -38,14 +44,17 @@ async def test_enqueue_accumulates(event_repo: EventRepository):
 async def test_auto_flush_on_batch_size(event_repo: EventRepository):
     """batch_size에 도달하면 자동으로 플러시된다."""
     writer = BatchWriter(event_repo, batch_size=3, flush_interval_ms=60_000)
+    await writer.start()
 
     await writer.enqueue(_make_event(1))
     await writer.enqueue(_make_event(2))
     await writer.enqueue(_make_event(3))
 
+    await _wait_for_rows(event_repo, 3)
     assert writer.pending == 0
     events = await event_repo.list_recent(limit=100)
     assert len(events) == 3
+    await writer.stop()
 
 
 @pytest.mark.asyncio
@@ -115,10 +124,12 @@ async def test_stop_flushes_remaining(event_repo: EventRepository):
 async def test_multiple_batch_flushes(event_repo: EventRepository):
     """batch_size를 여러 번 초과하면 각각 플러시된다."""
     writer = BatchWriter(event_repo, batch_size=2, flush_interval_ms=60_000)
+    await writer.start()
 
     for i in range(7):
         await writer.enqueue(_make_event(i))
 
+    await _wait_for_rows(event_repo, 6)
     # 2개씩 3번 자동 플러시 = 6개, 나머지 1개는 버퍼에 대기
     assert writer.pending == 1
 
@@ -127,3 +138,93 @@ async def test_multiple_batch_flushes(event_repo: EventRepository):
 
     events = await event_repo.list_recent(limit=100)
     assert len(events) == 7
+    await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_slow_database_does_not_lock_out_producers():
+    from unittest.mock import AsyncMock
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def blocked(events):
+        entered.set()
+        await release.wait()
+        return len(events)
+    repo = AsyncMock()
+    repo.insert_batch.side_effect = blocked
+    writer = BatchWriter(repo, max_pending=3)
+    await writer.enqueue(_make_event(1))
+    flush = asyncio.create_task(writer.flush())
+    await entered.wait()
+    try:
+        async with asyncio.timeout(.1):
+            assert await writer.enqueue(_make_event(2))
+            assert await writer.enqueue(_make_event(3))
+            assert not await writer.enqueue(_make_event(4))
+        assert writer.pending == 3
+        assert writer.status()["rejected"] == 1
+    finally:
+        release.set()
+        await flush
+
+
+@pytest.mark.asyncio
+async def test_commit_response_loss_retains_stable_batch_and_does_not_duplicate(event_repo):
+    original = event_repo.insert_batch
+    calls = []
+    async def uncertain(events):
+        result = await original(events)
+        calls.append(events)
+        if len(calls) == 1:
+            raise ConnectionError('commit response lost')
+        return result
+    event_repo.insert_batch = uncertain
+    writer = BatchWriter(event_repo, flush_interval_ms=10)
+    await writer.enqueue(_make_event(1))
+    assert await writer.flush() == 0
+    assert writer.pending == 1
+    await asyncio.sleep(.02)
+    assert await writer.flush() == 1
+    assert calls[0] == calls[1]
+    assert len(await event_repo.list_recent()) == 1
+    assert writer.pending == 0 and writer.status()["payload_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_batch_is_unconfirmed_and_payload_budget_is_bounded():
+    from unittest.mock import AsyncMock
+    repo = AsyncMock()
+    repo.insert_batch.side_effect = ConnectionError()
+    writer = BatchWriter(repo, max_age_seconds=.03, max_bytes=1024, flush_interval_ms=10)
+    assert not await writer.enqueue({'title': 'x' * 2048})
+    assert await writer.enqueue(_make_event(1))
+    await writer.flush()
+    await asyncio.sleep(.04)
+    await writer.flush()
+    assert writer.pending == 0
+    assert writer.status()["expired_unconfirmed"] == 1
+    assert writer.status()["payload_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_wait_past_budget_for_cancellation_cleanup():
+    import time
+    from unittest.mock import AsyncMock
+    entered = asyncio.Event()
+    async def unresponsive(events):
+        entered.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await asyncio.sleep(.2)
+            raise
+    repo = AsyncMock()
+    repo.insert_batch.side_effect = unresponsive
+    writer = BatchWriter(repo, batch_size=1)
+    await writer.start()
+    await writer.enqueue(_make_event())
+    await entered.wait()
+    started = time.monotonic()
+    await writer.stop(timeout=.03)
+    assert time.monotonic() - started < .1
+    assert writer.pending == 1
+    await asyncio.sleep(.21)

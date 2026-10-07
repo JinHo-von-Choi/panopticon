@@ -102,6 +102,13 @@ netwatcher:
     max_deletes_per_second: 4
 
   alerts:
+    max_queue_age_seconds: 300
+    notification_queue:
+      jobs: 128
+      bytes: 2097152
+    batch:
+      enabled: true
+      size: 100
     aggregation:
       enabled: true
       window_seconds: 60

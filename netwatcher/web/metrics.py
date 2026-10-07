@@ -14,6 +14,7 @@ alerts_rate_limited = Counter("netwatcher_alerts_rate_limited", "Rate-limited al
 alerts_queue_depth  = Gauge("netwatcher_alerts_queue_depth", "Current alert queue depth")
 alerts_queue_age = Gauge("netwatcher_alerts_queue_age_seconds", "Age of oldest queued alert")
 alerts_queue_wait = Histogram("netwatcher_alerts_queue_wait_seconds", "Alert enqueue to dequeue duration")
+alerts_discarded = Counter("netwatcher_alerts_discarded_total", "Alerts discarded without confirmed persistence", ["reason"])
 alerts_queue_dropped = Counter("netwatcher_alerts_queue_dropped", "Alerts rejected by full queue")
 alerts_suppressed = Counter("netwatcher_alerts_suppressed", "Suppressed alerts", ["reason"])
 input_queue_depth = Gauge("netwatcher_input_queue_depth", "Queued capture packets")

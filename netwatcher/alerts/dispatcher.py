@@ -76,12 +76,19 @@ class AlertDispatcher:
         self._block_manager = block_manager
         self._queue: asyncio.Queue[Alert] = asyncio.Queue(maxsize=10000)
         self._task: asyncio.Task | None = None
+        self._inflight_alerts = 0
+        self._shutdown_incomplete = 0
+        self._queue_expired = 0
+        self._max_queue_age = min(86400, max(1, config.section("alerts").get("max_queue_age_seconds", 300)))
         aggregation_cfg = config.section("alerts").get("aggregation", {})
         self._aggregator = AlertAggregator(
             window_seconds=aggregation_cfg.get("window_seconds", 60),
             max_keys=aggregation_cfg.get("max_keys", 10000),
         ) if aggregation_cfg.get("enabled", False) else None
         self._aggregation_task: asyncio.Task | None = None
+        batch_cfg = config.section("alerts").get("batch", {})
+        self._batch_enabled = batch_cfg.get("enabled", False)
+        self._batch_size = min(100, max(1, batch_cfg.get("size", 100)))
 
         # 관측 범위 (계획서 3장). 경보 옆에 누락을 표시한다.
         self._observation = observation
@@ -114,18 +121,44 @@ class AlertDispatcher:
         channels_config = config.section("alerts").get("channels", {})
         from netwatcher.alerts.channels.registry import build_channels
         self._channels, self.channel_status = build_channels(channels_config)
+        from netwatcher.services.notification_writer import NotificationWriter
+        notification_cfg = config.section("alerts").get("notification_queue", {})
+        self._notification_writer = NotificationWriter(
+            self._send_webhooks, max_jobs=notification_cfg.get("jobs", 128),
+            max_bytes=notification_cfg.get("bytes", 2 * 1024 * 1024),
+        ) if self._channels else None
 
         # WebSocket 구독자
         self._ws_subscribers: set[asyncio.Queue] = set()
 
     async def start(self) -> None:
         """디스패처 소비자 루프를 시작한다."""
+        self._stopping = False
         self._task = asyncio.create_task(self._consumer_loop())
+        if self._notification_writer is not None:
+            self._notification_writer.start()
         if self._aggregator is not None:
             self._aggregation_task = asyncio.create_task(self._aggregation_loop())
         logger.info("AlertDispatcher started")
 
     async def stop(self, drain_timeout: float | None = None) -> None:
+        try:
+            await self._stop(drain_timeout)
+        finally:
+            # 상위 앱 예산이 먼저 소진돼도 백그라운드 소비자를 남기지 않는다.
+            tasks = [task for task in (self._task, self._aggregation_task) if task and not task.done()]
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                done, pending = await asyncio.wait(tasks, timeout=0)
+                for task in pending:
+                    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            if self._notification_writer is not None and self._notification_writer.task is not None:
+                await self._notification_writer.stop(timeout=0)
+            if self._evidence_writer is not None and self._evidence_writer.task is not None:
+                await self._evidence_writer.stop(timeout=0)
+
+    async def _stop(self, drain_timeout: float | None = None) -> None:
         """디스패처를 중지한다.
 
         큐에 남아 있는 알림을 먼저 배 emptying 비운 뒤 소비자를 멈춘다.
@@ -204,6 +237,8 @@ class AlertDispatcher:
                 logger.warning("Aggregation shutdown incomplete; pending_windows=%d", len(self._aggregator.pending))
         if self._evidence_writer is not None:
             await self._evidence_writer.stop(timeout=max(0, deadline - time.monotonic()))
+        if self._notification_writer is not None:
+            await self._notification_writer.stop(timeout=max(0, deadline - time.monotonic()))
         self._oldest_enqueued_at = self._enqueue_times[0] if self._enqueue_times else None
         self.refresh_queue_metrics()
 
@@ -226,6 +261,11 @@ class AlertDispatcher:
         observation = self._observation
         if observation is not None:
             observation.record(STAGE_RESULT_QUEUE, KIND_RECEIVED)
+        if self._stopping:
+            metrics.alerts_discarded.labels(reason="shutdown").inc()
+            if observation is not None:
+                observation.record(STAGE_RESULT_QUEUE, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP)
+            return
         try:
             self._queue.put_nowait(alert)
             self._enqueue_times.append(time.monotonic())
@@ -276,45 +316,80 @@ class AlertDispatcher:
         self._ws_subscribers.discard(q)
 
     async def _consumer_loop(self) -> None:
-        """큐에서 알림을 처리한다."""
-        while True:
-            alert = await self._queue.get()
-            if self._enqueue_times:
-                enqueued_at = self._enqueue_times.popleft()
-                metrics.alerts_queue_wait.observe(max(0.0, time.monotonic() - enqueued_at))
-            self._oldest_enqueued_at = self._enqueue_times[0] if self._enqueue_times else None
-            self.refresh_queue_metrics()
-
-            # 큐 깊이 메트릭 업데이트
-            try:
-                from netwatcher.web.metrics import alerts_queue_depth
-                alerts_queue_depth.set(self._queue.qsize())
-            except ImportError:
-                pass
-
-            try:
-                await self._process_alert(alert)
-            except Exception:
-                logger.exception("Error processing alert: %s", alert.title)
-            finally:
-                # 반드시 task_done() 을 호출해야 stop() 의 배 emptying이 진행된다
+        """기존 유한 큐를 재사용해 준비된 대표만 다중행으로 저장한다."""
+        carry = None
+        try:
+            while True:
+                alert = carry if carry is not None else await self._queue.get()
+                carry = None
+                batch = [alert]
+                keys = {self._aggregator.key(alert)} if self._aggregator else set()
+                if self._batch_enabled:
+                    while len(batch) < self._batch_size:
+                        try:
+                            candidate = self._queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        key = self._aggregator.key(candidate) if self._aggregator else None
+                        if key is not None and key in keys:
+                            carry = candidate  # 첫 대표 확정 후 반복·상승 여부를 판단한다.
+                            break
+                        if key is not None:
+                            keys.add(key)
+                        batch.append(candidate)
+                owned = len(batch)
+                fresh = []
+                now = time.monotonic()
+                for item in batch:
+                    enqueued_at = self._enqueue_times.popleft() if self._enqueue_times else now
+                    age = max(0, now - enqueued_at)
+                    metrics.alerts_queue_wait.observe(age)
+                    if age >= self._max_queue_age:
+                        self._queue_expired += 1
+                        metrics.alerts_discarded.labels(reason="queue_age").inc()
+                        if self._observation is not None:
+                            self._observation.record(STAGE_RESULT_QUEUE, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP)
+                    else:
+                        fresh.append(item)
+                if len(fresh) < owned:
+                    logger.warning("Queued alerts expired unconfirmed: %d", owned - len(fresh))
+                batch = fresh
+                self._oldest_enqueued_at = self._enqueue_times[0] if self._enqueue_times else None
+                self.refresh_queue_metrics()
+                self._inflight_alerts = len(batch)
+                try:
+                    if batch:
+                        if self._batch_enabled:
+                            await self._process_alert_batch(batch)
+                        else:
+                            await self._process_alert(batch[0])
+                except asyncio.CancelledError:
+                    self._shutdown_incomplete += len(batch)
+                    logger.warning("Shutdown processing incomplete: events=%d (commit may already have completed)", len(batch))
+                    raise
+                except Exception:
+                    logger.exception("Error processing alert batch")
+                finally:
+                    self._inflight_alerts = 0
+                    for _ in range(owned):
+                        self._queue.task_done()
+                self._cleanup_counter += len(batch)
+                if self._cleanup_counter >= 100:
+                    self._cleanup_counter = 0
+                    self._rate_limiter.cleanup()
+        finally:
+            if carry is not None:
+                logger.warning("Shutdown prefetched alert unconfirmed: 1")
                 self._queue.task_done()
 
-            # 100개 알림마다 주기적 속도 제한기 정리
-            self._cleanup_counter += 1
-            if self._cleanup_counter >= 100:
-                self._cleanup_counter = 0
-                self._rate_limiter.cleanup()
-
-    async def _process_alert(self, alert: Alert) -> None:
-        """알림 한 건에 대해 속도 제한, DB 저장, 로깅, 브로드캐스트, webhook 전체 파이프라인을 실행한다."""
+    def _prepare_alert(self, alert: Alert) -> bool:
         if self._observation is not None:
             self._observation.record(STAGE_ALERT, KIND_RECEIVED)
         if self._aggregator is not None and self._aggregator.repeat(alert):
             metrics.alerts_suppressed.labels(reason="aggregate_repeat").inc()
             if self._observation is not None:
                 self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
-            return
+            return False
         # 1. 속도 제한
         limit_key = (self._aggregator.key(alert) + ":" + alert.severity.value
                      if self._aggregator is not None else alert.rate_limit_key)
@@ -330,14 +405,14 @@ class AlertDispatcher:
                 alerts_rate_limited.inc()
             except ImportError:
                 pass
-            return
+            return False
 
         # 저장을 위해 metadata에 confidence 포함
         if not self._event_budget.allow(critical=alert.severity == Severity.CRITICAL):
             metrics.alerts_suppressed.labels(reason="global_budget").inc()
             if self._observation is not None:
                 self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
-            return
+            return False
 
         alert.metadata["confidence"] = alert.confidence
 
@@ -366,6 +441,11 @@ class AlertDispatcher:
         except ImportError:
             pass
 
+        return True
+
+    async def _process_alert(self, alert: Alert) -> None:
+        if not self._prepare_alert(alert):
+            return
         # 2. DB 삽입
         event_id = None
         insert_started = time.monotonic()
@@ -405,6 +485,42 @@ class AlertDispatcher:
             metrics.event_store_duration.labels(result=result).observe(time.monotonic() - insert_started)
             metrics.event_store_total.labels(result=result).inc()
 
+        await self._deliver_committed(alert, event_id)
+
+    async def _process_alert_batch(self, alerts: list[Alert]) -> None:
+        if len(alerts) == 1:
+            await self._process_alert(alerts[0])
+            return
+        accepted = [alert for alert in alerts if self._prepare_alert(alert)]
+        if not accepted:
+            return
+        pairs = [(uuid.uuid4(), alert) for alert in accepted]
+        payload = [{"ingest_id": str(key), **{name: getattr(alert, name) for name in (
+            "engine", "title", "description", "title_key", "description_key", "source_ip", "source_mac",
+            "dest_ip", "dest_mac", "metadata", "packet_info", "mitre_attack_id", "threat_level")},
+            "severity": alert.severity.value} for key, alert in pairs]
+        started = time.monotonic()
+        mapping = {}
+        if self._observation is not None:
+            self._observation.record(STAGE_DB, KIND_RECEIVED, len(pairs))
+        for attempt in range(2):
+            try:
+                async with asyncio.timeout(2):
+                    mapping = await self._event_repo.insert_batch_mapped(payload)
+                break
+            except Exception:
+                if attempt:
+                    logger.warning("Alert batch commit unconfirmed: events=%d", len(pairs))
+                else:
+                    await asyncio.sleep(.05)
+        for key, alert in pairs:
+            event_id = mapping.get(key)
+            result = "committed" if event_id is not None else "failed"
+            metrics.event_store_duration.labels(result=result).observe(time.monotonic() - started)
+            metrics.event_store_total.labels(result=result).inc()
+            await self._deliver_committed(alert, event_id)
+
+    async def _deliver_committed(self, alert: Alert, event_id: int | None) -> None:
         if self._observation is not None:
             if event_id is not None:
                 self._observation.record(STAGE_DB, KIND_ACCEPTED)
@@ -508,16 +624,19 @@ class AlertDispatcher:
                 logger.exception("Auto-block failed for %s", alert.source_ip)
 
         # 8. Webhook 채널 -- 타임아웃 적용 병렬 처리
-        await self._send_webhooks(alert)
+        if self._notification_writer is not None and self._notification_writer.task is not None:
+            self._notification_writer.submit(alert)
+        else:
+            await self._send_webhooks(alert)
 
-    async def _send_webhooks(self, alert: Alert) -> None:
+    async def _send_webhooks(self, alert: Alert) -> bool:
         """해당하는 모든 webhook 채널에 알림을 병렬로 전송한다."""
         async def _timed_send(channel, name: str) -> tuple[str, float, Exception | None]:
             """채널 전송을 수행하고 (이름, 소요 시간, 예외)를 반환한다."""
             start = time.monotonic()
             try:
-                await asyncio.wait_for(channel.send(alert), timeout=5.0)
-                return name, time.monotonic() - start, None
+                delivered = await asyncio.wait_for(channel.send(alert), timeout=5.0)
+                return name, time.monotonic() - start, RuntimeError("delivery_rejected") if delivered is False else None
             except Exception as exc:
                 return name, time.monotonic() - start, exc
 
@@ -528,15 +647,18 @@ class AlertDispatcher:
         ]
 
         if not tasks:
-            return
+            return True
 
+        failed = False
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
+                failed = True
                 logger.error("Webhook task failed: %s", type(result).__name__)
                 continue
             name, elapsed, exc = result
             if exc is not None:
+                failed = True
                 logger.error("Webhook channel %s failed: %s", name, type(exc).__name__)
             else:
                 try:
@@ -544,3 +666,4 @@ class AlertDispatcher:
                     webhook_duration.labels(channel=name).observe(elapsed)
                 except ImportError:
                     pass
+        return not failed

@@ -125,6 +125,9 @@ class HealthChecker:
                                      "pending_windows": len(aggregator.pending),
                                      "pending_repeats": sum(w.count - 1 for w in aggregator.pending),
                                      "overflow_repeats": aggregator.overflow}
+        result["expired_unconfirmed"] = getattr(self._dispatcher, "_queue_expired", 0)
+        result["inflight"] = getattr(self._dispatcher, "_inflight_alerts", 0)
+        result["shutdown_processing_incomplete"] = getattr(self._dispatcher, "_shutdown_incomplete", 0)
         return result
 
     async def check_all(self) -> dict[str, Any]:
@@ -151,6 +154,9 @@ class HealthChecker:
             channel_status = getattr(self._dispatcher, "channel_status", None)
             if isinstance(channel_status, dict):
                 components["notifications"] = {"status": "healthy", "channels": channel_status}
+                writer = getattr(self._dispatcher, "_notification_writer", None)
+                if writer is not None:
+                    components["notifications"]["queue"] = writer.status()
 
         # 전체 상태 결정
         statuses = [c["status"] for c in components.values()]
