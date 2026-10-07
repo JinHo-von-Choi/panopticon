@@ -236,9 +236,51 @@ async def test_reload_failure_skips_yaml_write():
     assert decision.error
     # 실패를 성공으로 위장하지 않는다
     assert repo.rows[pid]["status"] == STATUS_FAILED
-    assert svc._registry.reload_engine.call_args.args == ("port_scan", CURRENT)
+    # 레지스트리는 새 인스턴스 생성 실패 시 기존 엔진을 교체하지 않는다.
+    svc._registry.reload_engine.assert_called_once_with(
+        "port_scan", {**CURRENT, "threshold": 80},
+    )
     assert repo.rows[pid]["apply_error"]
     svc._editor.update_engine_config.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_candidate_keeps_real_engine_and_learned_state(tmp_path):
+    """실패한 후보를 복구한다며 정상 엔진의 학습 상태를 재생성하지 않는다."""
+    import yaml
+    from scapy.all import Ether, IP, TCP
+    from netwatcher.detection.engines.traffic_anomaly import TrafficAnomalyEngine
+    from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.utils.config import Config
+    from netwatcher.utils.yaml_editor import YamlConfigEditor
+
+    class FailingCandidate(TrafficAnomalyEngine):
+        def __init__(self, config):
+            if config.get('z_threshold') == 5.0:
+                raise RuntimeError('candidate construction failed')
+            super().__init__(config)
+
+    baseline = {'enabled': True, 'z_threshold': 3.0, 'warmup_ticks': 3}
+    active = TrafficAnomalyEngine(baseline)
+    active.analyze(Ether(src='02:00:00:00:00:10', dst='02:00:00:00:00:20') /
+                   IP(src='192.0.2.10', dst='192.0.2.20') / TCP(dport=445))
+    active.on_tick(0)
+    before = active.export_state()
+    registry = EngineRegistry(Config({}))
+    registry._engine_classes = {'traffic_anomaly': FailingCandidate}
+    registry._engines = [active]
+    path = tmp_path / 'config.yaml'
+    path.write_text(yaml.safe_dump({'netwatcher': {'engines': {'traffic_anomaly': baseline}}}))
+    original = path.read_bytes()
+    repo = FakeRepo()
+    service = ProposalService(registry, YamlConfigEditor(str(path)), repo)
+    proposal_id = await service.submit('traffic_anomaly', {'z_threshold': 5.0})
+    decision = await service.decide(proposal_id, approved=True, decided_by='admin')
+    assert decision.applied is False
+    assert registry.engines[0] is active
+    assert active.export_state() == before
+    assert path.read_bytes() == original
+    assert repo.rows[proposal_id]['status'] == STATUS_FAILED
 
 
 @pytest.mark.asyncio

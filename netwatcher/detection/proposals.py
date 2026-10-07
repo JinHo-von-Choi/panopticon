@@ -294,6 +294,7 @@ class ProposalService:
         merged = {**previous, **params}
         ok, err, _warnings = self._registry.reload_engine(engine, merged)
         if not ok:
+            # Registry는 생성 실패 시 기존 엔진을 유지한다. 재생성하면 학습을 잃는다.
             raise RuntimeError(err or "엔진 리로드 실패")
         try:
             self._yaml_editor.update_engine_config(engine, params)
