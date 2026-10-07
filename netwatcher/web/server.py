@@ -65,6 +65,9 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     app.include_router(create_events_router(event_repo, dispatcher, auth_manager=auth_manager, device_repo=device_repo), prefix=api_prefix)
     app.include_router(create_ws_router(dispatcher, auth_manager=auth_manager), prefix=api_prefix)
     app.include_router(create_devices_router(device_repo), prefix=api_prefix)
+    from netwatcher.web.routes.onboarding import create_onboarding_router
+    app.include_router(create_onboarding_router(config, app.state.health_checker,
+                       observation_service, auth_manager, yaml_editor), prefix=api_prefix)
     app.include_router(create_stats_router(stats_repo, event_repo, correlator=correlator), prefix=api_prefix)
 
     if whitelist:

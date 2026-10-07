@@ -698,6 +698,51 @@
         "revoked": "수동 역할 확인을 철회했습니다.",
         "invalid_confirmation": "유효한 확인 기록이 없습니다."
       }
+    },
+    "onboarding": {
+      "eyebrow": "설치 관측 점검",
+      "title": "설치 점검",
+      "open": "설치 상태 확인",
+      "unavailable": "설치 점검 상태를 확인할 수 없습니다.",
+      "summary": "확인할 항목 {{count}}개 · 미확인 {{unknown}}개",
+      "scope": "현재 구성의 조회 전용 점검입니다. 실제 SPAN 범위·전체 메모리 예산·운영 검증은 현장에서 확인해야 합니다.",
+      "disk_facts": "여유 {{free}} / 증거 보존 예산 + 여유분 {{required}}. 실제 쓰기 시험은 별도입니다.",
+      "memory_facts": "주 프로세스 최대 RSS {{rss}}. 워커·DB를 포함한 전체 메모리는 미측정입니다.",
+      "observation": "현재 관측 상태: {{state}}. 센서 상태가 LAN 전체 가시성을 증명하지 않습니다.",
+      "interface": "설정 인터페이스: {{interface}}. 실제 선택 인터페이스는 이 점검에서 확인하지 못했습니다.",
+      "names": {
+        "capture": "캡처 센서",
+        "coverage": "SPAN · NetFlow 관측 범위",
+        "management": "관리 경로 · 인증",
+        "storage": "증거 저장 공간",
+        "memory": "전체 메모리 예산",
+        "configuration": "설정 변경 가능 여부",
+        "database": "이벤트 데이터베이스"
+      },
+      "states": {
+        "pass": "현재 확인",
+        "attention": "확인 필요",
+        "unknown": "미확인"
+      },
+      "reasons": {
+        "capture_running": "센서 실행 상태를 확인했습니다.",
+        "capture_unavailable": "실행 중인 캡처 센서를 확인하지 못했습니다. 인터페이스와 캡처 권한을 확인하세요.",
+        "span_unverified": "스위치 포트 미러링 범위는 자동 검증할 수 없습니다. 알려진 호스트 사이의 승인된 테스트 트래픽을 대조하거나 NetFlow 수집을 검토하세요.",
+        "management_bound_local": "관리 화면은 루프백에 바인딩되어 있습니다. 외부 접근 경로를 별도로 확인하세요.",
+        "management_auth_enabled": "인증이 켜져 있습니다. 외부 접근의 TLS 또는 프록시 구성을 별도로 확인하세요.",
+        "management_auth_missing": "외부 바인딩에 인증이 꺼져 있습니다. 관리 경로와 인증 설정을 확인하세요.",
+        "evidence_directory_missing": "증거 저장 디렉터리가 없습니다. 실제 저장 위치를 확인하세요.",
+        "storage_probe_failed": "저장 공간 점검에 실패했습니다. 파일 시스템 상태를 확인하세요.",
+        "storage_capacity_checked": "디렉터리 권한 사전 점검과 여유 공간을 확인했습니다.",
+        "storage_readonly": "증거 저장 위치가 읽기 전용입니다. writable 볼륨을 확인하세요.",
+        "storage_capacity_low": "증거 보존 예산과 128MiB 여유분보다 가용 공간이 적습니다.",
+        "whole_process_budget_unverified": "전체 서비스의 메모리 상한은 검증되지 않았습니다. 워커와 DB를 포함해 목표 장비에서 측정하세요.",
+        "configuration_writable": "설정 파일의 쓰기 사전 점검을 통과했습니다.",
+        "configuration_readonly": "설정은 읽기 전용입니다. 관측은 가능하며 변경하려면 별도 writable 설정 배포가 필요합니다.",
+        "configuration_unavailable": "설정 편집 경로를 확인하지 못했습니다.",
+        "database_reachable": "현재 DB 연결을 확인했습니다.",
+        "database_unavailable": "현재 DB 연결을 확인하지 못했습니다. 저장 상태를 확인하세요."
+      }
     }
   }
 }

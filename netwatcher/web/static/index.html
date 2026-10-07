@@ -116,6 +116,11 @@
 
         <!-- Events Tab -->
         <section id="tab-events" class="tab-content active">
+            <div class="onboarding-banner">
+                <div><span class="console-eyebrow" data-i18n="console.onboarding.eyebrow">INSTALLATION SIGNAL</span>
+                <p id="onboarding-summary" aria-live="polite" data-i18n="console.onboarding.unavailable">Installation checks unknown</p></div>
+                <button type="button" class="btn" id="onboarding-open" data-i18n="console.onboarding.open">Review installation</button>
+            </div>
             <div class="toolbar">
                 <select id="filter-severity">
                     <option value="" data-i18n="toolbar.all_severities">All Severities</option>
@@ -373,6 +378,12 @@
 
         <!-- Governance Tab (PR 11: 관측 범위 + 제안 승인) -->
         <section id="tab-governance" class="tab-content">
+            <section id="onboarding-panel" class="detail-section">
+                <div class="onboarding-check-heading"><h3 data-i18n="console.onboarding.title">Installation checks</h3>
+                <button type="button" id="onboarding-refresh" class="btn" data-i18n="toolbar.refresh">Refresh</button></div>
+                <p class="scope-hint" data-i18n="console.onboarding.scope">Current checks do not certify production coverage.</p>
+                <div id="onboarding-box" class="onboarding-grid"></div>
+            </section>
             <div class="detail-section">
                 <h3>지원 프로필 (관측 범위)</h3>
                 <p class="scope-hint">
@@ -395,7 +406,7 @@
                     AI 는 설정을 바꾸지 못합니다. 제안만 올리고, 승인은 사람이 합니다.
                     승인은 곧 설정 쓰기이므로 탐지 임계값이 바뀌면 오탐이 늘어납니다.
                 </p>
-                <table class="scope-table">
+                <div class="scope-table-scroll" tabindex="0"><table class="scope-table">
                     <thead>
                         <tr>
                             <th>ID</th><th>엔진</th><th>변경값</th>
@@ -403,7 +414,7 @@
                         </tr>
                     </thead>
                     <tbody id="proposals-body"></tbody>
-                </table>
+                </table></div>
             </div>
         </section>
 

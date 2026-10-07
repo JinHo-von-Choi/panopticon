@@ -16,6 +16,17 @@
 import { authFetch } from '../core/api.js';
 import { esc, escAttr, formatTime, showToast } from '../core/utils.js';
 
+function containTables(box) {
+    box.querySelectorAll('.scope-table').forEach(table => {
+        if (table.parentElement.classList.contains('scope-table-scroll')) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'scope-table-scroll';
+        wrapper.tabIndex = 0;
+        table.before(wrapper);
+        wrapper.appendChild(table);
+    });
+}
+
 /* ── 지원 프로필 ──────────────────────────────────────────────── */
 
 export async function loadSupportProfile() {
@@ -27,6 +38,7 @@ export async function loadSupportProfile() {
         const resp = await authFetch("/api/support-profile");
         if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "?"));
         renderSupportProfile(await resp.json(), box);
+        containTables(box);
     } catch (e) {
         box.textContent = "";
         const div = document.createElement("div");
@@ -248,6 +260,7 @@ export async function loadObservation() {
         const resp = await authFetch("/api/observation");
         if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "?"));
         renderObservation(await resp.json(), box);
+        containTables(box);
     } catch (e) {
         box.textContent = "";
         const div = document.createElement("div");

@@ -17,6 +17,7 @@ import { loadWhitelist, registerWhitelistListeners } from './modules/whitelist.j
 import { loadSupportProfile, loadProposals, loadObservation } from './modules/governance.js';
 import { closeEventDrawer } from './core/detail-drawer.js';
 import { initConsole, loadConsoleState } from './modules/console.js';
+import { initOnboarding, loadOnboarding } from './modules/onboarding.js';
 
 var ws = null;
 var statsInterval = null;
@@ -37,6 +38,7 @@ async function initApp() {
 
     connectWS();
     loadConsoleState();
+    loadOnboarding();
     if (!statsInterval) statsInterval = setInterval(() => {
         if (!document.hidden) { loadStats(); loadConsoleState(); }
     }, 30000);
@@ -128,7 +130,7 @@ function registerListeners() {
             if (target === "blocklist")    loadBlocklist(0);
             if (target === "whitelist")    loadWhitelist();
             if (target === "ai-analyzer") { loadAiAnalyzerStatus(); loadAiLogs(0); }
-            if (target === "governance")    { loadSupportProfile(); loadObservation(); loadProposals(); }
+            if (target === "governance")    { loadSupportProfile(); loadObservation(); loadProposals(); loadOnboarding(); }
         });
     });
 
@@ -312,6 +314,7 @@ window.addEventListener("DOMContentLoaded", () => {
     registerListeners();
     initConsole();
     initI18n(() => { if (isAuthEnabled()) { loadEvents(); loadEngines(); loadConsoleState(); } }).then(async () => {
+        initOnboarding();
         const token = getAuthToken();
         const headers = token ? { "Authorization": `Bearer ${token}` } : {};
         try {

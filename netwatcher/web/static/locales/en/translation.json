@@ -698,6 +698,51 @@
         "revoked": "Manual role confirmation revoked.",
         "invalid_confirmation": "No valid confirmation record."
       }
+    },
+    "onboarding": {
+      "eyebrow": "INSTALLATION SIGNAL",
+      "title": "Installation checks",
+      "open": "Review installation",
+      "unavailable": "Installation check status unavailable.",
+      "summary": "{{count}} checks need attention · {{unknown}} unverified",
+      "scope": "Read-only checks of current configuration. Validate actual SPAN coverage, whole-service memory and production behavior on site.",
+      "disk_facts": "Free {{free}} / evidence budget plus headroom {{required}}. Actual writes are not tested.",
+      "memory_facts": "Main-process peak RSS {{rss}}. Combined workers and database memory is unmeasured.",
+      "observation": "Current observation: {{state}}. Sensor status does not prove LAN-wide visibility.",
+      "interface": "Configured interface: {{interface}}. Actual selected interface is unverified here.",
+      "names": {
+        "capture": "Capture sensor",
+        "coverage": "SPAN · NetFlow coverage",
+        "management": "Management path · authentication",
+        "storage": "Evidence storage",
+        "memory": "Whole-service memory budget",
+        "configuration": "Configuration writability",
+        "database": "Event database"
+      },
+      "states": {
+        "pass": "Checked now",
+        "attention": "Needs attention",
+        "unknown": "Unverified"
+      },
+      "reasons": {
+        "capture_running": "The sensor reports running.",
+        "capture_unavailable": "Running capture is unconfirmed. Check the interface and capture permissions.",
+        "span_unverified": "Switch mirror coverage cannot be verified automatically. Compare authorized test traffic between known hosts or review NetFlow collection.",
+        "management_bound_local": "Management binds to loopback. Verify any external access path separately.",
+        "management_auth_enabled": "Authentication is enabled. Verify TLS or the external proxy separately.",
+        "management_auth_missing": "External bind has authentication disabled. Review management access and authentication.",
+        "evidence_directory_missing": "Evidence directory is missing. Verify the actual storage location.",
+        "storage_probe_failed": "Storage check failed. Review the filesystem.",
+        "storage_capacity_checked": "Directory permissions and available capacity passed prechecks.",
+        "storage_readonly": "Evidence storage is read-only. Review the writable volume.",
+        "storage_capacity_low": "Free capacity is below the evidence budget plus 128MiB headroom.",
+        "whole_process_budget_unverified": "Whole-service memory limits are unverified. Measure workers and database on the target hardware.",
+        "configuration_writable": "Configuration write precheck passed.",
+        "configuration_readonly": "Configuration is read-only. Monitoring can continue; changes require a writable configuration deployment.",
+        "configuration_unavailable": "Configuration editor is unavailable.",
+        "database_reachable": "Database connection checked now.",
+        "database_unavailable": "Database connection is unconfirmed. Review persistence status."
+      }
     }
   }
 }
