@@ -119,6 +119,16 @@ export function renderDevicesPage(page) {
     if (!body) return;
 
     body.innerHTML = "";
+    if (!devicesFiltered.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 12;
+        cell.className = 'console-empty';
+        cell.dataset.i18n = devicesAll.length ? 'console.no_device_match' : 'console.no_devices';
+        cell.textContent = window.i18next.t(cell.dataset.i18n);
+        row.append(cell);
+        body.append(row);
+    }
     for (var i = start; i < end; i++) {
         body.appendChild(renderDeviceRow(devicesFiltered[i]));
     }

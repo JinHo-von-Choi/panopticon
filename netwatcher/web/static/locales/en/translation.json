@@ -590,5 +590,30 @@
     "severity": "Severity",
     "protocol": "Protocol",
     "enabled": "Enabled"
+  },
+  "console": {
+    "auth": "ACCESS CONTROL",
+    "subtitle": "LOCAL NETWORK OBSERVATORY",
+    "navigate": "Navigate · Ctrl K",
+    "workspace": "OBSERVATION / INVESTIGATION / RESPONSE",
+    "title": "Network operations console",
+    "description": "Read the observation scope. Follow the evidence. Review every response.",
+    "readiness": "SENSOR READINESS",
+    "unknown": "Unknown",
+    "unchecked": "Waiting for a state check",
+    "ready": "Ready to observe",
+    "not_ready": "Review required",
+    "ready_reason": "Observation window and storage are responding",
+    "db_unavailable": "Check the data store connection",
+    "sensor_unavailable": "Check that the packet sensor is running",
+    "engines_unavailable": "Check the active detection engines",
+    "queue_unavailable": "Check the alert processing queue",
+    "observation_unavailable": "Observation scope cannot be verified",
+    "state_unavailable": "State check failed. Please retry",
+    "no_screens": "No matching screens",
+    "close": "Close",
+    "find_screen": "Find a screen",
+    "no_devices": "No assets observed. Check sensor readiness and observation scope.",
+    "no_device_match": "No matching assets. Adjust the search and filters."
   }
 }

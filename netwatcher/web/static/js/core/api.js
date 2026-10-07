@@ -4,6 +4,7 @@
 
 let _token = localStorage.getItem("nw_token");
 let _authEnabled = false;
+let _authRequired = true;
 
 export function getAuthToken() {
     return _token;
@@ -20,7 +21,11 @@ export function setAuthToken(token) {
 }
 
 export function isAuthEnabled() {
-    return _authEnabled && !!_token;
+    return _authEnabled && (!_authRequired || !!_token);
+}
+
+export function setAuthRequired(required) {
+    _authRequired = required;
 }
 
 export function setAuthEnabled(enabled) {

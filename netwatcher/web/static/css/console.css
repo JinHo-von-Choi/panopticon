@@ -1,0 +1,71 @@
+/* 로고의 렌즈와 청록 금속 / 주황 회로선을 반영한 콘솔 토큰. */
+:root {
+    --bg: #070c12; --surface: #0c1622; --surface2: #132333; --surface3: #1b3041;
+    --border: #294453; --border-focus: #63dae8; --text: #e6eff5;
+    --text-dim: #a6b7c7; --text-faint: #a4b3c3;
+    --accent: #63dae8; --accent-dim: #238a9a;
+    --accent-bg: rgba(99,218,232,.08); --accent-glow: rgba(99,218,232,.18);
+    --critical: #ff727b; --warning: #f3c969; --green: #80dbb0; --info: #63dae8;
+    --copper: #ff9a62; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 8px;
+    --font-size-table: 13px; --table-header-bg: #10202d;
+    --table-row-hover: rgba(99,218,232,.05); --table-row-selected: rgba(99,218,232,.12);
+}
+body { background: var(--bg); font-size: 14px; }
+header { height: 84px; padding: 0 28px; background: var(--bg); backdrop-filter: none; border-bottom: 1px solid var(--border); }
+header h1 { font: 700 21px var(--font-mono); letter-spacing: 2px; background: none; -webkit-text-fill-color: var(--text); }
+.console-brand { width: 64px; height: auto; }
+.console-eyebrow { color: var(--text-dim); font: 500 12px var(--font-mono); letter-spacing: 1.2px; margin: 0 0 7px; }
+.header-left .console-eyebrow { font-size: 12px; }
+.header-right { flex-wrap: wrap; justify-content: flex-end; }
+main { max-width: none; margin: 0 0 0 208px; padding: 32px 28px 48px; }
+.console-intro { display: flex; align-items: stretch; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.console-intro h2 { font: 700 28px var(--font-display); letter-spacing: -.7px; margin: 0 0 10px; }
+.console-description { color: var(--text-dim); margin: 0; font-size: 14px; line-height: 1.7; max-width: 620px; }
+.console-readiness { position: relative; text-align: left; min-width: 235px; max-width: 350px; background: var(--surface);
+    border: 1px solid var(--border); border-left: 3px solid var(--text-dim); padding: 16px 20px; cursor: pointer; color: var(--text); }
+.console-readiness strong { display: block; margin: 7px 0; font: 600 17px var(--font-display); }
+#console-ready-reason { color: var(--text-dim); font-size: 12px; line-height: 1.6; display: block; }
+.console-readiness[data-state="ready"] { border-left-color: var(--green); }
+.console-readiness[data-state="not_ready"] { border-left-color: var(--warning); }
+.tabs { position: fixed; top: 84px; left: 0; bottom: 0; width: 208px; overflow-y: auto; display: flex; flex-direction: column;
+    gap: 5px; padding: 28px 14px; margin: 0; border-right: 1px solid var(--border); border-bottom: none; background: var(--surface); counter-reset: station; }
+.tabs::before { content: 'PANOPTICON / CONSOLE'; font: 500 12px var(--font-mono); letter-spacing: .6px; color: var(--text-dim); padding: 0 6px 20px; }
+.tab { flex: 0 0 auto; width: 100%; text-align: left; padding: 13px 12px; margin: 0; border: 1px solid transparent; border-radius: 4px;
+    font-size: 13px; display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.tab::before { counter-increment: station; content: counter(station, decimal-leading-zero); color: var(--text-dim); font: 12px var(--font-mono); }
+.tab.active { color: var(--accent); background: var(--accent-bg); border: 1px solid var(--border); border-left: 2px solid var(--accent); }
+.tab.active::after { display: none; }
+.stats-grid { gap: 12px; }
+.stat-card { border-radius: 6px; background: var(--surface); box-shadow: none; }
+.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.console-empty { padding: 36px 20px; text-align: center; color: var(--text-dim); white-space: normal; line-height: 1.8; }
+.btn-accent { background: var(--copper); border-color: var(--copper); color: var(--bg); }
+.btn-accent:hover { background: #ffb18a; color: var(--bg); }
+:is(button, input, select, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.login-overlay { background: var(--bg); background-image: radial-gradient(ellipse at 50% 38%, rgba(35,138,154,.12), transparent 65%); }
+.login-box { position: relative; border-top: 2px solid var(--copper); padding: 28px 36px 36px; box-shadow: 0 24px 80px rgba(0,0,0,.4); }
+.login-box::before { content: ''; position: absolute; top: -1px; left: -1px; width: 24px; height: 24px; border-top: 2px solid var(--copper); border-left: 2px solid var(--copper); }
+.login-logo { width: 280px; margin-bottom: 24px; }
+.login-box input { min-height: 44px; }
+.console-palette { width: min(520px, calc(100vw - 32px)); background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-top: 2px solid var(--copper); border-radius: 6px; padding: 24px; margin: 12vh auto auto; box-shadow: var(--shadow-lg); }
+.console-palette::backdrop { background: rgba(7,12,18,.82); }
+.console-palette input { width: 100%; margin: 16px 0; min-height: 44px; }
+.console-palette-list { max-height: 50vh; overflow-y: auto; display: grid; gap: 6px; }
+.console-palette-list button { text-align: left; min-height: 44px; background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 10px 14px; cursor: pointer; }
+.console-palette-close { float: right; }
+@media (max-width: 1100px) { .console-intro h2 { font-size: 24px; } main { margin-left: 180px; padding: 24px 20px; } .tabs { width: 180px; } }
+@media (max-width: 768px) {
+    header { height: auto; min-height: 84px; padding: 12px 16px; gap: 16px; flex-wrap: wrap; }
+    header h1 { font-size: 18px; } .console-brand { width: 48px; } .header-left .console-eyebrow { letter-spacing: 0; }
+    .header-right { gap: 8px; } main { margin: 0; padding: 20px 16px; }
+    main { display: flex; flex-direction: column; }
+    .console-intro { order: 0; } .tabs { order: 1; } .stats-grid { order: 2; } .tab-content { order: 3; }
+    .stat-card { padding: 14px; } .stat-value { font-size: 25px; }
+    .tabs { position: static; width: auto; flex-direction: row; overflow-x: auto; padding: 10px 0; border: 0; margin: 20px 0; }
+    .tabs::before { display: none; } .tabs .tab { width: auto; padding: 12px; flex-shrink: 0; }
+    .console-intro { flex-direction: column; gap: 16px; } .console-readiness { max-width: none; min-width: 0; }
+    .console-intro h2 { font-size: 25px; } .console-search { min-height: 40px; }
+    .login-box { padding: 24px; max-width: calc(100vw - 32px); }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

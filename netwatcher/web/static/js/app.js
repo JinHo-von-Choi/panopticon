@@ -3,7 +3,7 @@
  */
 
 import { initI18n } from './core/i18n.js';
-import { getAuthToken, setAuthToken, setAuthEnabled, isAuthEnabled, authFetch } from './core/api.js';
+import { getAuthToken, setAuthToken, setAuthEnabled, setAuthRequired, isAuthEnabled, authFetch } from './core/api.js';
 import { loadEvents, renderEventRow, exportEvents } from './modules/events.js';
 import { loadDevices, filterDevices, renderDevicesPage } from './modules/devices.js';
 import { loadStats, loadCharts, bumpSeverityCounter } from './modules/stats.js';
@@ -15,6 +15,7 @@ import { registerHuntListeners } from './modules/hunting.js';
 import { initAiAnalyzerTab, loadAiAnalyzerStatus, loadAiLogs, registerAiAnalyzerListeners } from './modules/ai_analyzer.js';
 import { loadWhitelist, registerWhitelistListeners } from './modules/whitelist.js';
 import { loadSupportProfile, loadProposals, loadObservation } from './modules/governance.js';
+import { initConsole, loadConsoleState } from './modules/console.js';
 
 var ws = null;
 var statsInterval = null;
@@ -23,7 +24,7 @@ async function initApp() {
     console.log("App Initializing...");
     setAuthEnabled(true);
     document.getElementById("login-overlay").classList.add("hidden");
-    document.getElementById("btn-logout").style.display = "";
+    document.getElementById("btn-logout").style.display = getAuthToken() ? "" : "none";
 
     await Promise.all([
         loadStats(),
@@ -34,7 +35,10 @@ async function initApp() {
     ]);
 
     connectWS();
-    if (!statsInterval) statsInterval = setInterval(loadStats, 30000);
+    loadConsoleState();
+    if (!statsInterval) statsInterval = setInterval(() => {
+        if (!document.hidden) { loadStats(); loadConsoleState(); }
+    }, 30000);
     startFreshnessClock();
 }
 
@@ -306,7 +310,8 @@ function registerListeners() {
 // --- Bootstrap ---
 window.addEventListener("DOMContentLoaded", () => {
     registerListeners();
-    initI18n(() => { if (isAuthEnabled()) { loadEvents(0); loadEngines(); } }).then(async () => {
+    initConsole();
+    initI18n(() => { if (isAuthEnabled()) { loadEvents(0); loadEngines(); loadConsoleState(); } }).then(async () => {
         const token = getAuthToken();
         const headers = token ? { "Authorization": `Bearer ${token}` } : {};
         try {
@@ -315,6 +320,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
             // 인증이 꺼진 배포에서는 로그인 화면을 띄우지 않는다.
             if (data && data.enabled === false) {
+                setAuthRequired(false);
                 initApp();
             } else if (resp.ok && token) {
                 initApp();

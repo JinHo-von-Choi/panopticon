@@ -6,6 +6,7 @@
     <title>Panopticon Dashboard</title>
     <link rel="stylesheet" href="/fonts/fonts.css">
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/console.css">
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/vendor/i18next.min.js"></script>
     <script src="/js/vendor/i18nextHttpBackend.min.js"></script>
@@ -14,6 +15,7 @@
     <!-- Login Overlay -->
     <div id="login-overlay" class="login-overlay hidden">
         <div class="login-box">
+            <p class="console-eyebrow" data-i18n="console.auth">ACCESS CONTROL</p>
             <img src="/img/panopticon.png" alt="Panopticon" class="login-logo" />
             <form id="login-form">
                 <div class="form-group">
@@ -24,7 +26,7 @@
                     <label for="login-password" data-i18n="login.password">Password</label>
                     <input type="password" id="login-password" class="input-search" autocomplete="current-password" style="width:100%" />
                 </div>
-                <div id="login-error" class="login-error"></div>
+                <div id="login-error" class="login-error" role="alert"></div>
                 <button type="submit" class="btn btn-accent" style="width:100%;margin-top:4px" data-i18n="login.button">Login</button>
             </form>
         </div>
@@ -32,10 +34,12 @@
 
     <header>
         <div class="header-left">
+            <img class="console-brand" src="/img/panopticon.png" alt="">
             <span id="connection-status" class="status-dot disconnected" data-i18n="header.status.disconnected" title="WebSocket disconnected"></span>
-            <h1>Panopticon</h1>
+            <div><p class="console-eyebrow" data-i18n="console.subtitle">LOCAL NETWORK OBSERVATORY</p><h1>PANOPTICON</h1></div>
         </div>
         <div class="header-right">
+            <button id="console-search" class="btn console-search" data-i18n="console.navigate">Navigate · Ctrl K</button>
             <select id="lang-selector" class="input-search" style="font-size:12px;padding:4px 8px;margin-right:8px;background:var(--bg-card);border-color:var(--border-color)">
                 <option value="ko">🇰🇷 한국어</option>
                 <option value="en">🇺🇸 English</option>
@@ -46,6 +50,17 @@
     </header>
 
     <main>
+        <section class="console-intro" aria-labelledby="console-title">
+            <div><p class="console-eyebrow" data-i18n="console.workspace">OBSERVATION / INVESTIGATION / RESPONSE</p>
+                <h2 id="console-title" data-i18n="console.title">Network operations console</h2>
+                <p class="console-description" data-i18n="console.description">Read the observation scope. Follow the evidence. Review every response.</p>
+            </div>
+            <button class="console-readiness" id="console-readiness" data-state="unknown">
+                <span class="console-eyebrow" data-i18n="console.readiness">SENSOR READINESS</span>
+                <strong id="console-ready-label" data-i18n="console.unknown">Unknown</strong>
+                <span id="console-ready-reason" data-i18n="console.unchecked">Waiting for a state check</span>
+            </button>
+        </section>
         <!-- Stats Cards -->
         <section class="stats-grid">
             <div class="stat-card critical">
@@ -86,7 +101,7 @@
         </section>
 
         <!-- Tabs -->
-        <nav class="tabs">
+        <nav class="tabs" aria-label="Console navigation">
             <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
             <button class="tab" data-tab="incidents" data-i18n="tabs.incidents">Incidents</button>
             <button class="tab" data-tab="traffic" data-i18n="tabs.traffic">Traffic</button>
