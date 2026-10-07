@@ -2,8 +2,8 @@
  * NetWatcher Devices Module (Production Grade - No Omissions)
  */
 
-import { authFetch } from '../core/api.js';
-import { esc, escAttr, textEl, formatTime, formatBytes, renderPagination } from '../core/utils.js';
+import { authFetch, canConfigure } from '../core/api.js';
+import { esc, escAttr, textEl, formatTime, formatBytes, renderPagination, showToast } from '../core/utils.js';
 import { DEVICE_TYPE_MAP } from '../core/constants.js';
 
 export var whitelistData = { ips: [], macs: [], domains: [], ip_ranges: [] };
@@ -234,6 +234,7 @@ function renderDeviceModalContent(dev) {
         </form>
     `;
     body.innerHTML = html;
+    renderAssetContext(body, dev);
 
     var wlBtn = body.querySelector("[data-wl-mac]");
     if (wlBtn) {
@@ -241,6 +242,51 @@ function renderDeviceModalContent(dev) {
             window.handleWhitelistToggle("mac", wlBtn.dataset.wlMac);
         });
     }
+}
+
+function renderAssetContext(body, dev) {
+    const t = (key, options = {}) => window.i18next.t('console.asset_context.' + key, options);
+    const panel = document.createElement('section');
+    panel.className = 'detail-section asset-context-panel';
+    const context = dev.asset_context || {};
+    const roles = ['nas', 'backup', 'database', 'printer', 'gateway', 'pc', 'unknown'];
+    panel.innerHTML = `<h3>${esc(t('title'))}</h3>
+        <p>${esc(context.status === 'confirmed' ? t('confirmed', {role: t('roles.' + context.role)}) : t('unconfirmed'))}</p>
+        <p class="text-dim">${esc(t('scope'))}</p>
+        ${context.reason ? `<p>${esc(t('reasons.' + context.reason))}</p>` : ''}
+        ${context.expires_at ? `<p>${esc(t('expires'))}: ${esc(formatTime(context.expires_at))}</p>` : ''}`;
+    if (canConfigure() && dev.ip_address) {
+        panel.innerHTML += `<label>${esc(t('role'))}<select class="input-search" id="asset-role">
+            ${roles.map(role => `<option value="${role}" ${context.role === role ? 'selected' : ''}>${esc(t('roles.' + role))}</option>`).join('')}</select></label>
+            <label>${esc(t('evidence'))}<textarea id="asset-evidence" class="input-search" maxlength="1000" rows="3"></textarea></label>
+            <label>${esc(t('validity'))}<select id="asset-valid-hours" class="input-search"><option value="24">${esc(t('day'))}</option><option value="168" selected>${esc(t('week'))}</option><option value="720">${esc(t('month'))}</option></select></label>
+            <label><input type="checkbox" id="asset-ownership"> ${esc(t('ownership', {ip: dev.ip_address, mac: dev.mac_address}))}</label>
+            <button type="button" class="btn btn-accent" id="asset-confirm">${esc(t('save'))}</button>`;
+    }
+    body.querySelector('form').before(panel);
+    panel.querySelector('#asset-confirm')?.addEventListener('click', async event => {
+        const evidence = panel.querySelector('#asset-evidence').value.trim();
+        if (!panel.querySelector('#asset-ownership').checked || evidence.length < 3) {
+            showToast(t('required'), 'error'); return;
+        }
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+            const response = await authFetch('/api/devices/' + encodeURIComponent(dev.mac_address) + '/context', {
+                method: 'PUT', body: JSON.stringify({role: panel.querySelector('#asset-role').value,
+                    ip_address: dev.ip_address, expected_version: dev.context_version || 0,
+                    valid_hours: Number(panel.querySelector('#asset-valid-hours').value),
+                    ownership_confirmed: true, evidence})});
+            if (!response?.ok) {
+                showToast(t(response?.status === 409 ? 'conflict' : 'failed'), 'error'); return;
+            }
+            showToast(t('saved'), 'success');
+            await window.showDeviceDetail(dev.mac_address);
+        } catch (error) {
+            console.error('Asset confirmation request failed', error);
+            showToast(t('failed'), 'error');
+        } finally { button.disabled = false; }
+    });
 }
 
 window.handleWhitelistToggle = async function(type, value) {

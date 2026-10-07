@@ -196,7 +196,10 @@ function renderContext(ev) {
         <p class="text-dim">${esc(t('representative'))}</p></section>`;
     html += `<section class="detail-section"><h3>${esc(t('asset'))}</h3><div class="detail-grid">`;
     html += row(t('source'), ev.source_mac || ev.source_ip);
-    html += row(t('role'), ev.asset_context?.status === 'confirmed' ? ev.asset_context.role : t('role_unknown'));
+    html += row(t('role'), ev.asset_context?.status === 'confirmed' ? window.i18next.t('console.asset_context.roles.' + ev.asset_context.role) : t('role_unknown'));
+    if (ev.asset_context?.scope === 'current_inventory') {
+        html += row(window.i18next.t('console.asset_context.title'), window.i18next.t('console.asset_context.scope'));
+    }
     html += `</div><p class="text-dim">${esc(t('relationship_unknown'))}</p></section>`;
     html += `<section class="detail-section"><h3>${esc(t('pcap'))}</h3><div class="detail-grid">`;
     html += htmlRow(t('state'), `<span class="evidence-layer" data-pcap-state="${state}">${esc(t('pcap_states.' + state))}</span>`);

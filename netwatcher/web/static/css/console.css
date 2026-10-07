@@ -107,3 +107,6 @@ main { max-width: none; margin: 0 0 0 208px; padding: 32px 28px 48px; }
 
 .events-live-pending { color: var(--copper); font: 11px var(--font-mono); padding: 8px 12px; border: 1px solid var(--border); }
 .events-live-pending[hidden] { display: none; }
+.asset-context-panel label { display: block; margin: 12px 0; color: var(--text-dim); }
+.asset-context-panel select, .asset-context-panel textarea { display: block; width: 100%; margin-top: 6px; }
+.asset-context-panel input[type="checkbox"] { accent-color: var(--accent); }

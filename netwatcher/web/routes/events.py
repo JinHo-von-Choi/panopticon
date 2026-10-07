@@ -87,6 +87,7 @@ def create_events_router(
     dispatcher: AlertDispatcher,
     pcap_writer: PCAPWriter | None = None,
     auth_manager: "AuthManager | None" = None,
+    device_repo=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/events", tags=["events"])
 
@@ -132,6 +133,9 @@ def create_events_router(
     async def get_event(event_id: int):
         event = await event_repo.get_by_id(event_id)
         if not event: return JSONResponse({"error": "Event not found"}, status_code=404)
+        if device_repo is not None:
+            event['asset_context'] = await device_repo.context_for_source(
+                event.get('source_ip'), event.get('source_mac'))
         return {"event": _with_evidence(event)}
 
     return router

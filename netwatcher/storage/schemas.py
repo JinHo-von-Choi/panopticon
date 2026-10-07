@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS devices (
     device_type      VARCHAR(32)  NOT NULL DEFAULT 'unknown',
     hostname_sources JSONB        NOT NULL DEFAULT '{}',
     ip_history       JSONB        NOT NULL DEFAULT '[]',
-    host_labels      JSONB        NOT NULL DEFAULT '[]'
+    host_labels      JSONB        NOT NULL DEFAULT '[]',
+    context_profile  JSONB        NOT NULL DEFAULT '{}',
+    context_version  BIGINT       NOT NULL DEFAULT 0,
+    ip_mapping_version BIGINT     NOT NULL DEFAULT 0
 );
 """
 
@@ -390,12 +393,37 @@ CREATE TABLE IF NOT EXISTS flush_receipts (
 CREATE INDEX IF NOT EXISTS idx_flush_receipts_created ON flush_receipts(created_at);
 """
 
+ASSET_CONTEXT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS asset_context_history (
+    id BIGSERIAL PRIMARY KEY,
+    mac_address MACADDR NOT NULL,
+    version BIGINT NOT NULL,
+    profile JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(mac_address, version)
+);
+CREATE OR REPLACE FUNCTION bump_device_mapping() RETURNS trigger AS $$
+BEGIN
+    IF NEW.ip_address IS DISTINCT FROM OLD.ip_address THEN
+        NEW.ip_mapping_version := OLD.ip_mapping_version + 1;
+    ELSE
+        NEW.ip_mapping_version := OLD.ip_mapping_version;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS devices_mapping_generation ON devices;
+CREATE TRIGGER devices_mapping_generation BEFORE UPDATE ON devices
+FOR EACH ROW EXECUTE FUNCTION bump_device_mapping();
+"""
+
 ALL_SCHEMAS = [
     FLUSH_RECEIPTS_TABLE,
     EVENT_INGEST_TABLE,
     EVENTS_TABLE,
     *EVENTS_INDEXES,
     DEVICES_TABLE,
+    ASSET_CONTEXT_SCHEMA,
     *DEVICES_INDEXES,
     CUSTOM_BLOCKLIST_TABLE,
     *CUSTOM_BLOCKLIST_INDEXES,

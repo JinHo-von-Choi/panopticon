@@ -62,7 +62,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     # 인증이 꺼져 있어도 /auth/status는 응답해야 대시보드가 로그인 화면 표시 여부를 판단한다.
     from netwatcher.web.routes.auth import create_auth_router
     app.include_router(create_auth_router(auth_manager), prefix=api_prefix)
-    app.include_router(create_events_router(event_repo, dispatcher, auth_manager=auth_manager), prefix=api_prefix)
+    app.include_router(create_events_router(event_repo, dispatcher, auth_manager=auth_manager, device_repo=device_repo), prefix=api_prefix)
     app.include_router(create_ws_router(dispatcher, auth_manager=auth_manager), prefix=api_prefix)
     app.include_router(create_devices_router(device_repo), prefix=api_prefix)
     app.include_router(create_stats_router(stats_repo, event_repo, correlator=correlator), prefix=api_prefix)

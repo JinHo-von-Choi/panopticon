@@ -650,6 +650,43 @@
       },
       "new_pending": "{{count}} new events · refresh to review",
       "unmeasured": "Not measured"
+    },
+    "asset_context": {
+      "title": "Human-confirmed asset role",
+      "confirmed": "Confirmed role: {{role}}",
+      "unconfirmed": "Role unconfirmed",
+      "scope": "Current inventory only. This does not assert the role at event time or create a detection exception.",
+      "role": "Role to confirm",
+      "evidence": "Ownership or installation evidence",
+      "validity": "Confirmation validity",
+      "expires": "Expires",
+      "day": "1 day",
+      "week": "7 days",
+      "month": "30 days",
+      "ownership": "I verified that {{ip}} currently belongs to asset {{mac}}.",
+      "save": "Save role confirmation",
+      "required": "Confirm address ownership and enter at least 3 characters of evidence.",
+      "conflict": "Address or confirmation version changed. Reload and verify ownership.",
+      "failed": "Confirmation could not be saved. The existing record remains.",
+      "saved": "Asset role confirmation saved.",
+      "roles": {
+        "nas": "NAS",
+        "backup": "Backup server",
+        "database": "Database server",
+        "printer": "Printer",
+        "gateway": "Gateway",
+        "pc": "Workstation",
+        "unknown": "Revoke confirmation"
+      },
+      "reasons": {
+        "not_confirmed": "No manual confirmation.",
+        "human_confirmed": "An administrator confirmed ownership and role.",
+        "mapping_changed": "IP mapping changed. Confirm ownership again.",
+        "shared_ip": "Multiple assets use this address. Verify ownership.",
+        "expired": "Role confirmation expired.",
+        "revoked": "Manual role confirmation revoked.",
+        "invalid_confirmation": "No valid confirmation record."
+      }
     }
   }
 }

@@ -650,6 +650,43 @@
       },
       "new_pending": "새 사건 {{count}}건 · 새로고침으로 확인",
       "unmeasured": "측정하지 않음"
+    },
+    "asset_context": {
+      "title": "사람이 확인한 자산 역할",
+      "confirmed": "확인된 역할: {{role}}",
+      "unconfirmed": "역할 미확인",
+      "scope": "현재 자산 정보입니다. 사건 발생 당시 역할이나 탐지 예외를 뜻하지 않습니다.",
+      "role": "확인할 역할",
+      "evidence": "소유자·설치 위치 등 확인 근거",
+      "validity": "확인 유효 기간",
+      "expires": "만료",
+      "day": "1일",
+      "week": "7일",
+      "month": "30일",
+      "ownership": "현재 {{ip}}가 {{mac}} 자산의 주소임을 직접 확인했습니다.",
+      "save": "역할 확인 저장",
+      "required": "주소 소유 관계에 체크하고 확인 근거를 3자 이상 입력하세요.",
+      "conflict": "주소 또는 확인 버전이 바뀌었습니다. 다시 조회하고 소유 관계를 확인하세요.",
+      "failed": "확인을 저장하지 못했습니다. 기존 확인을 유지합니다.",
+      "saved": "자산 역할 확인을 저장했습니다.",
+      "roles": {
+        "nas": "NAS",
+        "backup": "백업 서버",
+        "database": "데이터베이스 서버",
+        "printer": "프린터",
+        "gateway": "게이트웨이",
+        "pc": "일반 PC",
+        "unknown": "확인 철회"
+      },
+      "reasons": {
+        "not_confirmed": "수동 확인이 없습니다.",
+        "human_confirmed": "관리자가 소유 관계와 역할을 확인했습니다.",
+        "mapping_changed": "IP 매핑이 변경되어 다시 확인해야 합니다.",
+        "shared_ip": "여러 자산이 같은 IP를 사용합니다. 소유 관계를 다시 확인하세요.",
+        "expired": "역할 확인이 만료되었습니다.",
+        "revoked": "수동 역할 확인을 철회했습니다.",
+        "invalid_confirmation": "유효한 확인 기록이 없습니다."
+      }
     }
   }
 }

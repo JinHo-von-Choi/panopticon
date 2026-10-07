@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+from ipaddress import ip_address
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from netwatcher.storage.repositories import DeviceRepository
+from netwatcher.web.rbac import Role, require_role
 
 _MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 
@@ -43,6 +47,28 @@ class UpdateDeviceRequest(BaseModel):
     is_known: bool | None = None
 
 
+class ConfirmContextRequest(BaseModel):
+    role: Literal['nas', 'backup', 'database', 'printer', 'gateway', 'pc', 'unknown']
+    ip_address: str
+    expected_version: int = Field(ge=0)
+    valid_hours: int = Field(default=168, ge=1, le=720)
+    ownership_confirmed: Literal[True]
+    evidence: str = Field(min_length=3, max_length=1000)
+
+    @field_validator('ip_address')
+    @classmethod
+    def validate_ip(cls, value):
+        return str(ip_address(value))
+
+    @field_validator('evidence')
+    @classmethod
+    def validate_evidence(cls, value):
+        value = value.strip()
+        if len(value) < 3 or '\x00' in value:
+            raise ValueError('Confirmation evidence is required')
+        return value
+
+
 def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
     router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -50,6 +76,25 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
     async def list_devices():
         devices = await device_repo.list_all()
         return {"devices": devices}
+
+    @router.put('/{mac_address}/context')
+    async def confirm_context(mac_address: str, body: ConfirmContextRequest,
+                              actor: dict = Depends(require_role(Role.ADMIN))):
+        if not _valid_mac(mac_address):
+            raise HTTPException(400, 'Invalid MAC address')
+        if await device_repo.get_by_mac(mac_address) is None:
+            raise HTTPException(404, 'Device not found')
+        now = datetime.now(timezone.utc)
+        profile = {'role': body.role, 'confirmed_by': str(actor.get('sub', 'unknown'))[:255],
+                   'confirmed_at': now.isoformat(),
+                   'expires_at': (now + timedelta(hours=body.valid_hours)).isoformat(),
+                   'evidence': body.evidence}
+        device = await device_repo.confirm_context(mac_address, body.ip_address,
+                                                  body.expected_version, profile)
+        if device is None:
+            raise HTTPException(409, 'Mapping or confirmation changed; reload and verify ownership')
+        context = await device_repo.context_for_device(device)
+        return {'ok': True, 'device': device, 'asset_context': context}
 
     # 고정 경로를 /{mac_address}보다 먼저 선언해야 "register"가 MAC으로 해석되지 않는다.
     @router.post("/register")
@@ -79,6 +124,7 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
     async def get_device(mac_address: str):
         device = await device_repo.get_by_mac(mac_address)
         if not device: raise HTTPException(404, "Device not found")
+        device['asset_context'] = await device_repo.context_for_device(device)
         return {"device": device}
 
     @router.post("/{mac_address}")

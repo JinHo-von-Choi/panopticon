@@ -472,6 +472,49 @@ class DeviceRepository:
         """등록된 디바이스 총 수를 반환한다."""
         return await self._db.pool.fetchval("SELECT COUNT(*) FROM devices")
 
+    async def context_for_device(self, device: dict) -> dict:
+        from netwatcher.inventory.context import asset_context
+        shared = bool(device.get("ip_address")) and await self._db.pool.fetchval(
+            "SELECT count(*) > 1 FROM devices WHERE ip_address = $1::inet",
+            str(device.get("ip_address")),
+        )
+        return asset_context(device, shared_ip=shared)
+
+    async def context_for_source(self, ip: str | None, mac: str | None) -> dict:
+        """현재 소유 관계만 반환한다. IP만으로 공유 자산을 추정하지 않는다."""
+        unknown = {"status": "unknown", "scope": "current_inventory", "reason": "not_confirmed"}
+        if not ip:
+            return unknown
+        rows = await self._db.pool.fetch("SELECT * FROM devices WHERE ip_address = $1::inet", ip)
+        if len(rows) != 1:
+            return dict(unknown, reason="shared_ip" if rows else "not_confirmed")
+        device = dict(rows[0])
+        if mac and str(device["mac_address"]).lower() != mac.lower().replace("-", ":"):
+            return dict(unknown, reason="mapping_changed")
+        from netwatcher.inventory.context import asset_context
+        return asset_context(device)
+
+    async def confirm_context(self, mac: str, ip: str, version: int, profile: dict) -> dict | None:
+        """현재 매핑·버전을 비교하고 확인과 이력을 같은 문장으로 기록한다."""
+        row = await self._db.pool.fetchrow(
+            """WITH updated AS (
+                UPDATE devices SET context_version = context_version + 1,
+                    context_profile = $4::jsonb || jsonb_build_object(
+                        'ip', host(ip_address), 'mapping_version', ip_mapping_version)
+                WHERE mac_address = $1::macaddr AND ip_address = $2::inet
+                  AND context_version = $3
+                  AND ($4::jsonb->>'role' = 'unknown' OR
+                       (SELECT count(*) FROM devices WHERE ip_address = $2::inet) = 1)
+                RETURNING *
+            ), history AS (
+                INSERT INTO asset_context_history(mac_address, version, profile)
+                SELECT mac_address, context_version, context_profile FROM updated
+                RETURNING id
+            ) SELECT updated.* FROM updated CROSS JOIN history""",
+            mac, ip, version, profile,
+        )
+        return dict(row) if row else None
+
     async def get_all_macs(self) -> set[str]:
         """DB에 등록된 모든 디바이스의 MAC 주소 집합을 반환한다.
 
