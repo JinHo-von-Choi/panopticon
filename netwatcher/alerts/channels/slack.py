@@ -23,13 +23,12 @@ class SlackChannel(NotificationChannel):
         raw_url = config.get("webhook_url", "")
         self._webhook_url = validate_outbound_url(raw_url) or "" if raw_url else ""
         if raw_url and not self._webhook_url:
-            logger.error("Slack webhook URL이 내부 주소를 대상으로 하여 차단됨: %s", raw_url)
+            logger.debug("Slack destination rejected")
         self._dashboard_url = config.get("dashboard_url", "")
 
     async def send(self, alert: Alert) -> bool:
         """Slack Incoming Webhook으로 알림을 전송한다."""
         if not self._webhook_url:
-            logger.warning("Slack not configured (missing webhook_url)")
             return False
 
         if alert.severity.value == "CRITICAL":
@@ -47,11 +46,10 @@ class SlackChannel(NotificationChannel):
                         logger.debug("Slack alert sent: %s", alert.title)
                         return True
                     else:
-                        body = await resp.text()
-                        logger.error("Slack webhook error %d: %s", resp.status, body)
+                        logger.error("Slack delivery error status=%d", resp.status)
                         return False
-        except Exception:
-            logger.exception("Failed to send Slack alert")
+        except Exception as exc:
+            logger.error("Slack delivery failed: %s", type(exc).__name__)
             return False
 
     def _build_standard_payload(self, alert: Alert) -> dict:

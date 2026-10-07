@@ -242,7 +242,7 @@ def validate_outbound_url(url: str) -> str | None:
     try:
         addr = ipaddress.ip_address(hostname)
         if _is_internal_addr(addr):
-            logger.warning("SSRF 차단: 내부 주소 대상 URL 거부: %s", url)
+            logger.debug("SSRF 차단: 내부 주소 대상 URL 거부")
             return None
         return url
     except ValueError:

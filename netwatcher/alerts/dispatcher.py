@@ -9,9 +9,6 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
-from netwatcher.alerts.channels.discord import DiscordChannel
-from netwatcher.alerts.channels.slack import SlackChannel
-from netwatcher.alerts.channels.telegram import TelegramChannel
 from netwatcher.alerts.rate_limiter import RateLimiter, EventBudget
 from netwatcher.alerts.aggregation import AlertAggregator
 from netwatcher.services.evidence_writer import EvidenceWriter
@@ -114,17 +111,8 @@ class AlertDispatcher:
 
         # 알림 채널
         channels_config = config.section("alerts").get("channels", {})
-        self._channels = []
-        channel_classes = [
-            ("telegram", TelegramChannel),
-            ("slack", SlackChannel),
-            ("discord", DiscordChannel),
-        ]
-        for name, cls in channel_classes:
-            ch_config = channels_config.get(name, {})
-            if ch_config.get("enabled", False):
-                self._channels.append(cls(ch_config))
-                logger.info("Notification channel enabled: %s", name)
+        from netwatcher.alerts.channels.registry import build_channels
+        self._channels, self.channel_status = build_channels(channels_config)
 
         # WebSocket 구독자
         self._ws_subscribers: set[asyncio.Queue] = set()
@@ -532,11 +520,11 @@ class AlertDispatcher:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
-                logger.exception("Webhook task raised unexpected error: %s", result)
+                logger.error("Webhook task failed: %s", type(result).__name__)
                 continue
             name, elapsed, exc = result
             if exc is not None:
-                logger.exception("Webhook channel %s failed: %s", name, exc)
+                logger.error("Webhook channel %s failed: %s", name, type(exc).__name__)
             else:
                 try:
                     from netwatcher.web.metrics import webhook_duration

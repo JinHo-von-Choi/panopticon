@@ -23,12 +23,11 @@ class DiscordChannel(NotificationChannel):
         raw_url = config.get("webhook_url", "")
         self._webhook_url = validate_outbound_url(raw_url) or "" if raw_url else ""
         if raw_url and not self._webhook_url:
-            logger.error("Discord webhook URL이 내부 주소를 대상으로 하여 차단됨: %s", raw_url)
+            logger.debug("Discord destination rejected")
 
     async def send(self, alert: Alert) -> bool:
         """Discord Webhook으로 알림 embed를 전송한다."""
         if not self._webhook_url:
-            logger.warning("Discord not configured (missing webhook_url)")
             return False
 
         title, description = self._get_translated_texts(alert)
@@ -66,9 +65,8 @@ class DiscordChannel(NotificationChannel):
                         logger.debug("Discord alert sent: %s", alert.title)
                         return True
                     else:
-                        body = await resp.text()
-                        logger.error("Discord webhook error %d: %s", resp.status, body)
+                        logger.error("Discord delivery error status=%d", resp.status)
                         return False
-        except Exception:
-            logger.exception("Failed to send Discord alert")
+        except Exception as exc:
+            logger.error("Discord delivery failed: %s", type(exc).__name__)
             return False

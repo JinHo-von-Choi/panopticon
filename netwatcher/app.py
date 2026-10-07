@@ -475,18 +475,14 @@ class NetWatcher:
         # ── 일일 리포트 스케줄러 ──────────────────────────────────────────
         daily_reporter = None
         daily_cfg    = self.config.section("daily_report") or {}
-        channels_cfg = self.config.section("alerts").get("channels", {})
-        _any_channel_enabled = any(
-            channels_cfg.get(ch, {}).get("enabled")
-            for ch in ("slack", "telegram", "discord")
-        )
-        if daily_cfg.get("enabled") and _any_channel_enabled:
+        if daily_cfg.get("enabled") and dispatcher._channels:
             from netwatcher.alerts.daily_report import DailyReporter
             daily_reporter = DailyReporter(
                 config=self.config,
                 event_repo=event_repo,
                 device_repo=device_repo,
                 stats_repo=stats_repo,
+                channels=dispatcher._channels,
             )
             await daily_reporter.start()
 

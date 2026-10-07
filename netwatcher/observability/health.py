@@ -147,6 +147,11 @@ class HealthChecker:
             "alert_queue": queue_status,
         }
 
+        if self._dispatcher is not None:
+            channel_status = getattr(self._dispatcher, "channel_status", None)
+            if isinstance(channel_status, dict):
+                components["notifications"] = {"status": "healthy", "channels": channel_status}
+
         # 전체 상태 결정
         statuses = [c["status"] for c in components.values()]
         if any(s == "unhealthy" for s in statuses):

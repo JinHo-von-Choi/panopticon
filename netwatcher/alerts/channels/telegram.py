@@ -27,7 +27,6 @@ class TelegramChannel(NotificationChannel):
     async def send(self, alert: Alert) -> bool:
         """Telegram Bot API를 통해 알림 메시지를 전송한다."""
         if not self._token or not self._chat_id:
-            logger.warning("Telegram not configured (missing bot_token or chat_id)")
             return False
 
         url = TELEGRAM_API.format(token=self._token)
@@ -49,9 +48,8 @@ class TelegramChannel(NotificationChannel):
                         logger.debug("Telegram alert sent: %s", alert.title)
                         return True
                     else:
-                        body = await resp.text()
-                        logger.error("Telegram API error %d: %s", resp.status, body)
+                        logger.error("Telegram delivery error status=%d", resp.status)
                         return False
-        except Exception:
-            logger.exception("Failed to send Telegram alert")
+        except Exception as exc:
+            logger.error("Telegram delivery failed: %s", type(exc).__name__)
             return False

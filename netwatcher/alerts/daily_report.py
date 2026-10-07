@@ -66,6 +66,7 @@ class DailyReporter:
         event_repo: EventRepository,
         device_repo: DeviceRepository,
         stats_repo: TrafficStatsRepository,
+        channels: list | None = None,
     ) -> None:
         """설정과 리포지토리 의존성을 초기화한다."""
         self._event_repo  = event_repo
@@ -77,6 +78,10 @@ class DailyReporter:
         self._report_hour = daily_cfg.get("report_hour", 12)
 
         channels_cfg  = config.section("alerts").get("channels", {})
+        if channels is None:
+            from netwatcher.alerts.channels.registry import build_channels
+            channels, _ = build_channels(channels_cfg)
+        channels_cfg = {channel.name: channel.config for channel in channels}
         slack_cfg     = channels_cfg.get("slack",    {})
         tg_cfg        = channels_cfg.get("telegram", {})
         discord_cfg   = channels_cfg.get("discord",  {})
@@ -220,7 +225,7 @@ class DailyReporter:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for exc in results:
             if isinstance(exc, Exception):
-                logger.exception("Daily report channel failed: %s", exc)
+                logger.error("Daily report channel failed: %s", type(exc).__name__)
 
     async def _send_slack(self, d: _ReportData) -> None:
         """Slack Blocks 포맷으로 보고서를 전송한다."""
@@ -354,8 +359,7 @@ class DailyReporter:
                         d.total_events, d.total_devices, d.high_risk_count,
                     )
                 else:
-                    body = await resp.text()
-                    logger.error("Slack daily report error %d: %s", resp.status, body)
+                    logger.error("Slack daily report error status=%d", resp.status)
 
     async def _send_telegram(self, d: _ReportData) -> None:
         """Telegram Markdown 포맷으로 보고서를 전송한다."""
@@ -411,8 +415,7 @@ class DailyReporter:
                         d.total_events, d.total_devices, d.high_risk_count,
                     )
                 else:
-                    body = await resp.text()
-                    logger.error("Telegram daily report error %d: %s", resp.status, body)
+                    logger.error("Telegram daily report error status=%d", resp.status)
 
     async def _send_discord(self, d: _ReportData) -> None:
         """Discord Embeds 포맷으로 보고서를 전송한다."""
@@ -480,5 +483,4 @@ class DailyReporter:
                         d.total_events, d.total_devices, d.high_risk_count,
                     )
                 else:
-                    body = await resp.text()
-                    logger.error("Discord daily report error %d: %s", resp.status, body)
+                    logger.error("Discord daily report error status=%d", resp.status)
