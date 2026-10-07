@@ -4,6 +4,7 @@
 
 import { authFetch, canConfigure } from '../core/api.js';
 import { esc, escAttr, textEl, formatTime, formatBytes, renderPagination, showToast } from '../core/utils.js';
+import { openDeviceDrawer } from '../core/detail-drawer.js';
 import { DEVICE_TYPE_MAP } from '../core/constants.js';
 
 export var whitelistData = { ips: [], macs: [], domains: [], ip_ranges: [] };
@@ -177,18 +178,22 @@ function renderDeviceTypeChip(type) {
     return `<span class="device-type-chip" style="color:${cfg.color};background:${cfg.bg}">${cfg.label}</span>`;
 }
 
+let deviceDetailRequest = 0;
 window.showDeviceDetail = async function(mac) {
     if (!mac) return;
+    const request = ++deviceDetailRequest;
     var body = document.getElementById("device-modal-body");
     body.innerHTML = '<div style="text-align:center;padding:20px">Loading...</div>';
     document.getElementById("device-modal-title").textContent = "Device Detail: " + mac;
-    document.getElementById("device-modal-overlay").classList.remove("hidden");
+    openDeviceDrawer();
 
     try {
         var resp = await authFetch("/api/devices/" + mac);
         var data = await resp.json();
+        if (request !== deviceDetailRequest || document.getElementById("device-modal-overlay").classList.contains("hidden")) return;
         if (data.device) renderDeviceModalContent(data.device);
     } catch (e) {
+        if (request !== deviceDetailRequest || document.getElementById("device-modal-overlay").classList.contains("hidden")) return;
         body.textContent = "";
         body.appendChild(textEl("Error: " + (e && e.message ? e.message : "unknown")));
     }
@@ -259,34 +264,102 @@ function renderAssetContext(body, dev) {
         panel.innerHTML += `<label>${esc(t('role'))}<select class="input-search" id="asset-role">
             ${roles.map(role => `<option value="${role}" ${context.role === role ? 'selected' : ''}>${esc(t('roles.' + role))}</option>`).join('')}</select></label>
             <label>${esc(t('evidence'))}<textarea id="asset-evidence" class="input-search" maxlength="1000" rows="3"></textarea></label>
+            <section id="asset-flow-builder"></section>
+            <details class="event-technical"><summary>${esc(t('advanced_rules'))}</summary>
+                <label>${esc(t('expected_flows'))}<textarea id="asset-expected-flows" class="input-search replay-contract" maxlength="16000" rows="6" spellcheck="false"></textarea></label>
+                <p class="text-dim">${esc(t('flow_help'))}</p>
+            </details>
             <label>${esc(t('validity'))}<select id="asset-valid-hours" class="input-search"><option value="24">${esc(t('day'))}</option><option value="168" selected>${esc(t('week'))}</option><option value="720">${esc(t('month'))}</option></select></label>
             <label><input type="checkbox" id="asset-ownership"> ${esc(t('ownership', {ip: dev.ip_address, mac: dev.mac_address}))}</label>
             <button type="button" class="btn btn-accent" id="asset-confirm">${esc(t('save'))}</button>`;
+    }
+    const rulesInput = panel.querySelector('#asset-expected-flows');
+    if (rulesInput) {
+        rulesInput.value = JSON.stringify(dev.context_profile?.expected_flows || [], null, 2);
+        initExpectedFlowBuilder(panel, t);
     }
     body.querySelector('form').before(panel);
     panel.querySelector('#asset-confirm')?.addEventListener('click', async event => {
         const evidence = panel.querySelector('#asset-evidence').value.trim();
         if (!panel.querySelector('#asset-ownership').checked || evidence.length < 3) {
-            showToast(t('required'), 'error'); return;
+            showToast(t('required'), '', 'critical'); return;
         }
         const button = event.currentTarget;
         button.disabled = true;
         try {
+            const expectedFlows = JSON.parse(panel.querySelector('#asset-expected-flows').value);
+            if (!Array.isArray(expectedFlows) || expectedFlows.length > 16) throw new Error(t('flow_invalid'));
             const response = await authFetch('/api/devices/' + encodeURIComponent(dev.mac_address) + '/context', {
                 method: 'PUT', body: JSON.stringify({role: panel.querySelector('#asset-role').value,
                     ip_address: dev.ip_address, expected_version: dev.context_version || 0,
                     valid_hours: Number(panel.querySelector('#asset-valid-hours').value),
-                    ownership_confirmed: true, evidence})});
+                    ownership_confirmed: true, evidence, expected_flows: expectedFlows})});
             if (!response?.ok) {
-                showToast(t(response?.status === 409 ? 'conflict' : 'failed'), 'error'); return;
+                showToast(t(response?.status === 409 ? 'conflict' : 'failed'), '', 'critical'); return;
             }
-            showToast(t('saved'), 'success');
+            showToast(t('saved'), '', 'info');
             await window.showDeviceDetail(dev.mac_address);
         } catch (error) {
             console.error('Asset confirmation request failed', error);
-            showToast(t('failed'), 'error');
+            showToast(t('failed'), '', 'critical');
         } finally { button.disabled = false; }
     });
+}
+
+function initExpectedFlowBuilder(panel, t) {
+    const area = panel.querySelector('#asset-flow-builder');
+    const source = panel.querySelector('#asset-expected-flows');
+    const days = Array.from({length:7}, (_, day) => new Intl.DateTimeFormat(window.i18next.language, {
+        weekday:'short', timeZone:'UTC'}).format(new Date(Date.UTC(2026,9,5+day))));
+    area.innerHTML = `<h4>${esc(t('job_rules'))}</h4><div id="asset-flow-list"></div>
+        <details><summary>${esc(t('add_job'))}</summary><div class="replay-fields">
+        <label>${esc(t('peer_ip'))}<input id="job-peer-ip" class="input-search" maxlength="64" autocomplete="off"></label>
+        <label>${esc(t('peer_mac'))}<input id="job-peer-mac" class="input-search" maxlength="17" autocomplete="off"></label>
+        <label>${esc(t('protocol'))}<select id="job-protocol" class="input-search"><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+        <label>${esc(t('port'))}<input id="job-port" class="input-search" type="number" min="1" max="65535" step="1"></label>
+        <label>${esc(t('timezone'))}<select id="job-timezone" class="input-search"><option>Asia/Seoul</option><option>UTC</option></select></label>
+        <label>${esc(t('start'))}<select id="job-start" class="input-search">${Array.from({length:24},(_,h)=>`<option value="${h}">${String(h).padStart(2,'0')}:00</option>`).join('')}</select></label>
+        <label>${esc(t('end'))}<select id="job-end" class="input-search">${Array.from({length:24},(_,h)=>`<option value="${h+1}" ${h===23?'selected':''}>${String(h+1).padStart(2,'0')}:00</option>`).join('')}</select></label>
+        <label>${esc(t('volume_mb'))}<input id="job-volume" class="input-search" type="number" min="1" max="1048576" step="1"></label>
+        <label>${esc(t('purpose'))}<input id="job-purpose" class="input-search" maxlength="200"></label></div>
+        <div class="job-weekdays">${days.map((day,i)=>`<label><input type="checkbox" data-job-weekday="${i}" ${i<5?'checked':''}>${esc(day)}</label>`).join('')}</div>
+        <p class="text-dim">${esc(t('job_scope'))}</p><button type="button" class="btn" id="job-add">${esc(t('add_job'))}</button></details>`;
+    const read = () => {const rules = JSON.parse(source.value);if(!Array.isArray(rules)||rules.length>16)throw new Error(t('flow_invalid'));return rules;};
+    const render = () => {
+        const list = area.querySelector('#asset-flow-list');
+        try {
+            const rules = read();
+            list.innerHTML = rules.length ? rules.map((rule,index) => `<article class="expected-job-row"><div><strong>${esc(rule.purpose || t('purpose'))}</strong>
+                <p>${esc(rule.peer_ip)} / ${esc(rule.peer_mac)} · ${esc(rule.protocol)}:${esc(rule.service_port)}</p>
+                <p>${esc(rule.timezone)} · ${esc((rule.weekdays||[]).map(day=>days[day]||'?').join(' / '))} · ${esc(rule.start_hour)}:00–${esc(rule.end_hour)}:00 · ${esc(rule.max_bytes_per_tick)} B</p></div>
+                <button type="button" class="btn" data-remove-job="${index}">${esc(t('remove_job'))}</button></article>`).join('') : `<p>${esc(t('no_jobs'))}</p>`;
+            list.querySelectorAll('[data-remove-job]').forEach(button=>button.addEventListener('click',()=>{
+                const updated=read();updated.splice(Number(button.dataset.removeJob),1);source.value=JSON.stringify(updated,null,2);render();
+            }));
+        } catch (_) {list.textContent=t('flow_invalid');}
+    };
+    source.addEventListener('input', render);
+    area.querySelector('#job-add').addEventListener('click',()=>{
+        try {
+            const rules=read();if(rules.length>=16)throw new Error(t('flow_invalid'));
+            const value=id=>area.querySelector('#'+id).value.trim();
+            const port=Number(value('job-port')),mb=Number(value('job-volume'));
+            const weekdays=[...area.querySelectorAll('[data-job-weekday]:checked')].map(input=>Number(input.dataset.jobWeekday));
+            if (!value('job-peer-ip') || !/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(value('job-peer-mac'))
+                || (parseInt(value('job-peer-mac').slice(0,2),16)&1) !== 0
+                || !Number.isInteger(port) || port<1 || port>65535 || !Number.isInteger(mb) || mb<1 || mb>1048576
+                || !weekdays.length || Number(value('job-start'))>=Number(value('job-end')) || value('job-purpose').length<3) {
+                throw new Error(t('job_required'));
+            }
+            rules.push({peer_ip:value('job-peer-ip'),peer_mac:value('job-peer-mac').toLowerCase(),protocol:value('job-protocol'),
+                service_port:port,direction:'outbound',timezone:value('job-timezone'),weekdays,
+                start_hour:Number(value('job-start')),end_hour:Number(value('job-end')),
+                max_bytes_per_tick:mb*1024*1024,purpose:value('job-purpose')});
+            source.value=JSON.stringify(rules,null,2);render();
+            showToast(t('job_draft'),'', 'info');
+        } catch(error) {showToast(error.message,'','critical');}
+    });
+    render();
 }
 
 window.handleWhitelistToggle = async function(type, value) {

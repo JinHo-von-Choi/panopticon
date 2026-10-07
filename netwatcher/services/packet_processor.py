@@ -171,7 +171,8 @@ class PacketProcessor:
         # 탐지 엔진 실행
         if self._worker_pool is not None and self._worker_pool.is_multiprocess:
             # 멀티프로세스 모드: raw bytes를 워커로 라우팅
-            routed = self._worker_pool.route_packet(bytes(packet), src_ip)
+            captured_at = float(packet.time) if getattr(packet, 'capture_time_verified', False) else None
+            routed = self._worker_pool.route_packet(bytes(packet), src_ip, captured_at=captured_at)
             if not routed:
                 # 라우팅 실패 시 로컬 폴백
                 self._run_engines_local(packet)

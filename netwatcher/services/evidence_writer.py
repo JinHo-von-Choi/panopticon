@@ -21,6 +21,7 @@ class EvidenceWriter:
         self.max_bytes = max(1, max_bytes)
         self._reserved_bytes = self.max_bytes // 4
         self.pending_bytes = 0
+        self.pending_jobs = 0
         self.cooldown = max(1, cooldown)
         self.recent = {}
         self.task = None
@@ -47,9 +48,10 @@ class EvidenceWriter:
             return {"state": "omitted", "reason": "no_matching_packets", "policy_version": 1}
         jobs_limit = self.queue.maxsize if priority else self.queue.maxsize - self._reserved_jobs
         bytes_limit = self.max_bytes if priority else self.max_bytes - self._reserved_bytes
-        if self.queue.qsize() >= jobs_limit or self.pending_bytes + size > bytes_limit:
+        if self.pending_jobs >= jobs_limit or self.pending_bytes + size > bytes_limit:
             return {"state": "omitted", "reason": "evidence_queue_budget", "policy_version": 1}
         self.queue.put_nowait((0 if priority else 1, next(self._sequence), event_id, snapshot, size))
+        self.pending_jobs += 1
         self.pending_bytes += size
         self.recent[key] = now
         self.start()
@@ -89,6 +91,7 @@ class EvidenceWriter:
             except Exception:
                 await self._store_state(event_id, {"state": "failed", "reason": "write_failed", "policy_version": 1})
             finally:
+                self.pending_jobs -= 1
                 self.pending_bytes -= size
                 self.queue.task_done()
 
@@ -110,5 +113,6 @@ class EvidenceWriter:
         self.task = None
         while not self.queue.empty():
             _, _, _, _, size = self.queue.get_nowait()
+            self.pending_jobs -= 1
             self.pending_bytes -= size
             self.queue.task_done()

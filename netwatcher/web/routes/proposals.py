@@ -36,6 +36,11 @@ class SubmitProposalRequest(BaseModel):
     reason: str = ""
 
 
+class ValidationRequest(BaseModel):
+    normal_run_id: int = Field(..., ge=1)
+    attack_run_id: int = Field(..., ge=1)
+
+
 class DecisionRequest(BaseModel):
     decided_by: str = Field("unknown", max_length=100)
     note: str = ""
@@ -59,6 +64,7 @@ def create_proposals_router(service: ProposalService) -> APIRouter:
         rows = await service.list_all(limit=limit, status=status)
         return {
             "proposals": rows,
+            "validation_required": service.validation_required,
             "total": len(rows),
             "pending": await service.pending_count(),
         }
@@ -86,13 +92,25 @@ def create_proposals_router(service: ProposalService) -> APIRouter:
             )
         return {"status": "proposed", "id": proposal_id, "engine": body.engine}
 
+    @router.post("/{proposal_id}/validation")
+    async def attach_validation(
+        proposal_id: int, body: ValidationRequest,
+        auth: dict = Depends(require_role(Role.ANALYST, Role.ADMIN)),
+    ):
+        try:
+            result = await service.attach_validation(proposal_id, body.normal_run_id,
+                body.attack_run_id, str(auth.get('sub') or 'local'))
+            return {"validation": result}
+        except ProposalError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)})
+
     @router.post("/{proposal_id}/approve")
     async def approve_proposal(
         proposal_id: int,
         body: DecisionRequest,
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
-        return await _decide(service, proposal_id, body, approved=True)
+        return await _decide(service, proposal_id, body, approved=True, actor=str(_auth.get("sub") or "local"))
 
     @router.post("/{proposal_id}/reject")
     async def reject_proposal(
@@ -100,19 +118,19 @@ def create_proposals_router(service: ProposalService) -> APIRouter:
         body: DecisionRequest,
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
-        return await _decide(service, proposal_id, body, approved=False)
+        return await _decide(service, proposal_id, body, approved=False, actor=str(_auth.get("sub") or "local"))
 
     return router
 
 
 async def _decide(
-    service: ProposalService, proposal_id: int, body: DecisionRequest, approved: bool,
+    service: ProposalService, proposal_id: int, body: DecisionRequest, approved: bool, actor: str,
 ):
     try:
         decision = await service.decide(
             proposal_id=proposal_id,
             approved=approved,
-            decided_by=body.decided_by,
+            decided_by=actor[:100],
             note=body.note,
         )
     except ProposalError as exc:

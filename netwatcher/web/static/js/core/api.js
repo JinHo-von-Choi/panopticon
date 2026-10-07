@@ -12,6 +12,7 @@ export function setCurrentRole(role) {
 }
 
 export function canConfigure() { return _currentRole === "admin"; }
+export function canAnalyze() { return ["admin", "analyst"].includes(_currentRole); }
 
 export function getAuthToken() {
     return _token;

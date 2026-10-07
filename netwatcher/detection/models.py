@@ -63,6 +63,7 @@ class Alert:
     threat_level: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     packet_info: dict[str, Any] = field(default_factory=dict)
+    expected_job_confirmed: bool = field(default=False, repr=False)
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%S.%fZ"

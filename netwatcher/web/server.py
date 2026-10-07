@@ -14,7 +14,7 @@ from netwatcher.web.routes.devices import create_devices_router
 from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
-def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False):
+def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False, pcap_writer=None):
     web_cfg = config.section("web") if hasattr(config, 'section') else {}
     cors_cfg = web_cfg.get("cors", {}) if isinstance(web_cfg, dict) else {}
     allowed_origins = cors_cfg.get("allowed_origins", ["http://localhost:38585"])
@@ -62,7 +62,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     # 인증이 꺼져 있어도 /auth/status는 응답해야 대시보드가 로그인 화면 표시 여부를 판단한다.
     from netwatcher.web.routes.auth import create_auth_router
     app.include_router(create_auth_router(auth_manager), prefix=api_prefix)
-    app.include_router(create_events_router(event_repo, dispatcher, auth_manager=auth_manager, device_repo=device_repo), prefix=api_prefix)
+    app.include_router(create_events_router(event_repo, dispatcher, pcap_writer=pcap_writer, auth_manager=auth_manager, device_repo=device_repo), prefix=api_prefix)
     app.include_router(create_ws_router(dispatcher, auth_manager=auth_manager), prefix=api_prefix)
     app.include_router(create_devices_router(device_repo), prefix=api_prefix)
     from netwatcher.web.routes.onboarding import create_onboarding_router

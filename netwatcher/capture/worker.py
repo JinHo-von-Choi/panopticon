@@ -21,6 +21,23 @@ from netwatcher.detection.models import Alert
 from netwatcher.utils.config import Config
 
 
+def decode_capture(envelope):
+    from scapy.layers.l2 import Ether
+    import math
+    captured_at = None
+    if isinstance(envelope, tuple) and len(envelope) == 2:
+        raw, captured_at = envelope
+        if not isinstance(captured_at, (float, int)) or not math.isfinite(captured_at) or captured_at <= 0:
+            raise ValueError('Invalid capture time')
+    else:
+        raw = envelope
+    packet = Ether(raw)
+    if captured_at is not None:
+        packet.time = captured_at
+        object.__setattr__(packet, 'capture_time_verified', True)
+    return packet
+
+
 class PacketWorker:
     """멀티프로세스 패킷 분석 워커.
 
@@ -102,7 +119,7 @@ class PacketWorker:
 
                 # raw bytes -> Scapy Ether 패킷 역직렬화
                 try:
-                    packet = Ether(raw)
+                    packet = decode_capture(raw)
                 except Exception:
                     self._logger.debug(
                         "Worker %d failed to deserialize packet (%d bytes)",

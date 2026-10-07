@@ -59,7 +59,7 @@ class Trace:
 
     @property
     def size_bytes(self) -> int:
-        return len(json.dumps(self.records, sort_keys=True, ensure_ascii=False))
+        return len(json.dumps(self.records, sort_keys=True, ensure_ascii=False).encode('utf-8'))
 
     def input_hash(self) -> str:
         """입력 해시 — 순서와 값이 모두 반영된다."""

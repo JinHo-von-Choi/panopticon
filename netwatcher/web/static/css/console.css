@@ -122,3 +122,45 @@ main { max-width: none; margin: 0 0 0 208px; padding: 32px 28px 48px; }
 @media (max-width: 600px) { .onboarding-banner { align-items: flex-start; flex-direction: column; } }
 .scope-table-scroll { max-width: 100%; overflow-x: auto; }
 .scope-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.replay-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px; margin: 18px 0; }
+.replay-fields label { display: flex; flex-direction: column; gap: 8px; min-width: 0; color: var(--text-dim); }
+.replay-fields input[type="file"] { max-width: 100%; }
+.replay-fields textarea { width: 100%; font-family: var(--font-mono); }
+.replay-confirm { display: flex; gap: 8px; margin: 16px 0; align-items: flex-start; }
+.replay-result { margin-top: 18px; padding: 18px; border: 1px solid var(--border); background: var(--surface); overflow-wrap: anywhere; }
+.replay-result[data-state="blocked"] { border-left: 3px solid var(--warning); }
+.replay-result[data-state="preserved"] { border-left: 3px solid var(--accent); }
+.replay-contract { font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.replay-run-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+
+.console-stats { margin-bottom: 22px; border: 1px solid var(--border); background: var(--surface); }
+.console-stats > summary { padding: 14px 18px; min-height: 44px; cursor: pointer; color: var(--text-dim); }
+.console-stats .stats-grid { margin: 0; padding: 14px; }
+.console-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 18px 0 28px; }
+.overview-panel { min-width: 0; border: 1px solid var(--border); border-top: 2px solid var(--accent-dim); background: var(--surface); padding: 20px; }
+.overview-panel:first-child { border-top-color: var(--copper); }
+.overview-panel h3 { color: var(--accent); font: 24px var(--font-mono); margin: 12px 0; }
+.overview-panel p { line-height: 1.7; overflow-wrap: anywhere; margin: 12px 0; }
+.overview-relations { grid-column: 1 / -1; }
+.overview-event { display: block; width: 100%; text-align: left; border: 1px solid var(--border); background: var(--surface2); color: var(--text); padding: 14px; margin: 10px 0; cursor: pointer; min-height: 44px; }
+.overview-event strong, .overview-event small { display: block; overflow-wrap: anywhere; line-height: 1.6; }
+.overview-event small { color: var(--text-dim); margin-top: 6px; }
+.overview-event:hover { border-color: var(--accent); }
+.relation-edge code { overflow-wrap: anywhere; color: var(--accent); }
+@media (max-width: 1080px) { .console-overview { grid-template-columns: 1fr; } }
+.btn:focus-visible, .tab:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px;
+}
+.pagination button.active, .engine-tooltip-icon:hover { color: var(--bg); }
+.toggle-switch input:checked + .toggle-slider::before { background: var(--bg); }
+.btn, .btn-detail, .pagination button, select, .modal-close { min-height: 44px; }
+.modal-close { min-width: 44px; }
+.btn-detail { padding: 8px 12px; }
+
+.expected-job-row { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; border: 1px solid var(--border); padding: 14px; margin: 10px 0; background: var(--surface2); }
+.expected-job-row > div { min-width: 0; overflow-wrap: anywhere; }
+.expected-job-row p { line-height: 1.6; margin: 6px 0; }
+.job-weekdays { display: flex; flex-wrap: wrap; gap: 12px; }
+.job-weekdays label { min-height: 44px; display: flex; align-items: center; gap: 6px; }
+#asset-flow-builder summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
+@media (max-width:600px) { .expected-job-row { flex-direction: column; } }

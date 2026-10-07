@@ -106,7 +106,7 @@ class WorkerPool:
     # Packet routing
     # ------------------------------------------------------------------
 
-    def route_packet(self, packet_bytes: bytes, src_ip: str | None) -> bool:
+    def route_packet(self, packet_bytes: bytes, src_ip: str | None, captured_at: float | None = None) -> bool:
         """패킷을 적절한 워커로 라우팅한다.
 
         Returns:
@@ -123,7 +123,7 @@ class WorkerPool:
             self._rr_counter += 1
 
         try:
-            self._input_queues[idx].put_nowait(packet_bytes)
+            self._input_queues[idx].put_nowait((packet_bytes, captured_at) if captured_at is not None else packet_bytes)
         except Exception:
             self._dropped += 1
             return True

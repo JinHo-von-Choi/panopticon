@@ -11,16 +11,19 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
+from pathlib import Path
 import logging
 from typing import Any
 
 from netwatcher.replay.contract import AnalysisContract
 from netwatcher.replay.service import (
     MAX_CONCURRENT_RUNS,
-    compare,
     diff_sides,
     split_outcome,
 )
+from netwatcher.replay.runner import ReplayRunner, ReplayBudgetError
 from netwatcher.replay.trace import Trace
 from netwatcher.storage.repositories import ReplayRepository
 
@@ -33,14 +36,59 @@ STATUS_FAILED = "failed"
 STATUS_ABORTED = "aborted"
 
 
+class ReplayAdmissionError(RuntimeError):
+    def __init__(self, reason, status_code=429):
+        super().__init__(reason)
+        self.status_code = status_code
+
+
 class ReplayRunService:
     """리플레이 실행을 큐로 돌리고 결과를 격리 저장한다."""
 
-    def __init__(self, repository: ReplayRepository) -> None:
+    def __init__(self, repository: ReplayRepository, *, max_pending_runs=2,
+                 max_pending_bytes=32 * 1024 * 1024, timeout=600) -> None:
         self._repo = repository
+        digest = hashlib.sha256()
+        for filename in ('analyzers.py', 'contract.py', 'service.py', 'trace.py', 'runner.py'):
+            digest.update(filename.encode())
+            digest.update((Path(__file__).parent / filename).read_bytes())
+        self.implementation_version = digest.hexdigest()
         # 동시 1개 (계획서 예산). 넘으면 대기한다 — 중복 실행하지 않는다.
         self._gate = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
+        self._max_queue_age = 300
         self._tasks: dict[int, asyncio.Task] = {}
+        self._max_pending_runs = max(1, int(max_pending_runs))
+        self._max_pending_bytes = max(1024, int(max_pending_bytes))
+        self._pending_runs = 0
+        self._pending_bytes = 0
+        self._admission = asyncio.Lock()
+        self._runner = ReplayRunner(timeout=timeout)
+        self._stopping = False
+
+    def status(self):
+        return {'pending_runs': self._pending_runs, 'pending_bytes': self._pending_bytes,
+                'max_pending_runs': self._max_pending_runs, 'max_pending_bytes': self._max_pending_bytes}
+
+    def stop_accepting(self):
+        self._stopping = True
+        self._runner.terminate_now()
+
+    async def stop(self):
+        self.stop_accepting()
+        tasks = tuple(self._tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            pending_ids = tuple(self._tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for run_id in pending_ids:
+                try:
+                    async with asyncio.timeout(.1):
+                        await self._repo.finish_run(run_id, STATUS_ABORTED, baseline_hash=None,
+                            candidate_hash=None, reasons=[{'code': 'budget_exceeded', 'detail': 'shutdown'}],
+                            comparable=False, budget={'exceeded': True, 'reason': 'shutdown'})
+                except Exception:
+                    logger.warning('Replay shutdown state unconfirmed: run=%s', run_id)
 
     # ------------------------------------------------------------------
     # 조회
@@ -72,6 +120,10 @@ class ReplayRunService:
             "non_comparable_reasons": run["non_comparable_reasons"],
             "budget": run.get("budget_detail") or {},
         }
+        trace = await self._repo.get_trace(run['trace_id'])
+        if trace:
+            payload['input_hash'] = trace['input_hash']
+            payload['comparison_context'] = trace.get('compat_snapshot') or {}
 
         if run["status"] != STATUS_COMPLETED:
             payload["diff"] = None
@@ -90,7 +142,7 @@ class ReplayRunService:
         )
         payload["baseline"] = [self._result_view(r) for r in baseline_rows]
         payload["candidate"] = [self._result_view(r) for r in candidate_rows]
-        payload["diff"] = diff_sides(
+        payload["diff"] = await asyncio.to_thread(diff_sides,
             _rows_to_results(baseline_rows),
             _rows_to_results(candidate_rows),
             reasons=run["non_comparable_reasons"] or [],
@@ -117,24 +169,83 @@ class ReplayRunService:
         candidate: AnalysisContract,
     ) -> int:
         """실행을 큐에 올리고 run id 를 반환한다 (즉시 반환)."""
-        await self._repo.insert_trace(trace.as_row())
-        run_id = await self._repo.create_run(
-            trace.trace_id, baseline.build_version, candidate.build_version,
-        )
-        task = asyncio.create_task(self._run(run_id, trace, baseline, candidate))
-        self._tasks[run_id] = task
-        return run_id
+        trace, baseline, candidate = copy.deepcopy((trace, baseline, candidate))
+        size = trace.size_bytes
+        async with self._admission:
+            if self._stopping:
+                raise ReplayAdmissionError('Replay service is stopping', 503)
+            if size > self._max_pending_bytes:
+                raise ReplayAdmissionError('Replay source exceeds the memory admission budget', 413)
+            if (self._pending_runs >= self._max_pending_runs or
+                    self._pending_bytes + size > self._max_pending_bytes):
+                raise ReplayAdmissionError('Replay queue budget exceeded')
+            self._pending_runs += 1
+            self._pending_bytes += size
+        try:
+            trace.compat_snapshot['implementation_version'] = self.implementation_version
+            trace.compat_snapshot['baseline_contract'] = {
+                'versions': baseline.versions(), 'params': baseline.engine_params}
+            trace.compat_snapshot['candidate_contract'] = {
+                'versions': candidate.versions(), 'params': candidate.engine_params}
+            await self._repo.insert_trace(trace.as_row())
+            run_id = await self._repo.create_run(
+                trace.trace_id, baseline.build_version, candidate.build_version,
+            )
+            if self._stopping:
+                await self._repo.finish_run(run_id, STATUS_ABORTED, baseline_hash=None,
+                    candidate_hash=None, reasons=[{'code': 'budget_exceeded', 'detail': 'shutdown'}],
+                    comparable=False, budget={'exceeded': True, 'reason': 'shutdown'})
+                raise ReplayAdmissionError('Replay service is stopping', 503)
+            task = asyncio.create_task(self._owned_run(run_id, trace, baseline, candidate, size))
+            self._tasks[run_id] = task
+            def release(finished):
+                self._tasks.pop(run_id, None)
+                self._pending_runs -= 1
+                self._pending_bytes -= size
+                if not finished.cancelled() and finished.exception() is not None:
+                    logger.error('Replay result persistence failed: run=%s error=%s',
+                                 run_id, type(finished.exception()).__name__)
+            task.add_done_callback(release)
+            return run_id
+        except BaseException:
+            self._pending_runs -= 1
+            self._pending_bytes -= size
+            raise
+
+    async def _owned_run(self, run_id, trace, baseline, candidate, size):
+        try:
+            await self._run(run_id, trace, baseline, candidate, size)
+        except asyncio.CancelledError:
+            try:
+                async with asyncio.timeout(.25):
+                    await self._repo.finish_run(run_id, STATUS_ABORTED, baseline_hash=None,
+                        candidate_hash=None, reasons=[{'code': 'budget_exceeded', 'detail': 'shutdown'}],
+                        comparable=False, budget={'exceeded': True, 'reason': 'shutdown'})
+            except Exception:
+                logger.warning('Replay cancellation persistence unconfirmed: run=%s', run_id)
+            raise
 
     async def _run(
         self, run_id: int, trace: Trace,
         baseline: AnalysisContract, candidate: AnalysisContract,
+        size: int,
     ) -> None:
-        async with self._gate:
+        try:
+            await asyncio.wait_for(self._gate.acquire(), self._max_queue_age)
+        except asyncio.TimeoutError:
+            await self._repo.finish_run(run_id, STATUS_ABORTED, baseline_hash=None,
+                candidate_hash=None, reasons=[{'code': 'budget_exceeded', 'detail': 'queue_age'}],
+                comparable=False, budget={'exceeded': True, 'reason': 'queue_age'})
+            return
+        try:
             await self._repo.mark_running(run_id)
             try:
-                outcome = compare(
-                    trace, baseline, candidate, source_bytes=trace.size_bytes,
-                )
+                outcome = await self._runner.run(trace, baseline, candidate, size)
+            except ReplayBudgetError as error:
+                await self._repo.finish_run(run_id, STATUS_ABORTED, baseline_hash=None,
+                    candidate_hash=None, reasons=[{'code': 'budget_exceeded', 'detail': str(error)}],
+                    comparable=False, budget={'exceeded': True, 'reason': str(error)})
+                return
             except Exception as exc:  # 실행 실패도 사실이므로 남긴다
                 logger.exception("리플레이 실행 실패 (run=%s)", run_id)
                 await self._repo.finish_run(
@@ -164,6 +275,9 @@ class ReplayRunService:
                 comparable=outcome.comparable,
                 budget=outcome.budget.as_dict(),
             )
+
+        finally:
+            self._gate.release()
 
     async def wait(self, run_id: int, timeout: float = 30.0) -> None:
         """테스트·대기용. HTTP 경로에서는 호출하지 않는다."""

@@ -58,3 +58,22 @@ async def test_failed_delivery_is_visible_without_retrying_uncertain_remote_send
     await writer.stop()
     assert writer.failed == 1
     send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_job_budget_includes_inflight_delivery():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    async def blocked(item):
+        entered.set()
+        await release.wait()
+        return True
+    writer = NotificationWriter(blocked, max_jobs=1)
+    writer.start()
+    assert writer.submit(alert())
+    await entered.wait()
+    assert not writer.submit(alert('overflow', Severity.CRITICAL))
+    assert writer.status()['inflight'] == 1
+    release.set()
+    await writer.stop()
+    assert writer.bytes == 0

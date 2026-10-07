@@ -15,9 +15,11 @@ import { registerHuntListeners } from './modules/hunting.js';
 import { initAiAnalyzerTab, loadAiAnalyzerStatus, loadAiLogs, registerAiAnalyzerListeners } from './modules/ai_analyzer.js';
 import { loadWhitelist, registerWhitelistListeners } from './modules/whitelist.js';
 import { loadSupportProfile, loadProposals, loadObservation } from './modules/governance.js';
-import { closeEventDrawer } from './core/detail-drawer.js';
+import { closeEventDrawer, closeDeviceDrawer } from './core/detail-drawer.js';
 import { initConsole, loadConsoleState } from './modules/console.js';
 import { initOnboarding, loadOnboarding } from './modules/onboarding.js';
+import { initOverview, loadOverview } from './modules/overview.js';
+import { initReplay, loadReplay } from './modules/replay.js';
 
 var ws = null;
 var statsInterval = null;
@@ -39,8 +41,11 @@ async function initApp() {
     connectWS();
     loadConsoleState();
     loadOnboarding();
+    loadOverview();
     if (!statsInterval) statsInterval = setInterval(() => {
-        if (!document.hidden) { loadStats(); loadConsoleState(); }
+        if (!document.hidden) { loadStats(); loadConsoleState();
+            if (document.getElementById("tab-events").classList.contains("active")) loadOverview();
+        }
     }, 30000);
     startFreshnessClock();
 }
@@ -104,7 +109,7 @@ function connectWS() {
 
 // Global UI Helpers
 window.closeModal = closeEventDrawer;
-window.closeDeviceModal = function() { document.getElementById("device-modal-overlay").classList.add("hidden"); };
+window.closeDeviceModal = closeDeviceDrawer;
 
 function registerListeners() {
     registerIncidentListeners();
@@ -130,7 +135,7 @@ function registerListeners() {
             if (target === "blocklist")    loadBlocklist(0);
             if (target === "whitelist")    loadWhitelist();
             if (target === "ai-analyzer") { loadAiAnalyzerStatus(); loadAiLogs(0); }
-            if (target === "governance")    { loadSupportProfile(); loadObservation(); loadProposals(); loadOnboarding(); }
+            if (target === "governance")    { loadSupportProfile(); loadObservation(); loadProposals(); loadOnboarding(); loadReplay(); }
         });
     });
 
@@ -315,6 +320,8 @@ window.addEventListener("DOMContentLoaded", () => {
     initConsole();
     initI18n(() => { if (isAuthEnabled()) { loadEvents(); loadEngines(); loadConsoleState(); } }).then(async () => {
         initOnboarding();
+        initReplay();
+        initOverview();
         const token = getAuthToken();
         const headers = token ? { "Authorization": `Bearer ${token}` } : {};
         try {

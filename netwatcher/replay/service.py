@@ -276,6 +276,16 @@ def compare(
     candidate, c_reasons = execute_side(trace, candidate_contract, source_bytes=source_bytes)
     reasons.extend(b_reasons)
     reasons.extend(c_reasons)
+    supported_params = {'arp_spoof': {'mac_change_threshold'}, 'port_scan': {'threshold'},
+                        'data_exfil': {'threshold', 'window_seconds'}}
+    changed_params = {key for key in baseline_contract.engine_params.keys() | candidate_contract.engine_params.keys()
+                      if baseline_contract.engine_params.get(key) != candidate_contract.engine_params.get(key)}
+    for engine in trace.engines:
+        if engine in supported_params:
+            unsupported_changes = changed_params - supported_params[engine]
+            if unsupported_changes:
+                reasons.append(_reason(REASON_FEATURE_MISSING,
+                    f'{engine}: changed parameters not modelled: {", ".join(sorted(unsupported_changes))}'))
 
     # 버전 지문 자체가 다르면 '차이가 저 버전에서 왔는지' 알 수 없다
     if baseline_contract.versions() != candidate_contract.versions():

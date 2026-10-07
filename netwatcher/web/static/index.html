@@ -61,6 +61,7 @@
                 <span id="console-ready-reason" data-i18n="console.unchecked">Waiting for a state check</span>
             </button>
         </section>
+        <details class="console-stats"><summary data-i18n="console.overview.metrics">Detailed metrics</summary>
         <!-- Stats Cards -->
         <section class="stats-grid">
             <div class="stat-card critical">
@@ -100,6 +101,8 @@
             </div>
         </section>
 
+        </details>
+
         <!-- Tabs -->
         <nav class="tabs" aria-label="Console navigation">
             <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
@@ -121,6 +124,9 @@
                 <p id="onboarding-summary" aria-live="polite" data-i18n="console.onboarding.unavailable">Installation checks unknown</p></div>
                 <button type="button" class="btn" id="onboarding-open" data-i18n="console.onboarding.open">Review installation</button>
             </div>
+            <div class="onboarding-check-heading"><h3 data-i18n="console.overview.title">Observation priorities</h3>
+                <button type="button" class="btn" id="overview-refresh" data-i18n="common.refresh">Refresh</button></div>
+            <section id="console-overview" class="console-overview" aria-label="Observation priorities"></section>
             <div class="toolbar">
                 <select id="filter-severity">
                     <option value="" data-i18n="toolbar.all_severities">All Severities</option>
@@ -378,6 +384,27 @@
 
         <!-- Governance Tab (PR 11: 관측 범위 + 제안 승인) -->
         <section id="tab-governance" class="tab-content">
+            <section id="replay-panel" class="detail-section">
+                <div class="onboarding-check-heading"><h3 data-i18n="console.replay.title">Policy comparison</h3>
+                <button type="button" id="replay-refresh" class="btn" data-i18n="toolbar.refresh">Refresh</button></div>
+                <p class="scope-hint" data-i18n="console.replay.scope">Offline observations do not establish runtime attack protection.</p>
+                <p id="replay-availability" aria-live="polite"></p>
+                <form id="replay-form" hidden>
+                    <div class="replay-fields">
+                        <label><span data-i18n="console.replay.engine">Engine</span><select id="replay-engine" class="input-search"></select></label>
+                        <label><span data-i18n="console.replay.normal_input">Normal input · JSON features</span><input type="file" id="replay-normal-file" accept=".json,application/json" required></label>
+                        <label><span data-i18n="console.replay.attack_input">Attack input · JSON features</span><input type="file" id="replay-attack-file" accept=".json,application/json" required></label>
+                    </div>
+                    <details class="event-advanced" open><summary data-i18n="console.replay.parameters">Before / candidate parameters</summary>
+                        <div class="replay-fields"><label><span data-i18n="console.replay.before">Before</span><textarea id="replay-baseline" class="input-search" rows="4" maxlength="10000">{}</textarea></label>
+                        <label><span data-i18n="console.replay.candidate">Candidate</span><textarea id="replay-candidate" class="input-search" rows="4" maxlength="10000">{}</textarea></label></div>
+                    </details>
+                    <label class="replay-confirm"><input type="checkbox" id="replay-label-confirmed" required><span data-i18n="console.replay.label_confirmation">I verified these input labels.</span></label>
+                    <button class="btn btn-accent" id="replay-submit" type="submit" data-i18n="console.replay.run">Compare normal and attack input</button>
+                </form>
+                <div id="replay-comparison" aria-live="polite"></div>
+                <div id="replay-runs"></div>
+            </section>
             <section id="onboarding-panel" class="detail-section">
                 <div class="onboarding-check-heading"><h3 data-i18n="console.onboarding.title">Installation checks</h3>
                 <button type="button" id="onboarding-refresh" class="btn" data-i18n="toolbar.refresh">Refresh</button></div>
@@ -401,16 +428,13 @@
                 <div id="observation-box"></div>
             </div>
             <div class="detail-section">
-                <h3>설정 제안 승인 <span class="proposals-count" id="proposals-count"></span></h3>
-                <p class="scope-hint">
-                    AI 는 설정을 바꾸지 못합니다. 제안만 올리고, 승인은 사람이 합니다.
-                    승인은 곧 설정 쓰기이므로 탐지 임계값이 바뀌면 오탐이 늘어납니다.
-                </p>
+                <h3><span data-i18n="console.proposals.title">설정 제안 승인</span> <span class="proposals-count" id="proposals-count"></span></h3>
+                <p class="scope-hint" data-i18n="console.proposals.hint">검증 근거를 확인한 사람이 승인해야 설정이 변경됩니다.</p>
                 <div class="scope-table-scroll" tabindex="0"><table class="scope-table">
                     <thead>
                         <tr>
-                            <th>ID</th><th>엔진</th><th>변경값</th>
-                            <th>출처</th><th>상태</th><th>제출 시각</th><th>처리</th>
+                            <th>ID</th><th data-i18n="console.proposals.engine">엔진</th><th data-i18n="console.proposals.changes">변경값</th>
+                            <th data-i18n="console.proposals.source">출처</th><th data-i18n="console.proposals.state">상태</th><th data-i18n="console.proposals.created">제출 시각</th><th data-i18n="console.proposals.actions">처리</th>
                         </tr>
                     </thead>
                     <tbody id="proposals-body"></tbody>
@@ -464,18 +488,18 @@
         <div class="modal">
             <div class="modal-header">
                 <h2 id="modal-title">Event Detail</h2>
-                <button class="modal-close" id="modal-close-btn" aria-label="Close event details">&times;</button>
+                <button class="modal-close" id="modal-close-btn" aria-label="Close event details" data-i18n-aria-label="console.event_context.close">&times;</button>
             </div>
             <div class="modal-body" id="modal-body"></div>
         </div>
     </div>
 
     <!-- Device Detail Modal -->
-    <div id="device-modal-overlay" class="modal-overlay hidden">
+    <div id="device-modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="device-modal-title">
         <div class="modal">
             <div class="modal-header">
                 <h2 id="device-modal-title">Device Detail</h2>
-                <button class="modal-close" id="device-modal-close-btn">&times;</button>
+                <button class="modal-close" id="device-modal-close-btn" aria-label="Close" data-i18n-aria-label="console.close">&times;</button>
             </div>
             <div class="modal-body" id="device-modal-body"></div>
         </div>

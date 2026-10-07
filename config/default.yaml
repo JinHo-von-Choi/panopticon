@@ -90,7 +90,18 @@ netwatcher:
     cleanup_interval_hours: 6  # 정리 주기
 
   storage:
+    recovery_spool:
+      enabled: false
+      directory: data/recovery
+      event_bytes: 16777216
+      event_files: 64
+      ttl_seconds: 300
     max_pending_age_seconds: 300
+
+  replay:
+    max_pending_runs: 2
+    max_pending_bytes: 33554432
+    timeout_seconds: 600
 
   evidence:
     directory: "data/pcaps"

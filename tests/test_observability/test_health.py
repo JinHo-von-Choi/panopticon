@@ -185,3 +185,18 @@ class TestHealthChecker:
         result  = await checker.check_all()
 
         assert result["components"]["redis"]["status"] == "unhealthy"
+
+
+def test_real_recovery_spool_degrades_queue_health(tmp_path):
+    import asyncio
+    import uuid
+    from types import SimpleNamespace
+    from netwatcher.storage.recovery_spool import RecoverySpool
+    spool = RecoverySpool(tmp_path)
+    dispatcher = SimpleNamespace(_queue=asyncio.Queue(maxsize=100), _recovery_spool=spool)
+    checker = HealthChecker(dispatcher=dispatcher)
+    assert checker._check_alert_queue()['status'] == 'healthy'
+    spool.put(uuid.uuid4(), [{'title': 'Pending durable event'}])
+    status = checker._check_alert_queue()
+    assert status['status'] == 'degraded'
+    assert status['recovery_spool']['files'] == 1

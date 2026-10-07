@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS config_proposals (
     decided_at    TIMESTAMPTZ,
     decided_by    VARCHAR(100),
     decision_note TEXT,
+    validation_runs JSONB NOT NULL DEFAULT '{}'::jsonb,
     applied       BOOLEAN,
     apply_error   TEXT,
     CONSTRAINT config_proposals_status_check

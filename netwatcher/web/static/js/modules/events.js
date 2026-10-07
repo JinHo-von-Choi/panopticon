@@ -183,6 +183,28 @@ async function loadDrawerObservation(request) {
     }
 }
 
+async function pinSelectedEvidence() {
+    const event = selectedEvent;
+    if (!event || !canConfigure()) return;
+    const reason = window.prompt(window.i18next.t('console.evidence_pin.reason'));
+    if (!reason || reason.trim().length < 3) return;
+    const button = document.getElementById('event-evidence-pin');
+    if (button) button.disabled = true;
+    try {
+        const response = await authFetch(`/api/events/${encodeURIComponent(event.id)}/evidence/pin`, {
+            method: 'POST', body: JSON.stringify({hours: 24, reason: reason.trim(), enabled: true})});
+        if (!response?.ok) throw new Error('Pin unavailable');
+        event.pcap_availability = await response.json();
+        if (selectedEvent?.id === event.id) renderEventDetail(event);
+        showToast(window.i18next.t('console.evidence_pin.saved'), '', 'info');
+    } catch (_) { showToast(window.i18next.t('console.evidence_pin.failed'), '', 'critical'); }
+    finally { if (button) button.disabled = false; }
+}
+
+document.addEventListener('click', event => {
+    if (event.target.closest('#event-evidence-pin')) pinSelectedEvidence();
+});
+
 function renderContext(ev) {
     const meta = ev.metadata || {};
     const aggregation = meta.aggregation || {};
@@ -196,6 +218,10 @@ function renderContext(ev) {
         <p class="text-dim">${esc(t('representative'))}</p></section>`;
     html += `<section class="detail-section"><h3>${esc(t('asset'))}</h3><div class="detail-grid">`;
     html += row(t('source'), ev.source_mac || ev.source_ip);
+    if (meta.business_context?.state === 'expected_job') {
+        html += row(window.i18next.t('console.asset_context.expected_flows'),
+            `${meta.business_context.role} / v${meta.business_context.context_version} / ${meta.business_context.original_severity} → INFO`);
+    }
     html += row(t('role'), ev.asset_context?.status === 'confirmed' ? window.i18next.t('console.asset_context.roles.' + ev.asset_context.role) : t('role_unknown'));
     if (ev.asset_context?.scope === 'current_inventory') {
         html += row(window.i18next.t('console.asset_context.title'), window.i18next.t('console.asset_context.scope'));
@@ -216,6 +242,13 @@ function renderContext(ev) {
     if (state === 'persisted') {
         html += row(t('file'), String(pcap.path || '').split('/').at(-1));
         html += row('SHA256', pcap.sha256);
+    }
+    if (ev.pcap_availability) {
+        html += row(t('file'), ev.pcap_availability.state);
+        html += row('Review pin', ev.pcap_availability.pin_state);
+        if (ev.pcap_availability.state === 'available' && canConfigure()) {
+            html += `<button type="button" class="btn" id="event-evidence-pin">${esc(window.i18next.t('console.evidence_pin.action'))}</button>`;
+        }
     }
     html += `</div><p class="text-dim">${esc(t('pcap_note'))}</p></section>`;
     html += `<section class="detail-section"><h3>${esc(t('observation'))}</h3>

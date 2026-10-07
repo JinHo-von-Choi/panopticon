@@ -387,7 +387,7 @@ def gate_observation_scope_ui() -> GateResult:
     # 3) 위반/실패를 숨기지 않는지
     for needle, label in (
         ("운영 검증을 통과했다는 뜻이 아니다", "no enforcement overclaim"),
-        ("승인됨 · 반영 실패", "failed apply surfaced"),
+
     ):
         present = needle in gtext
         checks.append(f"{label}={'yes' if present else 'no'}")
@@ -396,6 +396,20 @@ def gate_observation_scope_ui() -> GateResult:
                 "G0-9", "관측 범위 화면", False,
                 f"{label} 없음 — 화면이 상태를 오인하게 한다", checks,
             )
+
+    failure_display = "승인됨 · 반영 실패" in gtext
+    if "tp('apply_failed')" in gtext:
+        failure_display = True
+        for language in ('ko', 'en'):
+            try:
+                messages = json.loads((REPO_ROOT / 'netwatcher/web/static/locales' / language / 'translation.json').read_text())
+                failure_display = failure_display and bool(messages['console']['proposals']['apply_failed'])
+            except (OSError, ValueError, KeyError):
+                failure_display = False
+    failure_display = failure_display and 'proposal-failed' in gtext and 'data.status === "failed"' in gtext
+    checks.append(f"failed apply surfaced={'yes' if failure_display else 'no'}")
+    if not failure_display:
+        return GateResult('G0-9', '관측 범위 화면', False, 'Failed apply state or localized display missing', checks)
 
     # 4) 안전한 출력 (G0-3 과 동일 기준)
     if re.search(r"""on(?:click|change|submit)\s*=\s*["'][^"']*\$\{""", gtext, re.IGNORECASE):

@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from netwatcher.detection.context_policy import ExpectedFlowRule
 from netwatcher.storage.repositories import DeviceRepository
 from netwatcher.web.rbac import Role, require_role
 
@@ -54,6 +55,7 @@ class ConfirmContextRequest(BaseModel):
     valid_hours: int = Field(default=168, ge=1, le=720)
     ownership_confirmed: Literal[True]
     evidence: str = Field(min_length=3, max_length=1000)
+    expected_flows: list[ExpectedFlowRule] = Field(default_factory=list, max_length=16)
 
     @field_validator('ip_address')
     @classmethod
@@ -88,7 +90,8 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
         profile = {'role': body.role, 'confirmed_by': str(actor.get('sub', 'unknown'))[:255],
                    'confirmed_at': now.isoformat(),
                    'expires_at': (now + timedelta(hours=body.valid_hours)).isoformat(),
-                   'evidence': body.evidence}
+                   'evidence': body.evidence,
+                   'expected_flows': [rule.model_dump() for rule in body.expected_flows]}
         device = await device_repo.confirm_context(mac_address, body.ip_address,
                                                   body.expected_version, profile)
         if device is None:

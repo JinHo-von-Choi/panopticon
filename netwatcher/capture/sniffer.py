@@ -98,6 +98,7 @@ class PacketSniffer:
         """스니퍼 스레드에서 호출됨; 크기 제한 버퍼를 통해 asyncio 루프로 브릿지한다."""
         if not self._accepting:
             return
+        object.__setattr__(pkt, "capture_time_verified", True)
         original = getattr(pkt, "original", b"")
         size = len(original) if original else len(pkt)
         schedule = False

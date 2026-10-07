@@ -252,7 +252,7 @@ async def test_proposal_reaches_db_and_is_approved(config, db, event_repo):
     after = await repo.get_by_id(proposal_id)
     assert after["status"] == "approved"
     assert after["applied"] is True
-    assert after["decided_by"] == "admin"
+    assert after["decided_by"] == "canary"  # verified JWT subject, not client-supplied actor
     assert after["decided_at"] is not None
 
     # 2-5. YAML 파일에도 남는다 (재시작 후에도 유지)

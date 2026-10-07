@@ -282,3 +282,15 @@ class TestPacketWorker:
 
         # 엔진 모두 비활성이므로 알림 없음
         assert out_q.empty()
+
+
+def test_worker_preserves_capture_time_instead_of_decode_time():
+    from netwatcher.capture.worker import decode_capture
+    from scapy.all import Ether, IP, TCP
+    packet = Ether(src='02:00:00:00:00:10', dst='02:00:00:00:00:20') / IP(src='192.0.2.1', dst='192.0.2.2') / TCP(dport=445)
+    original_time = 1720000000.25
+    decoded = decode_capture((bytes(packet), original_time))
+    assert float(decoded.time) == original_time
+    assert decoded.capture_time_verified is True
+    legacy = decode_capture(bytes(packet))
+    assert getattr(legacy, 'capture_time_verified', False) is False

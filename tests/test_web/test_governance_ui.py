@@ -325,9 +325,13 @@ def test_proposal_actions_do_not_inline_handlers():
 def test_failed_apply_is_shown_not_hidden():
     """승인됐지만 반영 실패인 경우를 성공으로 표시하지 않는다."""
     src = GOV_JS.read_text(encoding="utf-8")
-    assert "승인됨 · 반영 실패" in src
+    assert "tp('apply_failed')" in src
+    import json
+    for language in ('ko', 'en'):
+        messages = json.loads((STATIC / 'locales' / language / 'translation.json').read_text())
+        assert messages['console']['proposals']['apply_failed']
     assert "proposal-failed" in src
-    assert "승인됨 · 반영 완료" in src
+    assert "tp('applied')" in src
 
 
 def test_approval_requires_confirmation():

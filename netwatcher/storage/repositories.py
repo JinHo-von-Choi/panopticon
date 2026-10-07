@@ -494,6 +494,12 @@ class DeviceRepository:
         from netwatcher.inventory.context import asset_context
         return asset_context(device)
 
+    async def context_candidates(self, ips: list[str]) -> list[dict]:
+        rows = await self._db.pool.fetch(
+            """SELECT *, count(*) OVER (PARTITION BY ip_address) AS ip_owners
+               FROM devices WHERE ip_address = ANY($1::inet[]) LIMIT 201""", ips[:100])
+        return [dict(row) for row in rows]
+
     async def confirm_context(self, mac: str, ip: str, version: int, profile: dict) -> dict | None:
         """현재 매핑·버전을 비교하고 확인과 이력을 같은 문장으로 기록한다."""
         row = await self._db.pool.fetchrow(
@@ -1039,6 +1045,12 @@ class ConfigProposalRepository:
                WHERE id = $1 AND status = 'pending'""",
             proposal_id, status, decided_by, decision_note,
         )
+        return result.split()[-1] != "0"
+
+    async def attach_validation(self, proposal_id: int, validation: dict) -> bool:
+        result = await self._db.pool.execute(
+            """UPDATE config_proposals SET validation_runs = $2
+               WHERE id = $1 AND status = 'pending'""", proposal_id, validation)
         return result.split()[-1] != "0"
 
     async def mark_applied(

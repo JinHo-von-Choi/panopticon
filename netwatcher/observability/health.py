@@ -128,6 +128,13 @@ class HealthChecker:
         result["expired_unconfirmed"] = getattr(self._dispatcher, "_queue_expired", 0)
         result["inflight"] = getattr(self._dispatcher, "_inflight_alerts", 0)
         result["shutdown_processing_incomplete"] = getattr(self._dispatcher, "_shutdown_incomplete", 0)
+        spool = getattr(self._dispatcher, '_recovery_spool', None)
+        if spool is not None:
+            spool_status = spool.status()
+            if isinstance(spool_status, dict):
+                result['recovery_spool'] = spool_status
+                if spool_status.get('state') != 'empty':
+                    result['status'] = 'degraded'
         return result
 
     async def check_all(self) -> dict[str, Any]:

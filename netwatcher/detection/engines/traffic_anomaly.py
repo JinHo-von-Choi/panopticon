@@ -12,8 +12,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from scapy.all import IP, Packet
+from scapy.all import IP, Ether, TCP, UDP, Packet
 
+from netwatcher.detection.context_policy import MAX_FLOWS
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.eviction import BoundedDefaultDict, LRUSet
 from netwatcher.detection.models import Alert, Severity
@@ -27,6 +28,8 @@ class _HostTickState:
     """호스트별 현재 틱 내 패킷/바이트 카운터."""
     packets: int = 0
     bytes:   int = 0
+    flows: dict = field(default_factory=dict)
+    flows_incomplete: bool = False
 
 
 @dataclass
@@ -151,6 +154,26 @@ class TrafficAnomalyEngine(DetectionEngine):
             state  = self._tick_counters[src_ip]
             state.packets += 1
             state.bytes   += pkt_len
+            transport = packet[TCP] if packet.haslayer(TCP) else packet[UDP] if packet.haslayer(UDP) else None
+            if (not packet.haslayer(Ether) or transport is None
+                    or getattr(packet, 'capture_time_verified', False) is not True):
+                state.flows_incomplete = True
+            else:
+                ethernet = packet[Ether]
+                key = (str(ethernet.src).lower(), str(ethernet.dst).lower(), packet[IP].dst,
+                       'tcp' if packet.haslayer(TCP) else 'udp', int(transport.dport))
+                sampled_at = float(packet.time)
+                if key in state.flows:
+                    flow = state.flows[key]
+                    flow['bytes'] += pkt_len
+                    flow['first_at'] = min(flow['first_at'], sampled_at)
+                    flow['last_at'] = max(flow['last_at'], sampled_at)
+                elif len(state.flows) >= MAX_FLOWS:
+                    state.flows_incomplete = True
+                else:
+                    state.flows[key] = dict(zip(('source_mac', 'peer_mac', 'peer_ip', 'protocol', 'service_port'), key),
+                                            bytes=pkt_len, first_at=sampled_at, last_at=sampled_at)
+
 
         # 신규 장치 탐지 (등록된 장치가 아닌 경우)
         src_mac = getattr(packet, "src", None)
@@ -256,6 +279,9 @@ class TrafficAnomalyEngine(DetectionEngine):
                     confidence=confidence,
                     metadata={
                         "packets": packets,
+                        "bytes": tick.bytes,
+                        "flows": list(tick.flows.values()),
+                        "flows_incomplete": tick.flows_incomplete,
                         "ewma_z_score": round(ewma_z, 2),
                         "mad_z_score": round(mad_z, 2),
                         "method": method,

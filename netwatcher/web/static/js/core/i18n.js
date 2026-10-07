@@ -45,6 +45,9 @@ export async function initI18n(onLangChange) {
 }
 
 export function updateContent() {
+    document.querySelectorAll("[data-i18n-aria-label]").forEach(el => {
+        el.setAttribute("aria-label", window.i18next.t(el.dataset.i18nAriaLabel));
+    });
     document.querySelectorAll("[data-i18n]").forEach(function (el) {
         var key = el.getAttribute("data-i18n");
         var options = el.getAttribute("data-i18n-options");

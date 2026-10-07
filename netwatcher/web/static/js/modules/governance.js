@@ -13,7 +13,7 @@
  * 판단을 숨기는 화면은 장식이다. 위반이 있으면 눈에 띄게 드러낸다.
  */
 
-import { authFetch } from '../core/api.js';
+import { authFetch, canAnalyze, canConfigure } from '../core/api.js';
 import { esc, escAttr, formatTime, showToast } from '../core/utils.js';
 
 function containTables(box) {
@@ -123,7 +123,10 @@ function renderCleanNotice() {
 
 /* ── 제안 승인 큐 ────────────────────────────────────────────── */
 
+const tp = (key, options = {}) => window.i18next.t('console.proposals.' + key, options);
 let proposals = [];
+let validationRequired = false;
+window.addEventListener("proposal-validation-attached", loadProposals);
 
 export async function loadProposals() {
     const body = document.getElementById("proposals-body");
@@ -135,10 +138,11 @@ export async function loadProposals() {
         if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "?"));
         const data = await resp.json();
         proposals = data.proposals || [];
-        if (count) count.textContent = `${data.pending ?? 0} 대기`;
+        validationRequired = data.validation_required === true;
+        if (count) count.textContent = tp('pending_count', {count: data.pending ?? 0});
 
         if (!proposals.length) {
-            body.innerHTML = '<tr><td colspan="6" class="empty-state">대기 중인 설정 제안이 없습니다</td></tr>';
+            body.innerHTML = `<tr><td colspan="7" class="empty-state">${esc(tp('empty'))}</td></tr>`;
             return;
         }
 
@@ -147,6 +151,11 @@ export async function loadProposals() {
         body.querySelectorAll("[data-approve]").forEach(btn => {
             btn.addEventListener("click", () => decide(btn.dataset.approve, "approve"));
         });
+        body.querySelectorAll("[data-validate]").forEach(btn => {
+            btn.addEventListener("click", () => window.dispatchEvent(new CustomEvent("proposal-validation", {
+                detail: proposals.find(p => String(p.id) === btn.dataset.validate),
+            })));
+        });
         body.querySelectorAll("[data-reject]").forEach(btn => {
             btn.addEventListener("click", () => decide(btn.dataset.reject, "reject"));
         });
@@ -154,9 +163,9 @@ export async function loadProposals() {
         body.textContent = "";
         const tr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = 6;
+        td.colSpan = 7;
         td.className = "empty-state";
-        td.textContent = "제안을 불러오지 못했습니다: " + (e.message || e);
+        td.textContent = tp('load_failed') + ': ' + (e.message || e);
         tr.appendChild(td);
         body.appendChild(tr);
     }
@@ -169,16 +178,20 @@ function renderProposalRow(p) {
         .join(", ");
 
     // 적용 실패를 성공으로 보여주지 않는다
-    let statusCell = esc(p.status);
+    let statusCell = esc(tp('status.' + p.status));
     if (p.status === "failed" || p.applied === false) {
-        statusCell = `<span class="proposal-failed">승인됨 · 반영 실패</span>`;
+        statusCell = `<span class="proposal-failed">${esc(tp('apply_failed'))}</span>`;
     } else if (p.applied === true) {
-        statusCell = `<span class="proposal-applied">승인됨 · 반영 완료</span>`;
+        statusCell = `<span class="proposal-applied">${esc(tp('applied'))}</span>`;
     }
 
+    const evidence = p.validation_runs || {};
+    const validated = Boolean(evidence.normal_run_id && evidence.attack_run_id);
     const actions = pending
-        ? `<button class="btn-detail" data-approve="${escAttr(p.id)}">승인</button>
-           <button class="btn-detail" data-reject="${escAttr(p.id)}" style="background:var(--critical)">거절</button>`
+        ? `${canAnalyze() ? `<button class="btn-detail" data-validate="${escAttr(p.id)}">${esc(tp('validate'))}</button>` : ''}
+           ${canConfigure() ? `<button class="btn-detail" data-approve="${escAttr(p.id)}" ${validationRequired && !validated ? `disabled title="${escAttr(tp('validation_required'))}"` : ''}>${esc(tp('approve'))}</button>
+           <button class="btn-detail" data-reject="${escAttr(p.id)}">${esc(tp('reject'))}</button>` : ''}
+           ${validated ? `<span>${esc(tp('feature_comparison'))} #${esc(evidence.normal_run_id)} / #${esc(evidence.attack_run_id)}</span>` : ''}`
         : `<span class="proposal-decided-by">${esc(p.decided_by || "-")}</span>`;
 
     const err = p.apply_error
@@ -202,8 +215,7 @@ async function decide(id, action) {
     if (action === "approve") {
         // 승인은 설정 쓰기다 — 오탐으로 임계값이 무너질 수 있으므로 한 번 더 확인한다
         const ok = window.confirm(
-            "이 제안을 승인하면 탐지 엔진 설정이 변경됩니다.\n" +
-            "오탐이 늘면 탐지가 느슨해집니다. 계속할까요?"
+            tp('confirm')
         );
         if (!ok) return;
     }
@@ -211,25 +223,25 @@ async function decide(id, action) {
     try {
         const resp = await authFetch(`/api/proposals/${encodeURIComponent(id)}/${action}`, {
             method: "POST",
-            body: JSON.stringify({ decided_by: "dashboard", note: "" }),
+            body: JSON.stringify({ note: "" }),
         });
         const data = resp && resp.ok ? await resp.json() : null;
 
         if (resp && resp.ok && data && data.status === "failed") {
             // 승인됐지만 반영은 실패했다 — 성공으로 알리지 않는다
             showToast(
-                "승인됨 · 반영 실패",
-                (data.error || "엔진 적용에 실패했습니다") + " (id=" + id + ")",
+                tp('apply_failed'),
+                (data.error || tp('apply_failed')) + " (id=" + id + ")",
                 "warning"
             );
         } else if (resp && resp.ok) {
-            showToast(action === "approve" ? "승인 완료" : "거절 완료", `#${id}`, "info");
+            showToast(action === 'approve' ? tp('applied') : tp('status.rejected'), `#${id}`, "info");
         } else {
             const detail = resp ? await resp.text() : "";
-            showToast("처리 실패", detail || "알 수 없는 오류", "critical");
+            showToast(tp('load_failed'), detail || tp('load_failed'), "critical");
         }
     } catch (e) {
-        showToast("처리 실패", e.message || String(e), "critical");
+        showToast(tp('load_failed'), e.message || String(e), "critical");
     }
     loadProposals();
 }
@@ -372,3 +384,7 @@ function renderObservation(data, box) {
         <div class="scope-note">${esc(loss.warning || "")}</div>
     `;
 }
+
+window.i18next?.on('languageChanged', () => {
+    if (document.getElementById('tab-governance')?.classList.contains('active')) loadProposals();
+});

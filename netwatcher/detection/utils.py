@@ -14,10 +14,12 @@ except ImportError:
 
 def get_ip_addrs(packet: Packet) -> tuple[str | None, str | None]:
     """패킷에서 (src_ip, dst_ip) 추출. IPv4/IPv6 모두 지원."""
-    if packet.haslayer(IP):
-        return packet[IP].src, packet[IP].dst
-    if IPv6 is not None and packet.haslayer(IPv6):
-        return packet[IPv6].src, packet[IPv6].dst
+    ip = packet.getlayer(IP)
+    if ip is not None:
+        return ip.src, ip.dst
+    ipv6 = packet.getlayer(IPv6) if IPv6 is not None else None
+    if ipv6 is not None:
+        return ipv6.src, ipv6.dst
     return None, None
 
 

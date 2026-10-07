@@ -23,7 +23,7 @@ async def test_slow_disk_does_not_block_loop_and_queue_memory_is_bounded(tmp_pat
     writer = PCAPWriter(str(tmp_path))
     writer.add_packet(IP(src="192.0.2.1", dst="192.0.2.2") / TCP())
     repo = AsyncMock()
-    service = EvidenceWriter(writer, repo, max_jobs=1, max_bytes=100)
+    service = EvidenceWriter(writer, repo, max_jobs=2, max_bytes=100)
     entered, release = threading.Event(), threading.Event()
     original = writer.write_snapshot
     def slow(*args):
@@ -39,10 +39,15 @@ async def test_slow_disk_does_not_block_loop_and_queue_memory_is_bounded(tmp_pat
     assert entered.is_set()
     assert service.submit(2, make_alert())["reason"] == "cooldown"
     assert service.submit(3, make_alert(Severity.CRITICAL))["state"] == "pending"
+    a = make_alert(Severity.CRITICAL)
+    a.engine = "another"
+    assert service.submit(4, a)["reason"] == "evidence_queue_budget"
+    assert service.pending_jobs == 2
     assert service.pending_bytes <= 100
     await asyncio.wait_for(asyncio.sleep(0.02), timeout=0.2)
     release.set()
     await service.stop()
+    assert service.pending_jobs == 0
     assert service.pending_bytes == 0
     assert repo.update_pcap_state.await_count == 2
     for call in repo.update_pcap_state.call_args_list:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import json
+import math
 import os
 import time
 import threading
@@ -37,6 +39,27 @@ class PCAPWriter:
         """PCAP 기록기를 초기화한다. 출력 디렉토리, 버퍼 크기, 저장 제한을 설정한다."""
         self._output_dir = Path(output_dir)
         self._output_dir.mkdir(parents=True, exist_ok=True)
+        self._file_lock = threading.RLock()
+        self._pins_path = self._output_dir / "review-pins.json"
+        self._pins = {}
+        self._pins_valid = True
+        try:
+            if self._pins_path.is_symlink():
+                raise ValueError("Invalid pin manifest")
+            if self._pins_path.exists():
+                if self._pins_path.stat().st_size > 65536:
+                    raise ValueError("Pin manifest exceeds budget")
+                pins = json.loads(self._pins_path.read_text())
+                if not isinstance(pins, dict) or len(pins) > 64:
+                    raise ValueError("Invalid pin manifest")
+                for name, pin in pins.items():
+                    if (Path(name).name != name or not name.startswith("event_") or not name.endswith(".pcap")
+                            or not isinstance(pin, dict) or not math.isfinite(float(pin["expires_at"]))):
+                        raise ValueError("Invalid pin manifest")
+                self._pins = pins
+        except Exception:
+            self._pins_valid = False
+            logger.warning("Evidence pin manifest invalid; retention and new writes disabled")
         self._buffer_size = buffer_size
         self._context_seconds = context_seconds
         self._max_storage_bytes = max_storage_mb * 1024 * 1024
@@ -124,9 +147,13 @@ class PCAPWriter:
         return self.write_snapshot(event_id, matching)
 
     def write_snapshot(self, event_id, matching):
+        with self._file_lock:
+            return self._write_snapshot(event_id, matching)
+
+    def _write_snapshot(self, event_id, matching):
         if not matching:
             return None
-        if not self._inventory_complete:
+        if not self._inventory_complete or not self._pins_valid:
             return None
         now = time.time()
         projected = 24 + sum(16 + len(raw) for _, raw, _ in matching)
@@ -173,6 +200,11 @@ class PCAPWriter:
             return None
 
     def _enforce_storage_limit(self, required_bytes=0, required_files=0) -> None:
+        with self._file_lock:
+            if self._pins_valid:
+                self._retention(required_bytes, required_files)
+
+    def _retention(self, required_bytes=0, required_files=0) -> None:
         """전체 저장 용량이 제한을 초과하면 가장 오래된 PCAP 파일을 삭제한다."""
         started = time.monotonic()
         try:
@@ -184,9 +216,13 @@ class PCAPWriter:
             while ((self._storage_bytes + required_bytes > self._max_storage_bytes
                     or len(self._inventory) + required_files > self._max_files)
                    and self._inventory and self._deleted_this_second < self._max_deletes):
-                _, oldest, size = self._inventory[0]
+                victim = next((item for item in self._inventory
+                               if self._pins.get(item[1].name, {}).get('expires_at', 0) <= time.time()), None)
+                if victim is None:
+                    break  # pinned evidence is preserved; new writes may be refused
+                _, oldest, size = victim
                 oldest.unlink(missing_ok=True)
-                self._inventory.popleft()
+                self._inventory.remove(victim)
                 self._storage_bytes -= size
                 self._deleted_this_second += 1
                 metrics.pcap_operations.labels(operation="delete", result="ok").inc()
@@ -197,8 +233,62 @@ class PCAPWriter:
         finally:
             metrics.pcap_duration.labels(operation="retention").observe(time.monotonic() - started)
 
+    def _save_pins(self, pins):
+        temporary = self._pins_path.with_suffix('.json.part')
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            with os.fdopen(descriptor, 'w') as stream:
+                json.dump(pins, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._pins_path)
+            self._pins = pins  # retain protection even if directory fsync is unconfirmed
+            directory = os.open(self._output_dir, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def review_pin(self, event_id, *, actor, reason, hours=24, enabled=True):
+        with self._file_lock:
+            if not self._pins_valid:
+                raise ValueError('Evidence pin state unavailable')
+            path = self.get_pcap_path(event_id)
+            if not path:
+                raise FileNotFoundError('Evidence file is unavailable')
+            now = time.time()
+            pins = {name: pin for name, pin in self._pins.items() if pin['expires_at'] > now}
+            name = Path(path).name
+            if enabled:
+                if not 1 <= hours <= 24:
+                    raise ValueError('Pin TTL must be 1..24 hours')
+                expires = max(pins.get(name, {}).get('expires_at', 0), now + hours * 3600)
+                pins[name] = {'expires_at': expires, 'confirmed_by': actor[:255], 'reason': reason[:500]}
+                total = sum(size for _, file, size in self._inventory if file.name in pins)
+                if len(pins) > 64 or total > 32 * 1024 * 1024:
+                    raise ValueError('Evidence pin budget exceeded (64 files / 32 MiB)')
+            else:
+                pins.pop(name, None)
+            self._save_pins(pins)
+            self._pins = pins
+            return self.evidence_availability(event_id)
+
+    def evidence_availability(self, event_id):
+        with self._file_lock:
+            path = self.get_pcap_path(event_id)
+            pin = self._pins.get(Path(path).name, {}) if path else {}
+            return {'state': 'available' if path else 'unavailable',
+                    'pin_state': 'unknown' if not self._pins_valid else
+                        'pinned' if pin.get('expires_at', 0) > time.time() else 'unpinned',
+                    'pin': pin if pin.get('expires_at', 0) > time.time() else None,
+                    'pin_budget': {'files': 64, 'bytes': 32 * 1024 * 1024, 'max_hours': 24}}
+
     def get_pcap_path(self, event_id: int) -> str | None:
         """이벤트 ID에 해당하는 PCAP 파일을 찾는다."""
-        for f in self._output_dir.glob(f"event_{event_id}_*.pcap"):
-            return str(f)
+        with self._file_lock:
+            for _, path, _ in reversed(self._inventory):
+                if path.name.startswith(f"event_{int(event_id)}_") and path.is_file() and not path.is_symlink():
+                    return str(path)
         return None

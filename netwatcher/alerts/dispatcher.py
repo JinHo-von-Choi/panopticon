@@ -86,6 +86,15 @@ class AlertDispatcher:
             max_keys=aggregation_cfg.get("max_keys", 10000),
         ) if aggregation_cfg.get("enabled", False) else None
         self._aggregation_task: asyncio.Task | None = None
+        self._spool_task: asyncio.Task | None = None
+        self._recovery_spool = None
+        spool_cfg = config.section('storage').get('recovery_spool', {})
+        if spool_cfg.get('enabled', False):
+            from netwatcher.storage.recovery_spool import RecoverySpool
+            from pathlib import Path
+            self._recovery_spool = RecoverySpool(Path(spool_cfg.get('directory', 'data/recovery')) / 'events',
+                max_bytes=spool_cfg.get('event_bytes', 16*1024*1024),
+                max_files=spool_cfg.get('event_files', 64), ttl=spool_cfg.get('ttl_seconds', 300))
         batch_cfg = config.section("alerts").get("batch", {})
         self._batch_enabled = batch_cfg.get("enabled", False)
         self._batch_size = min(100, max(1, batch_cfg.get("size", 100)))
@@ -135,6 +144,8 @@ class AlertDispatcher:
         """디스패처 소비자 루프를 시작한다."""
         self._stopping = False
         self._task = asyncio.create_task(self._consumer_loop())
+        if self._recovery_spool is not None:
+            self._spool_task = asyncio.create_task(self._spool_loop())
         if self._notification_writer is not None:
             self._notification_writer.start()
         if self._aggregator is not None:
@@ -146,7 +157,7 @@ class AlertDispatcher:
             await self._stop(drain_timeout)
         finally:
             # 상위 앱 예산이 먼저 소진돼도 백그라운드 소비자를 남기지 않는다.
-            tasks = [task for task in (self._task, self._aggregation_task) if task and not task.done()]
+            tasks = [task for task in (self._task, self._aggregation_task, self._spool_task) if task and not task.done()]
             for task in tasks:
                 task.cancel()
             if tasks:
@@ -243,6 +254,43 @@ class AlertDispatcher:
         self.refresh_queue_metrics()
 
         logger.info("AlertDispatcher stopped")
+
+    async def _spool_loop(self):
+        while True:
+            await self.recover_spool_once()
+            await asyncio.sleep(5)
+
+    async def recover_spool_once(self):
+        spool = self._recovery_spool
+        if spool is None:
+            return
+        try:
+            item = await asyncio.to_thread(spool.next)
+            if item is None:
+                return
+            name, frame = item
+            async with asyncio.timeout(2):
+                mapping = await self._event_repo.insert_batch_mapped(frame['payload'])
+            ids = {uuid.UUID(row['ingest_id']) for row in frame['payload']}
+            if ids <= mapping.keys():
+                await asyncio.to_thread(spool.ack, name, recovered=frame['count'])
+                logger.info('Recovered event receipts: %d; external delivery not replayed', frame['count'])
+        except Exception:
+            logger.debug('Recovery spool deferred; stable receipts retained')
+
+    async def _spool_failed(self, payload):
+        if self._recovery_spool is None or not payload:
+            return
+        try:
+            key = uuid.uuid5(uuid.NAMESPACE_OID, '|'.join(sorted(row['ingest_id'] for row in payload)))
+            for row in payload:
+                row.setdefault('metadata', {})['recovery'] = {'state': 'commit_unconfirmed',
+                    'spooled_at': time.time(), 'delivery_replayed': False}
+            stored = await asyncio.to_thread(self._recovery_spool.put, key, payload, count=len(payload))
+            if not stored:
+                logger.warning('Recovery spool refused unconfirmed events: %d', len(payload))
+        except Exception:
+            logger.warning('Recovery spool write unconfirmed: %d', len(payload))
 
     async def _aggregation_loop(self):
         while True:
@@ -443,7 +491,25 @@ class AlertDispatcher:
 
         return True
 
+    async def _apply_business_context(self, alerts):
+        candidates = [alert for alert in alerts if alert.engine == 'traffic_anomaly'
+                      and alert.title_key == 'engines.traffic_anomaly.alerts.volume.title' and alert.source_ip]
+        if not candidates or self._device_repo is None:
+            return
+        try:
+            from netwatcher.detection.context_policy import expected_job
+            async with asyncio.timeout(.5):
+                devices = await self._device_repo.context_candidates(list({a.source_ip for a in candidates}))
+            by_ip = {str(device['ip_address']): device for device in devices}
+            for alert in candidates:
+                device = by_ip.get(alert.source_ip)
+                if device is not None:
+                    expected_job(alert, device, shared_ip=device['ip_owners'] != 1)
+        except Exception:
+            logger.debug('Business context unavailable; original severity retained', exc_info=True)
+
     async def _process_alert(self, alert: Alert) -> None:
+        await self._apply_business_context([alert])
         if not self._prepare_alert(alert):
             return
         # 2. DB 삽입
@@ -485,12 +551,18 @@ class AlertDispatcher:
             metrics.event_store_duration.labels(result=result).observe(time.monotonic() - insert_started)
             metrics.event_store_total.labels(result=result).inc()
 
+        if event_id is None:
+            await self._spool_failed([{'ingest_id': str(ingest_id), **{name: getattr(alert, name) for name in (
+                'engine', 'title', 'description', 'title_key', 'description_key', 'source_ip', 'source_mac',
+                'dest_ip', 'dest_mac', 'metadata', 'packet_info', 'mitre_attack_id', 'threat_level')},
+                'severity': alert.severity.value}])
         await self._deliver_committed(alert, event_id)
 
     async def _process_alert_batch(self, alerts: list[Alert]) -> None:
         if len(alerts) == 1:
             await self._process_alert(alerts[0])
             return
+        await self._apply_business_context(alerts)
         accepted = [alert for alert in alerts if self._prepare_alert(alert)]
         if not accepted:
             return
@@ -513,6 +585,7 @@ class AlertDispatcher:
                     logger.warning("Alert batch commit unconfirmed: events=%d", len(pairs))
                 else:
                     await asyncio.sleep(.05)
+        await self._spool_failed([row for row in payload if uuid.UUID(row['ingest_id']) not in mapping])
         for key, alert in pairs:
             event_id = mapping.get(key)
             result = "committed" if event_id is not None else "failed"
@@ -623,6 +696,9 @@ class AlertDispatcher:
                     )
             except Exception:
                 logger.exception("Auto-block failed for %s", alert.source_ip)
+
+        if alert.expected_job_confirmed:
+            return
 
         # 8. Webhook 채널 -- 타임아웃 적용 병렬 처리
         if self._notification_writer is not None and self._notification_writer.task is not None:

@@ -9,7 +9,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
+from netwatcher.web.rbac import Role, require_role
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from netwatcher.alerts.dispatcher import AlertDispatcher
@@ -54,10 +56,36 @@ def create_ws_router(
         q = dispatcher.subscribe_ws()
         msg_count = 0
         window_start = time.monotonic()
+        async def wait_disconnect():
+            received = 0
+            started = time.monotonic()
+            while True:
+                message = await websocket.receive()
+                if message['type'] == 'websocket.disconnect':
+                    return
+                if time.monotonic() - started >= 60:
+                    received = 0
+                    started = time.monotonic()
+                received += 1
+                if received > _WS_RATE_LIMIT_MSG_PER_MIN:
+                    await websocket.close(code=1008)
+                    return
+
+        disconnect_task = asyncio.create_task(wait_disconnect())
+        event_task = asyncio.create_task(q.get())
         try:
             while True:
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=30)
+                    done, _ = await asyncio.wait((event_task, disconnect_task), timeout=30,
+                                                 return_when=asyncio.FIRST_COMPLETED)
+                    if disconnect_task in done:
+                        disconnect_task.result()
+                        break
+                    if event_task not in done:
+                        await websocket.send_text('{"type":"ping"}')
+                        continue
+                    msg = event_task.result()
+                    event_task = asyncio.create_task(q.get())
                     # 메시지 전송 레이트 리밋
                     now = time.monotonic()
                     if now - window_start >= 60.0:
@@ -74,12 +102,30 @@ def create_ws_router(
         except Exception:
             pass
         finally:
+            disconnect_task.cancel()
+            event_task.cancel()
+            await asyncio.gather(disconnect_task, event_task, return_exceptions=True)
             dispatcher.unsubscribe_ws(q)
             ws_connections_per_ip[client_ip] = max(0, ws_connections_per_ip[client_ip] - 1)
             if ws_connections_per_ip[client_ip] == 0:
                 del ws_connections_per_ip[client_ip]
 
     return router
+
+
+class EvidencePinRequest(BaseModel):
+    enabled: bool = True
+    hours: int = Field(default=24, ge=1, le=24)
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator('reason')
+    @classmethod
+    def meaningful_reason(cls, value):
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError('Review reason required')
+        return value
+
 
 
 def create_events_router(
@@ -129,10 +175,39 @@ def create_events_router(
             return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=events.csv"})
         return {"events": events, "total": len(events)}
 
+    @router.post('/{event_id}/evidence/pin')
+    async def pin_evidence(event_id: int, body: EvidencePinRequest,
+                           actor: dict = Depends(require_role(Role.ADMIN))):
+        if pcap_writer is None:
+            raise HTTPException(503, 'Evidence storage unavailable')
+        if not await event_repo.get_by_id(event_id):
+            raise HTTPException(404, 'Event not found')
+        try:
+            return await asyncio.to_thread(pcap_writer.review_pin, event_id,
+                actor=str(actor.get('sub') or 'local'), reason=body.reason,
+                hours=body.hours, enabled=body.enabled)
+        except FileNotFoundError:
+            raise HTTPException(404, 'Evidence file unavailable') from None
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+
+    @router.get('/{event_id}/evidence/file')
+    async def download_evidence(event_id: int, actor: dict = Depends(require_role(Role.VIEWER))):
+        if pcap_writer is None:
+            raise HTTPException(503, 'Evidence storage unavailable')
+        if not await event_repo.get_by_id(event_id):
+            raise HTTPException(404, 'Event not found')
+        path = await asyncio.to_thread(pcap_writer.get_pcap_path, event_id)
+        if not path:
+            raise HTTPException(404, 'Evidence file unavailable')
+        return FileResponse(path, media_type='application/vnd.tcpdump.pcap', filename=Path(path).name)
+
     @router.get("/{event_id}")
     async def get_event(event_id: int):
         event = await event_repo.get_by_id(event_id)
         if not event: return JSONResponse({"error": "Event not found"}, status_code=404)
+        if pcap_writer is not None:
+            event["pcap_availability"] = await asyncio.to_thread(pcap_writer.evidence_availability, event_id)
         if device_repo is not None:
             event['asset_context'] = await device_repo.context_for_source(
                 event.get('source_ip'), event.get('source_mac'))

@@ -370,7 +370,11 @@ class NetWatcher:
         from netwatcher.replay.runs import ReplayRunService
         from netwatcher.storage.repositories import ReplayRepository
 
-        replay_service = ReplayRunService(ReplayRepository(self.db))
+        replay_service = ReplayRunService(ReplayRepository(self.db),
+            max_pending_runs=self.config.get('replay.max_pending_runs', 2),
+            max_pending_bytes=self.config.get('replay.max_pending_bytes', 33554432),
+            timeout=self.config.get('replay.timeout_seconds', 600))
+        proposal_service.require_replay_validation(replay_service)
 
         # ── 조치 생애주기 (계획서 2장, PR 13) ────────────────────────────
         # OS 를 변경하는 백엔드는 없다. 계획서가 "검증된 만료 백엔드·권한
@@ -446,6 +450,7 @@ class NetWatcher:
             health_checker=health_checker,
             audit_logger=AuditLogger(self.db.pool),
             audit_required=True,
+            pcap_writer=self.pcap_writer,
         )
 
         import uvicorn
@@ -556,6 +561,8 @@ class NetWatcher:
         await budget.run("stats", lambda: stats_flush.stop(flush=True), limit=1)
         logger.info("Shutdown stats confirmation: %s", stats_flush.status())
         await budget.run("maintenance", maintenance.stop, limit=.5)
+        replay_service.stop_accepting()
+        await budget.run("replay", replay_service.stop, limit=.5)
         await budget.run("dns", self._dns_resolver.stop, limit=.5)
         for name, service in (("daily_report", daily_reporter), ("asset_monitor", asset_monitor),
                               ("ai_analyzer", ai_analyzer), ("checkpoint", checkpoint_service)):

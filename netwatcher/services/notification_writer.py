@@ -36,7 +36,7 @@ class NotificationWriter:
         critical = alert.severity == Severity.CRITICAL
         jobs = self.queue.maxsize if critical else self.queue.maxsize - self.queue.maxsize // 4
         byte_limit = self.max_bytes if critical else self.max_bytes - self.max_bytes // 4
-        if self.queue.qsize() >= jobs or self.bytes + len(payload) > byte_limit:
+        if self.queue.qsize() + self.inflight >= jobs or self.bytes + len(payload) > byte_limit:
             self.rejected += 1
             return False
         self.queue.put_nowait((0 if critical else 1, next(self._sequence), time.monotonic(), payload))

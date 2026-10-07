@@ -93,6 +93,35 @@ class ProposalService:
         self._registry = registry
         self._yaml_editor = yaml_editor
         self._repo = proposal_repo
+        self._replay_service = None
+
+    def require_replay_validation(self, service):
+        self._replay_service = service
+
+    @property
+    def validation_required(self):
+        return self._replay_service is not None
+
+    async def attach_validation(self, proposal_id, normal_run_id, attack_run_id, actor):
+        if self._replay_service is None or self._repo is None:
+            raise ProposalError("리플레이 검증 경로를 사용할 수 없습니다")
+        row = await self._repo.get_by_id(proposal_id)
+        if not row or row.get('status') != STATUS_PENDING:
+            raise ProposalError("대기 중인 제안만 검증할 수 있습니다")
+        validation = await self._validate_runs(row, normal_run_id, attack_run_id)
+        validation['confirmed_by'] = actor[:100]
+        if not await self._repo.attach_validation(proposal_id, validation):
+            raise ProposalError("다른 사람이 먼저 결정했습니다")
+        return validation
+
+    async def _validate_runs(self, row, normal_id, attack_id):
+        from netwatcher.detection.proposal_validation import validate_pair, ValidationError
+        if self._current_config(row['engine']) != (row.get('before') or {}):
+            raise ProposalError("제안 이후 설정이 변경되었습니다. 현재 설정으로 다시 제안하세요")
+        try:
+            return await validate_pair(self._replay_service, row, normal_id, attack_id)
+        except ValidationError as error:
+            raise ProposalError(str(error)) from error
 
     # ------------------------------------------------------------------
     # 제안
@@ -204,6 +233,12 @@ class ProposalService:
                 param_violations,
             )
 
+        if self.validation_required:
+            validation = row.get('validation_runs') or {}
+            if not validation.get('normal_run_id') or not validation.get('attack_run_id'):
+                raise ProposalError("정상·공격 리플레이 검증 근거를 먼저 연결하세요")
+            await self._validate_runs(row, validation['normal_run_id'], validation['attack_run_id'])
+
         before = dict(row.get("before") or {})
         drift = validate_engine_config(schema, {**before, **params})
         # drift 에 남는 항목은 before 쪽에서 온 것이다 (params 는 위에서 통과)
@@ -214,6 +249,8 @@ class ProposalService:
             raise ProposalError("다른 사람이 먼저 결정했다")
 
         try:
+            if self.validation_required and self._current_config(engine) != before:
+                raise RuntimeError("검증 이후 설정이 변경되었습니다")
             applied = self._apply(engine, params)
         except Exception as exc:
             logger.exception("승인된 제안 적용 실패: id=%s", proposal_id)
