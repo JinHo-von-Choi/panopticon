@@ -372,6 +372,15 @@ RESPONSE_PROPOSALS_INDEXES = [
     "ON response_proposals(status, created_at DESC);",
 ]
 
+EVENT_INGEST_TABLE = """
+CREATE TABLE IF NOT EXISTS event_ingest (
+    ingest_id UUID PRIMARY KEY,
+    event_id BIGINT NOT NULL,
+    event_timestamp TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_ingest_timestamp ON event_ingest(event_timestamp);
+"""
+
 FLUSH_RECEIPTS_TABLE = """
 CREATE TABLE IF NOT EXISTS flush_receipts (
     flush_id UUID PRIMARY KEY,
@@ -383,6 +392,7 @@ CREATE INDEX IF NOT EXISTS idx_flush_receipts_created ON flush_receipts(created_
 
 ALL_SCHEMAS = [
     FLUSH_RECEIPTS_TABLE,
+    EVENT_INGEST_TABLE,
     EVENTS_TABLE,
     *EVENTS_INDEXES,
     DEVICES_TABLE,

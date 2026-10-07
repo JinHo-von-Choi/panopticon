@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
@@ -370,25 +371,35 @@ class AlertDispatcher:
         insert_started = time.monotonic()
         if self._observation is not None:
             self._observation.record(STAGE_DB, KIND_RECEIVED)
+        ingest_id = uuid.uuid4()
         try:
-            event_id = await self._event_repo.insert(
-                engine=alert.engine,
-                severity=alert.severity.value,
-                title=alert.title,
-                description=alert.description,
-                title_key=alert.title_key,
-                description_key=alert.description_key,
-                source_ip=alert.source_ip,
-                source_mac=alert.source_mac,
-                dest_ip=alert.dest_ip,
-                dest_mac=alert.dest_mac,
-                metadata=alert.metadata,
-                packet_info=alert.packet_info,
-                mitre_attack_id=alert.mitre_attack_id,
-                threat_level=alert.threat_level,
-            )
+            for attempt in range(2):
+                try:
+                    async with asyncio.timeout(2):
+                        event_id = await self._event_repo.insert(
+                            ingest_id=ingest_id,
+                            engine=alert.engine,
+                            severity=alert.severity.value,
+                            title=alert.title,
+                            description=alert.description,
+                            title_key=alert.title_key,
+                            description_key=alert.description_key,
+                            source_ip=alert.source_ip,
+                            source_mac=alert.source_mac,
+                            dest_ip=alert.dest_ip,
+                            dest_mac=alert.dest_mac,
+                            metadata=alert.metadata,
+                            packet_info=alert.packet_info,
+                            mitre_attack_id=alert.mitre_attack_id,
+                            threat_level=alert.threat_level,
+                        )
+                    break
+                except Exception:
+                    if attempt:
+                        raise
+                    await asyncio.sleep(.05)
         except Exception:
-            logger.exception("Failed to save alert to DB")
+            logger.warning("Alert commit unconfirmed after bounded retry")
         finally:
             result = "committed" if event_id is not None else "failed"
             metrics.event_store_duration.labels(result=result).observe(time.monotonic() - insert_started)
@@ -403,6 +414,8 @@ class AlertDispatcher:
                 self._observation.record(
                     STAGE_DB, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP,
                 )
+        if event_id is None:
+            return  # 미확인 event_id로 알림·증거·대응을 실행하지 않는다.
         if self._aggregator is not None and event_id is not None:
             self._aggregator.register(alert, event_id)
 

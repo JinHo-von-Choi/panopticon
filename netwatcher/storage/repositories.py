@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -65,23 +66,18 @@ class EventRepository:
         reasoning: str | None = None,
         mitre_attack_id: str | None = None,
         threat_level: int = 0,
+        ingest_id: uuid.UUID | None = None,
     ) -> int:
         """새 이벤트를 삽입하고 해당 id를 반환한다."""
-        row_id = await self._db.pool.fetchval(
-            """INSERT INTO events
-               (engine, severity, title, description, title_key, description_key,
-                source_ip, source_mac, dest_ip, dest_mac, metadata, packet_info,
-                reasoning, mitre_attack_id, threat_level)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-               RETURNING id""",
-            engine, severity,
-            _sanitize(title), _sanitize(description),
-            title_key, description_key,
-            source_ip, source_mac, dest_ip, dest_mac,
-            _sanitize(metadata or {}), _sanitize(packet_info or {}),
-            reasoning, mitre_attack_id, threat_level,
-        )
-        return row_id
+        ingest_id = ingest_id or uuid.uuid4()
+        rows = await self.insert_batch_mapped([{
+            "ingest_id": str(ingest_id), "engine": engine, "severity": severity,
+            "title": title, "description": description, "title_key": title_key,
+            "description_key": description_key, "source_ip": source_ip, "source_mac": source_mac,
+            "dest_ip": dest_ip, "dest_mac": dest_mac, "metadata": metadata, "packet_info": packet_info,
+            "reasoning": reasoning, "mitre_attack_id": mitre_attack_id, "threat_level": threat_level,
+        }])
+        return rows[ingest_id]
 
     async def get_by_id(self, event_id: int) -> dict | None:
         """ID로 단일 이벤트를 반환한다."""
@@ -237,43 +233,64 @@ class EventRepository:
             "UPDATE events SET resolved = TRUE WHERE id = $1", event_id,
         )
 
-    async def insert_batch(self, events: list[dict]) -> int:
-        """단일 트랜잭션 내에서 여러 이벤트를 일괄 삽입한다. 삽입된 행 수를 반환한다."""
+    async def insert_batch_mapped(self, events: list[dict]) -> dict[uuid.UUID, int]:
+        """단일 다중행 INSERT. 결과 순서 대신 ingest_id로 확정 ID를 반환한다."""
         if not events:
-            return 0
+            return {}
+        ids, payload = [], []
+        for event in events:
+            event.setdefault("ingest_id", str(uuid.uuid4()))
+            ingest_id = uuid.UUID(str(event["ingest_id"]))
+            ids.append(ingest_id)
+            payload.append({
+                **{key: event.get(key) for key in ("title_key", "description_key", "source_ip", "source_mac",
+                    "dest_ip", "dest_mac", "reasoning", "mitre_attack_id", "timestamp")},
+                "ingest_id": str(ingest_id), "engine": event.get("engine", ""),
+                "severity": event.get("severity", "INFO"), "title": _sanitize(event.get("title", "")),
+                "description": _sanitize(event.get("description", "")),
+                "metadata": _sanitize(event.get("metadata") or {}),
+                "packet_info": _sanitize(event.get("packet_info") or {}),
+                "threat_level": event.get("threat_level", 0),
+            })
+        if len(set(ids)) != len(ids):
+            raise ValueError("Duplicate ingest IDs in batch")
+        rows = await self._db.pool.fetch("""
+            WITH payload AS (
+                SELECT * FROM jsonb_to_recordset($1::jsonb) AS e(ingest_id UUID, engine TEXT, severity TEXT,
+                    title TEXT, description TEXT, title_key TEXT, description_key TEXT,
+                    source_ip INET, source_mac MACADDR, dest_ip INET, dest_mac MACADDR,
+                    metadata JSONB, packet_info JSONB, reasoning TEXT, mitre_attack_id TEXT,
+                    threat_level SMALLINT, timestamp TIMESTAMPTZ)
+            ), claimed AS (
+                INSERT INTO event_ingest (ingest_id, event_id, event_timestamp)
+                SELECT ingest_id, nextval(pg_get_serial_sequence('events','id')),
+                    COALESCE(timestamp, NOW()) FROM payload
+                ON CONFLICT (ingest_id) DO UPDATE SET ingest_id=EXCLUDED.ingest_id
+                RETURNING ingest_id, event_id, event_timestamp
+            ), saved AS (
+                INSERT INTO events (id, engine, severity, title, description, title_key,
+                    description_key, source_ip, source_mac, dest_ip, dest_mac, metadata, packet_info,
+                    reasoning, mitre_attack_id, threat_level, timestamp)
+                SELECT c.event_id, p.engine, p.severity, p.title, p.description, p.title_key,
+                    p.description_key, p.source_ip, p.source_mac, p.dest_ip, p.dest_mac,
+                    p.metadata, p.packet_info, p.reasoning, p.mitre_attack_id, p.threat_level,
+                    c.event_timestamp FROM payload p JOIN claimed c USING(ingest_id)
+                ON CONFLICT DO NOTHING RETURNING id
+            )
+            SELECT ingest_id, event_id AS id FROM claimed
+        """, payload)
+        return {row["ingest_id"]: row["id"] for row in rows}
 
-        inserted = 0
-        async with self._db.pool.acquire() as conn:
-            async with conn.transaction():
-                for ev in events:
-                    await conn.execute(
-                        """INSERT INTO events
-                           (engine, severity, title, description, title_key, description_key,
-                            source_ip, source_mac, dest_ip, dest_mac, metadata, packet_info,
-                            reasoning, mitre_attack_id, threat_level)
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)""",
-                        ev.get("engine", ""),
-                        ev.get("severity", "INFO"),
-                        _sanitize(ev.get("title", "")),
-                        _sanitize(ev.get("description", "")),
-                        ev.get("title_key"),
-                        ev.get("description_key"),
-                        ev.get("source_ip"),
-                        ev.get("source_mac"),
-                        ev.get("dest_ip"),
-                        ev.get("dest_mac"),
-                        _sanitize(ev.get("metadata") or {}),
-                        _sanitize(ev.get("packet_info") or {}),
-                        ev.get("reasoning"),
-                        ev.get("mitre_attack_id"),
-                        ev.get("threat_level", 0),
-                    )
-                    inserted += 1
-        return inserted
+    async def insert_batch(self, events: list[dict]) -> int:
+        """기존 count 계약을 유지하면서 실제 다중행 INSERT를 사용한다."""
+        return len(await self.insert_batch_mapped(events))
 
     async def delete_older_than(self, days: int) -> int:
         """지정된 일수보다 오래된 이벤트를 삭제한다."""
         cutoff = _now_utc() - timedelta(days=days)
+        await self._db.pool.execute(
+            "DELETE FROM event_ingest WHERE event_timestamp < $1", cutoff,
+        )
         result = await self._db.pool.execute(
             "DELETE FROM events WHERE timestamp < $1",
             cutoff.isoformat(),
