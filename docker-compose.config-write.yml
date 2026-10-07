@@ -1,0 +1,6 @@
+# 기본 읽기 전용 설정 대신 운영자가 준비한 별도 설정 디렉터리를 사용한다.
+# docker compose -f docker-compose.yml -f docker-compose.config-write.yml up -d netwatcher
+services:
+  netwatcher:
+    volumes:
+      - ${NETWATCHER_WRITABLE_CONFIG_DIR:?Set an existing validated config directory}:/app/config:rw

@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import logging
+import copy
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from netwatcher.utils.yaml_editor import ConfigurationReadOnlyError
 
 if TYPE_CHECKING:
     from netwatcher.detection.whitelist import Whitelist
@@ -47,47 +49,49 @@ def create_whitelist_router(
         if not value:
             raise HTTPException(status_code=400, detail="Value cannot be empty")
 
+        candidate = copy.deepcopy(whitelist)
         action = "added"
         
         if target_type == "ip":
-            if value in whitelist._ips:
-                whitelist.remove_ip(value)
+            if value in candidate._ips:
+                candidate.remove_ip(value)
                 action = "removed"
             else:
-                whitelist.add_ip(value)
+                candidate.add_ip(value)
         
         elif target_type == "mac":
             mac_lower = value.lower()
-            if mac_lower in whitelist._macs:
-                whitelist.remove_mac(mac_lower)
+            if mac_lower in candidate._macs:
+                candidate.remove_mac(mac_lower)
                 action = "removed"
             else:
-                whitelist.add_mac(mac_lower)
+                candidate.add_mac(mac_lower)
         
         elif target_type == "domain":
             domain_lower = value.lower()
-            if domain_lower in whitelist._domains:
-                whitelist.remove_domain(domain_lower)
+            if domain_lower in candidate._domains:
+                candidate.remove_domain(domain_lower)
                 action = "removed"
             else:
-                whitelist.add_domain(domain_lower)
+                candidate.add_domain(domain_lower)
         
         elif target_type == "ip_range":
             # IP 범위는 리스트 관리가 복잡하므로 여기서는 우선 제외하거나 
             # 단순 문자열 비교로 처리할 수 있음. (현재 Whitelist 클래스는 객체 리스트 사용)
             # 일단은 단순하게 추가만 지원하거나 추후 보완.
-            whitelist.add_ip_range(value)
+            candidate.add_ip_range(value)
         
         else:
             raise HTTPException(status_code=400, detail=f"Invalid type: {target_type}")
 
-        # YAML 영속화
         try:
-            yaml_editor.update_whitelist_config(whitelist.to_dict())
-        except Exception as e:
-            logger.error("Failed to save whitelist to YAML: %s", e)
-            # 메모리는 이미 변경되었으므로 사용자에게 경고하되 성공 반환 가능
-        
+            yaml_editor.update_whitelist_config(candidate.to_dict())
+        except ConfigurationReadOnlyError:
+            raise HTTPException(status_code=503, detail="Configuration is read-only")
+        except OSError:
+            raise HTTPException(status_code=503, detail="Configuration could not be persisted")
+        whitelist.__dict__.update(candidate.__dict__)
+
         return {"status": "ok", "action": action, "type": target_type, "value": value}
 
     return router

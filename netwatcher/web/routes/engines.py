@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from netwatcher.utils.yaml_editor import ConfigurationReadOnlyError
 from pydantic import BaseModel
 
 from netwatcher.detection.validation import validate_engine_config
@@ -38,6 +39,8 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
         try:
+            yaml_editor.ensure_writable()
+            previous = yaml_editor.get_engine_config(name) or {}
             yaml_editor.update_engine_config(name, {"enabled": body.enabled})
             if body.enabled:
                 config = yaml_editor.get_engine_config(name) or {"enabled": True}
@@ -45,8 +48,13 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
             else:
                 ok, err, _ = registry.disable_engine(name)
             if not ok:
+                yaml_editor.update_engine_config(name, previous)
                 raise HTTPException(status_code=404, detail=err or "Engine not found")
             return {"status": "ok", "name": name, "enabled": body.enabled}
+        except ConfigurationReadOnlyError:
+            raise HTTPException(status_code=503, detail="Configuration is read-only")
+        except OSError:
+            raise HTTPException(status_code=503, detail="Configuration could not be persisted")
         except HTTPException:
             raise
         except KeyError as e:
@@ -94,6 +102,7 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
                 )
 
         try:
+            yaml_editor.ensure_writable()
             existing = yaml_editor.get_engine_config(name) or {}
             merged   = {**existing, **updates}
 
@@ -116,7 +125,17 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
                     {"error": err or f"Failed to apply config for '{name}'"},
                     status_code=500,
                 )
-            yaml_editor.update_engine_config(name, updates)
+            try:
+                yaml_editor.update_engine_config(name, updates)
+            except Exception:
+                restored, _, _ = registry.reload_engine(name, existing)
+                if not restored:
+                    return JSONResponse({"error": "Configuration rollback failed"}, status_code=503)
+                raise
+        except ConfigurationReadOnlyError:
+            return JSONResponse({"error": "Configuration is read-only"}, status_code=503)
+        except OSError:
+            return JSONResponse({"error": "Configuration could not be persisted"}, status_code=503)
         except KeyError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         except Exception as e:

@@ -308,3 +308,21 @@ def test_read_endpoints_do_not_require_role(registry, yaml_editor):
     client = TestClient(app)
     assert client.get("/api/engines").status_code == 200
     assert client.get("/api/engines/port_scan").status_code == 200
+
+
+def test_read_only_config_does_not_reload_engine(client, registry, yaml_editor):
+    from netwatcher.utils.yaml_editor import ConfigurationReadOnlyError
+    yaml_editor.ensure_writable.side_effect = ConfigurationReadOnlyError('read only')
+    response = client.put('/api/engines/port_scan/config', json={'threshold': 90})
+    assert response.status_code == 503
+    registry.reload_engine.assert_not_called()
+    yaml_editor.update_engine_config.assert_not_called()
+
+
+def test_failed_yaml_save_restores_previous_runtime_config(client, registry, yaml_editor):
+    yaml_editor.get_engine_config.return_value = dict(EXISTING_CONFIG)
+    yaml_editor.update_engine_config.side_effect = OSError('disk failure')
+    response = client.put('/api/engines/port_scan/config', json={'threshold': 90})
+    assert response.status_code == 503
+    assert registry.reload_engine.call_count == 2
+    assert registry.reload_engine.call_args.args == ('port_scan', EXISTING_CONFIG)

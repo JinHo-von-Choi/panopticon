@@ -103,3 +103,25 @@ class TestCommentsPreserved:
         content = yaml_file.read_text()
         assert "# sliding window" in content
         assert "# NetWatcher config" in content
+
+
+def test_read_only_configuration_is_rejected_before_backup(yaml_file):
+    from netwatcher.utils.yaml_editor import ConfigurationReadOnlyError
+    original = yaml_file.read_bytes()
+    yaml_file.chmod(0o444)
+    with pytest.raises(ConfigurationReadOnlyError):
+        YamlConfigEditor(str(yaml_file)).update_engine_config('port_scan', {'threshold': 99})
+    assert yaml_file.read_bytes() == original
+    assert not Path(str(yaml_file) + '.bak').exists()
+
+
+def test_replace_failure_keeps_original_complete_and_removes_temporary_file(yaml_file, monkeypatch):
+    import os
+    original = yaml_file.read_bytes()
+    def fail(*args):
+        raise OSError('disk failure')
+    monkeypatch.setattr(os, 'replace', fail)
+    with pytest.raises(OSError):
+        YamlConfigEditor(str(yaml_file)).update_engine_config('port_scan', {'threshold': 99})
+    assert yaml_file.read_bytes() == original
+    assert not list(yaml_file.parent.glob('.netwatcher-*'))

@@ -289,9 +289,17 @@ class ProposalService:
         if self._yaml_editor is None:
             raise RuntimeError("YAML 편집기를 사용할 수 없다")
 
-        merged = {**self._current_config(engine), **params}
+        self._yaml_editor.ensure_writable()
+        previous = self._current_config(engine)
+        merged = {**previous, **params}
         ok, err, _warnings = self._registry.reload_engine(engine, merged)
         if not ok:
             raise RuntimeError(err or "엔진 리로드 실패")
-        self._yaml_editor.update_engine_config(engine, params)
+        try:
+            self._yaml_editor.update_engine_config(engine, params)
+        except Exception:
+            restored, _, _ = self._registry.reload_engine(engine, previous)
+            if not restored:
+                raise RuntimeError("Configuration rollback failed")
+            raise
         return True

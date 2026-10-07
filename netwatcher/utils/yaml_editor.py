@@ -9,10 +9,18 @@
 from __future__ import annotations
 
 import shutil
+import os
+import stat
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML
+
+
+class ConfigurationReadOnlyError(PermissionError):
+    """배포의 읽기 전용 설정 계약."""
 
 
 class YamlConfigEditor:
@@ -24,6 +32,7 @@ class YamlConfigEditor:
 
     def __init__(self, yaml_path: str) -> None:
         self._path = Path(yaml_path)
+        self._lock = threading.RLock()
         self._yaml = YAML()
         self._yaml.preserve_quotes = True
 
@@ -43,44 +52,33 @@ class YamlConfigEditor:
             return None
         return dict(engine_section)
 
+    def ensure_writable(self) -> None:
+        """런타임 적용 전에 읽기 전용 파일/볼륨을 명시적으로 거부한다."""
+        parent = self._path.parent
+        if (os.statvfs(parent).f_flag & os.ST_RDONLY
+                or not self._path.stat().st_mode & 0o222
+                or not parent.stat().st_mode & 0o222
+                or not os.access(parent, os.W_OK)):
+            raise ConfigurationReadOnlyError("Configuration is read-only")
+
     def update_engine_config(self, engine_name: str, updates: dict[str, Any]) -> None:
-        """지정된 엔진의 설정을 부분 업데이트한다."""
-        shutil.copy2(str(self._path), str(self._path) + ".bak")
-
-        data = self._load()
-        engines = data.get("netwatcher", {}).get("engines", {})
-        engine_section = engines.get(engine_name)
-        if engine_section is None:
-            raise KeyError(f"Engine '{engine_name}' not found in config")
-
-        for key, value in updates.items():
-            engine_section[key] = value
-
-        self._save(data)
+        with self._lock:
+            self.ensure_writable()
+            data = self._load()
+            engine = data.get("netwatcher", {}).get("engines", {}).get(engine_name)
+            if engine is None:
+                raise KeyError(f"Engine '{engine_name}' not found in config")
+            engine.update(updates)
+            self._save(data)
 
     def update_whitelist_config(self, updates: dict[str, Any]) -> None:
-        """화이트리스트 설정을 업데이트한다.
-
-        Args:
-            updates: 업데이트할 화이트리스트 딕셔너리 (ips, macs, domains 등)
-        """
-        shutil.copy2(str(self._path), str(self._path) + ".bak")
-
-        data = self._load()
-        # netwatcher.whitelist 섹션 직접 접근
-        netwatcher_sec = data.get("netwatcher", {})
-        if "whitelist" not in netwatcher_sec:
-            netwatcher_sec["whitelist"] = {}
-
-        whitelist_sec = netwatcher_sec["whitelist"]
-        for key, value in updates.items():
-            if isinstance(value, list):
-                # 모든 항목을 문자열로 변환하여 ruamel.yaml의 정렬 오류 방지
-                whitelist_sec[key] = [str(v) for v in value]
-            else:
-                whitelist_sec[key] = value
-
-        self._save(data)
+        with self._lock:
+            self.ensure_writable()
+            data = self._load()
+            section = data.setdefault("netwatcher", {}).setdefault("whitelist", {})
+            for key, value in updates.items():
+                section[key] = [str(v) for v in value] if isinstance(value, list) else value
+            self._save(data)
 
     def _load(self) -> Any:
         """YAML 파일을 round-trip 모드로 로드한다."""
@@ -88,6 +86,23 @@ class YamlConfigEditor:
             return self._yaml.load(f)
 
     def _save(self, data: Any) -> None:
-        """YAML 데이터를 파일에 저장한다 (주석/포맷팅 보존)."""
-        with open(self._path, "w", encoding="utf-8") as f:
-            self._yaml.dump(data, f)
+        """완성된 임시 파일만 동일 디렉터리에서 원자적으로 교체한다."""
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self._path.parent,
+                                              prefix=".netwatcher-", delete=False) as stream:
+                temporary = stream.name
+                os.fchmod(stream.fileno(), stat.S_IMODE(self._path.stat().st_mode))
+                self._yaml.dump(data, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            shutil.copy2(self._path, str(self._path) + ".bak")
+            os.replace(temporary, self._path)
+            temporary = None
+        except OSError as exc:
+            if exc.errno in (13, 30):
+                raise ConfigurationReadOnlyError("Configuration is read-only") from exc
+            raise
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)

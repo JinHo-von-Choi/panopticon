@@ -236,6 +236,7 @@ async def test_reload_failure_skips_yaml_write():
     assert decision.error
     # 실패를 성공으로 위장하지 않는다
     assert repo.rows[pid]["status"] == STATUS_FAILED
+    assert svc._registry.reload_engine.call_args.args == ("port_scan", CURRENT)
     assert repo.rows[pid]["apply_error"]
     svc._editor.update_engine_config.assert_not_called()
 
