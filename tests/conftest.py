@@ -39,9 +39,9 @@ netwatcher:
   postgresql:
     enabled: true
     host: "{os.environ.get('NETWATCHER_TEST_DB_HOST', 'localhost')}"
-    port: {os.environ.get('NETWATCHER_TEST_DB_PORT', '35432')}
-    database: "{os.environ.get('NETWATCHER_TEST_DB_NAME', 'bee_db')}"
-    username: "{os.environ.get('NETWATCHER_TEST_DB_USER', 'bee')}"
+    port: {os.environ.get('NETWATCHER_TEST_DB_PORT', '5432')}
+    database: "{os.environ.get('NETWATCHER_TEST_DB_NAME', 'netwatcher_test')}"
+    username: "{os.environ.get('NETWATCHER_TEST_DB_USER', 'netwatcher')}"
     password: "{os.environ.get('NETWATCHER_TEST_DB_PASSWORD', os.environ.get('NETWATCHER_DB_PASSWORD', ''))}"
     pool_size: 5
     ssl_mode: "disable"

@@ -31,9 +31,9 @@ netwatcher:
   postgresql:
     enabled: true
     host: "localhost"
-    port: 35432
-    database: "bee_db"
-    username: "bee"
+    port: 5432
+    database: "netwatcher"
+    username: "netwatcher"
     password: ""
     pool_size: 20
     max_overflow: 40

@@ -22,14 +22,14 @@ def test_corpus_is_reproducible_and_scenario_changes_input():
 
 def test_replay_rejects_production_database(tmp_path):
     args = arguments(tmp_path)
-    args.db_name = "bee_db"
+    args.db_name = "netwatcher_production"
     with pytest.raises(ValueError, match="dedicated"):
         validate(args)
 
 
 def test_replay_rejects_remote_database(tmp_path):
     args = arguments(tmp_path)
-    args.db_host = "192.168.0.235"
+    args.db_host = "192.0.2.235"
     with pytest.raises(ValueError, match="local"):
         validate(args)
 

@@ -1,88 +1,27 @@
-# Security Policy
+# 보안 정책
 
-## Supported Versions
+Panopticon은 패킷과 사건 정보를 다루는 모니터링 도구입니다. 설치 권한, 관측 범위, 로그인과 저장 자료의 접근 권한을 운영자가 관리해야 합니다.
 
-| Version | Supported |
-|---------|-----------|
-| latest (main) | Yes |
+## 취약점 제보
 
-## Reporting a Vulnerability
+토큰·비밀번호·실제 패킷·개인정보를 공개 이슈에 올리지 마세요. 관리자와 비공개 연락 방법을 먼저 정하고 다음 내용을 전달합니다.
 
-보안 취약점을 발견했다면 공개 이슈가 아닌 아래 채널로 직접 보고한다.
+- 영향을 받는 버전과 기능
+- 재현 절차와 발생 조건
+- 예상 영향과 민감정보를 제거한 예제
 
-- 보고 방법: 프로젝트 관리자에게 비공개 채널(이메일 또는 GitHub Security Advisory)로 연락
-- 응답 기한: 영업일 기준 3일 이내 확인, 7일 이내 초기 대응
-- 공개 타임라인: 패치 배포 후 30일 경과 시 공개 허용
+비공개 연락 방법이 확인되지 않았다면 [이슈](https://github.com/JinHo-von-Choi/panopticon/issues)에 상세 취약점이나 비밀값 없이 연락 방법을 요청하세요. 패치와 공개 시점은 관리자와 협의합니다.
 
-보고 시 포함할 내용:
-- 취약점 유형 및 영향 범위
-- 재현 절차 (단계별)
-- 개념 증명(PoC) 코드 또는 스크린샷
-- 예상 심각도 (CVSS 기준)
+## 운영 시 보호할 자료
 
-## Security Frameworks & References
+`.env`, JWT 서명 키, DB 백업, 패킷 증거, 알림 채널 접속 정보를 제한된 계정만 읽을 수 있게 관리합니다. 대시보드를 다른 장치에 공개할 때는 인증과 HTTPS를 사용합니다.
 
-이 프로젝트의 탐지 로직과 대응 절차는 다음 프레임워크를 기준으로 설계되었다.
+AI나 외부 알림 기능을 사용하면 해당 서비스에 자료가 전달될 수 있습니다. 전달할 항목과 조직의 자료 취급 기준을 먼저 확인하세요.
 
-### MITRE ATT&CK
-- 사이버 공격 전술·기술·절차(TTP) 분류 체계
-- 각 탐지 엔진은 관련 ATT&CK 기술 ID를 `mitre_attack_ids` 속성으로 매핑함
-- https://attack.mitre.org/
+## 기능의 경계
 
-### MITRE D3FEND
-- 방어 대응 기술 분류 체계 (ATT&CK의 방어 측면 대응)
-- https://d3fend.mitre.org/
+암호화된 통신의 본문과 센서가 관측하지 못한 통신은 분석하지 않습니다. 탐지 경보는 조사할 근거이며 감염이나 침입이 확정됐다는 뜻은 아닙니다.
 
-### CISA
-- 미국 사이버보안 및 인프라 보안국 공식 권고문
-- https://www.cisa.gov/news-events/cybersecurity-advisories
+자동 차단은 기본적으로 꺼져 있습니다. 실제 차단은 통제 가능한 경로에서 승인·만료·복구를 확인한 뒤 사용합니다. 미지원 기능과 권한 분리 상태는 [설정 가이드](docs/CONFIGURATION.md#지원-범위)와 [권한 분리 안내](docs/PRIVILEGE-SEPARATION.md)에서 확인할 수 있습니다.
 
-### NIST SP 800-61
-- 컴퓨터 보안 인시던트 처리 가이드
-- https://csrc.nist.gov/publications/detail/sp/800-61/rev-2/final
-
-### CIS Controls v8
-- 우선순위 기반 사이버보안 통제 항목
-- https://www.cisecurity.org/controls/v8
-
-## Threat Detection Scope
-
-NetWatcher가 현재 탐지하는 위협 유형 및 매핑된 ATT&CK TTP:
-
-| 탐지 엔진 | 위협 유형 | ATT&CK TTP |
-|-----------|-----------|------------|
-| arp_spoof | ARP Cache Poisoning (MITM) | T1557.002 |
-| dhcp_spoof | DHCP Spoofing | T1557.003 |
-| mac_spoof | MAC Address Masquerading | T1036.005 |
-| icmp_anomaly | Ping Sweep, ICMP Flood | T1018 |
-| protocol_anomaly | Protocol Abuse, TTL Manipulation | T1071 |
-| dns_anomaly | DNS Tunneling, DGA | T1071.004 |
-| http_suspicious | Malicious HTTP Patterns, C2 Beaconing | T1071.001, T1190 |
-| data_exfil | Large Outbound Transfers | T1048, T1030 |
-| lateral_movement | Internal Port Scanning, Sensitive Port Access | T1021 |
-| ransomware_lateral | SMB/RDP Brute Force, Lateral Spread | T1486, T1021 |
-| threat_intel | Known Malicious IP/Domain Communication | T1590 |
-| port_scan | Network Service Discovery | T1046 |
-| traffic_anomaly | Volume Anomaly, New Device Detection | T1018, T1041 |
-| tls_fingerprint | Suspicious TLS Fingerprints (JA3/JA4) | T1573 |
-| behavior_profile | Host Behavior Deviation | T1041 |
-| data_exfil | Data Exfiltration | T1048, T1030 |
-
-## Incident Response Playbooks
-
-대표적인 위협 시나리오별 대응 절차는 아래 플레이북을 참고한다.
-
-- [ARP Spoofing 대응](docs/playbooks/arp-spoof.md)
-- [Ransomware Lateral Movement 대응](docs/playbooks/ransomware-lateral.md)
-- [Port Scan 대응](docs/playbooks/port-scan.md)
-
-## Secure Deployment Checklist
-
-프로덕션 배포 전 아래 항목을 확인한다.
-
-- [ ] `config/default.yaml`에 DB 자격증명 직접 기입 금지 — 환경변수 사용
-- [ ] Web UI 인증 활성화 (`web.auth.enabled: true`)
-- [ ] TLS 설정 또는 리버스 프록시를 통한 HTTPS 강제
-- [ ] 불필요한 엔진 비활성화 (SPAN 없는 환경에서 `requires_span: true` 엔진 주의)
-- [ ] 로그 디렉토리 권한 제한 (root 또는 netwatcher 전용 사용자)
-- [ ] Webhook URL(Slack/Telegram/Discord)은 `.env` 파일 또는 시크릿 관리자에 저장
+지원 대상은 최신 릴리스입니다. 사용 중인 버전의 변경점과 호환성은 [릴리스 노트](CHANGELOG.md)를 확인하세요.

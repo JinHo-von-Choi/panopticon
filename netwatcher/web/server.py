@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from netwatcher import __version__
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +23,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     docs_url = "/docs" if enable_docs else None
     openapi_url = "/openapi.json" if enable_docs else None
 
-    app = FastAPI(title="Panopticon API", docs_url=docs_url, openapi_url=openapi_url)
+    app = FastAPI(title="Panopticon API", version=__version__, docs_url=docs_url, openapi_url=openapi_url)
     static_dir = Path(__file__).parent / "static"
 
     # CORS & Auth Middleware

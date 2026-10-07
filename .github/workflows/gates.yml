@@ -1,12 +1,6 @@
 name: gates
 
-# 계획서 G0 게이트를 CI 로 강제한다.
-#
-# 원칙: 게이트는 "맞았는지"가 아니라 "이 상태로 배포해도 되는지"를 판정한다.
-# 검증 통과를 enforcement 통과로 취급하지 않는다 (PR 01).
-#
-# G0-4 는 실제 DB 가 있어야 통과하므로 PostgreSQL 서비스를 함께 띄운다.
-# DB 가 없으면 G0-4 가 실패하는 것이 의도된 동작이다.
+# PostgreSQL 마이그레이션과 출시 검사를 실행한다.
 
 on:
   push:
@@ -40,10 +34,12 @@ jobs:
       NETWATCHER_DB_NAME: netwatcher_test
       NETWATCHER_DB_USER: netwatcher
       NETWATCHER_DB_PASSWORD: netwatcher
-      # 로컬 .env 유입을 막는다. 게이트는 배포되는 설정 파일 그 자체를 심판해야
-      # 하며, 판정은 어느 PC 에서 돌든 같아야 한다 (scripts/gates.py 도 같은 값을
-      # 설정한다). 인증 환경변수는 여기서 덮어쓰지 않는다 — 배포 파일의 상태를
-      # 그대로 판정하기 위해서다. 테스트는 conftest 가 자체적으로 처리한다.
+      NETWATCHER_TEST_DB_HOST: localhost
+      NETWATCHER_TEST_DB_PORT: "5432"
+      NETWATCHER_TEST_DB_NAME: netwatcher_test
+      NETWATCHER_TEST_DB_USER: netwatcher
+      NETWATCHER_TEST_DB_PASSWORD: netwatcher
+      # 개발자의 .env 대신 CI 설정을 사용한다.
       NETWATCHER_SKIP_DOTENV: "1"
 
     steps:
@@ -66,8 +62,7 @@ jobs:
         run: python scripts/gates.py
 
   db-deploy-check:
-    # 깨끗한 DB 에서 마이그레이션이 끝까지 도는지만 별도로 확인한다.
-    # 008 마이그레이션이 실제로 한 번도 성공한 적이 없었다.
+    # 새 DB에서 전체 마이그레이션과 마지막 단계의 되돌리기를 확인한다.
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
