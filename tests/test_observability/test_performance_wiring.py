@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 import time
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
 
 from prometheus_client import REGISTRY
@@ -207,3 +207,20 @@ async def test_stats_write_success_and_failure_are_instrumented(fail):
         await service.stop()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+def test_slow_packet_analysis_yields_before_consuming_whole_capture_buffer():
+    seen = []
+    loop = MagicMock()
+    def slow(packet):
+        time.sleep(.004)
+        seen.append(packet)
+    sniffer = PacketSniffer(Config({'capture': {'drain_slice_ms': 5}}), loop, slow)
+    packet = IP(src='192.0.2.1', dst='192.0.2.2') / TCP()
+    for _ in range(20):
+        sniffer._on_packet(packet)
+    sniffer._drain_buffer()
+    assert 1 <= len(seen) < 20
+    assert len(sniffer._packet_buffer) + len(seen) == 20
+    assert sniffer._drain_scheduled
+    assert loop.call_soon_threadsafe.call_count >= 2

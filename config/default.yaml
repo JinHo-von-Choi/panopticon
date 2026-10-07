@@ -8,6 +8,8 @@ netwatcher:
     available: ["ko", "en"]
   interface:       # null = auto-detect
   bpf_filter: ""   # additional BPF filter
+  capture:
+    drain_slice_ms: 10
   promiscuous: true
   workers: 1        # 패킷 분석 워커 프로세스 수 (0=자동(CPU-1), 1=단일프로세스, 2+=멀티프로세스)
 

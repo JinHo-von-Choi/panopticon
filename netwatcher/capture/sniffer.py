@@ -55,6 +55,7 @@ class PacketSniffer:
         self._iface     = config.get("interface")
         self._promisc   = config.get("promiscuous", True)
         self._extra_bpf = config.get("bpf_filter", "")
+        self._drain_slice_seconds = min(.05, max(.001, config.get("capture.drain_slice_ms", 10) / 1000))
 
         # 배압 제어 버퍼
         self._packet_buffer: deque[tuple[Packet, int, float]] = deque(maxlen=50000)
@@ -160,7 +161,8 @@ class PacketSniffer:
 
     def _drain_buffer(self) -> None:
         """버퍼링된 패킷을 패킷 콜백으로 배출한다 (asyncio 루프에서 실행)."""
-        batch_limit = 500  # 배출 주기당 최대 500개 패킷 처리
+        batch_limit = 500
+        deadline = time.monotonic() + self._drain_slice_seconds
         try:
             for _ in range(batch_limit):
                 with self._obs_lock:
@@ -169,6 +171,8 @@ class PacketSniffer:
                     pkt, size, _ = self._packet_buffer.popleft()
                     self._queued_wire_bytes -= size
                 self._packet_callback(pkt)
+                if time.monotonic() >= deadline:
+                    break  # 패킷 한 건 사이에서 웹·타이머·저장 태스크에 제어를 돌려준다.
         finally:
             self.flush_observation()
             # 콜백 실패 뒤에도 큐가 영구 정지하지 않도록 다음 배출을 예약한다.
