@@ -13,6 +13,8 @@ from netwatcher.alerts.channels.discord import DiscordChannel
 from netwatcher.alerts.channels.slack import SlackChannel
 from netwatcher.alerts.channels.telegram import TelegramChannel
 from netwatcher.alerts.rate_limiter import RateLimiter, EventBudget
+from netwatcher.alerts.aggregation import AlertAggregator
+from netwatcher.services.evidence_writer import EvidenceWriter
 from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.detection.correlator import AlertCorrelator
 from netwatcher.detection.models import Alert, Severity
@@ -66,9 +68,22 @@ class AlertDispatcher:
         self._device_repo   = device_repo
         self._correlator    = correlator
         self._pcap_writer   = pcap_writer
+        evidence_cfg = config.section("evidence")
+        self._evidence_writer = EvidenceWriter(
+            pcap_writer, event_repo,
+            max_jobs=evidence_cfg.get("queue_jobs", 32),
+            max_bytes=evidence_cfg.get("queue_bytes", 8 * 1024 * 1024),
+            cooldown=evidence_cfg.get("cooldown_seconds", 60),
+        ) if pcap_writer is not None else None
         self._block_manager = block_manager
         self._queue: asyncio.Queue[Alert] = asyncio.Queue(maxsize=10000)
         self._task: asyncio.Task | None = None
+        aggregation_cfg = config.section("alerts").get("aggregation", {})
+        self._aggregator = AlertAggregator(
+            window_seconds=aggregation_cfg.get("window_seconds", 60),
+            max_keys=aggregation_cfg.get("max_keys", 10000),
+        ) if aggregation_cfg.get("enabled", False) else None
+        self._aggregation_task: asyncio.Task | None = None
 
         # 관측 범위 (계획서 3장). 경보 옆에 누락을 표시한다.
         self._observation = observation
@@ -117,6 +132,8 @@ class AlertDispatcher:
     async def start(self) -> None:
         """디스패처 소비자 루프를 시작한다."""
         self._task = asyncio.create_task(self._consumer_loop())
+        if self._aggregator is not None:
+            self._aggregation_task = asyncio.create_task(self._aggregation_loop())
         logger.info("AlertDispatcher started")
 
     async def stop(self, drain_timeout: float | None = None) -> None:
@@ -137,6 +154,7 @@ class AlertDispatcher:
             alerts_cfg = self._config.section("alerts") or {}
             timeout = float(alerts_cfg.get("drain_timeout_seconds", 5.0))
 
+        deadline = time.monotonic() + timeout
         remaining = self._queue.qsize()
         if remaining:
             logger.info(
@@ -181,10 +199,38 @@ class AlertDispatcher:
             if dropped:
                 logger.warning("Dispatcher stopped with %d unprocessed alert(s)", dropped)
 
+        if self._aggregation_task is not None:
+            self._aggregation_task.cancel()
+            try:
+                await self._aggregation_task
+            except asyncio.CancelledError:
+                pass
+        if self._aggregator is not None:
+            try:
+                async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                    self._aggregator.expire(force=True)
+                    while self._aggregator.pending:
+                        await self._aggregator.flush(self._event_repo)
+            except Exception:
+                logger.warning("Aggregation shutdown incomplete; pending_windows=%d", len(self._aggregator.pending))
+        if self._evidence_writer is not None:
+            await self._evidence_writer.stop(timeout=max(0, deadline - time.monotonic()))
         self._oldest_enqueued_at = self._enqueue_times[0] if self._enqueue_times else None
         self.refresh_queue_metrics()
 
         logger.info("AlertDispatcher stopped")
+
+    async def _aggregation_loop(self):
+        while True:
+            await asyncio.sleep(1)
+            try:
+                async with asyncio.timeout(2):
+                    await self._aggregator.flush(self._event_repo)
+                if self._aggregator.overflow:
+                    metrics.alerts_suppressed.labels(reason="aggregation_overflow").inc(self._aggregator.overflow)
+                    self._aggregator.overflow = 0
+            except Exception:
+                logger.debug("Aggregation update deferred; bounded pending windows retained")
 
     def enqueue(self, alert: Alert) -> None:
         """스레드 안전 큐 삽입 (스니퍼 콜백에서 호출)."""
@@ -275,8 +321,15 @@ class AlertDispatcher:
         """알림 한 건에 대해 속도 제한, DB 저장, 로깅, 브로드캐스트, webhook 전체 파이프라인을 실행한다."""
         if self._observation is not None:
             self._observation.record(STAGE_ALERT, KIND_RECEIVED)
+        if self._aggregator is not None and self._aggregator.repeat(alert):
+            metrics.alerts_suppressed.labels(reason="aggregate_repeat").inc()
+            if self._observation is not None:
+                self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
+            return
         # 1. 속도 제한
-        if not self._rate_limiter.allow(alert.rate_limit_key):
+        limit_key = (self._aggregator.key(alert) + ":" + alert.severity.value
+                     if self._aggregator is not None else alert.rate_limit_key)
+        if not self._rate_limiter.allow(limit_key):
             metrics.alerts_suppressed.labels(reason="rate_limit").inc()
             logger.debug("Rate limited: %s", alert.rate_limit_key)
             if self._observation is not None:
@@ -307,6 +360,10 @@ class AlertDispatcher:
 
         from netwatcher.detection.evidence import apply_evidence_contract
         evidence = apply_evidence_contract(alert)
+        if self._evidence_writer is not None:
+            alert.metadata["pcap"] = {"state": "pending", "reason": "awaiting_event_commit", "policy_version": 1}
+        if self._aggregator is not None:
+            alert.metadata["aggregation"] = self._aggregator.initial_summary(alert)
         if not evidence.complete:
             logger.debug(
                 "탐지 결과 계약 미충족 (engine=%s, 누락=%s): %s",
@@ -358,6 +415,8 @@ class AlertDispatcher:
                 self._observation.record(
                     STAGE_DB, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP,
                 )
+        if self._aggregator is not None and event_id is not None:
+            self._aggregator.register(alert, event_id)
 
         # 2b. 행동 레이블 — metadata에 host_label이 있으면 devices 테이블에 기록
         host_label = alert.metadata.get("host_label")
@@ -398,13 +457,9 @@ class AlertDispatcher:
         # 5. PCAP 캡처
         if self._pcap_writer and event_id:
             try:
-                pcap_path = self._pcap_writer.capture_for_alert(
-                    event_id=event_id,
-                    source_ip=alert.source_ip,
-                    dest_ip=alert.dest_ip,
-                )
-                if pcap_path:
-                    logger.debug("PCAP saved: %s", pcap_path)
+                state = self._evidence_writer.submit(event_id, alert)
+                if state["state"] != "pending":
+                    await self._evidence_writer._store_state(event_id, state)
             except Exception:
                 logger.debug("PCAP capture failed", exc_info=True)
 

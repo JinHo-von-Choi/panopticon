@@ -87,7 +87,22 @@ netwatcher:
     incidents_days: 180        # 인시던트 보존 일수
     cleanup_interval_hours: 6  # 정리 주기
 
+  evidence:
+    directory: "data/pcaps"
+    buffer_packets: 1000
+    buffer_bytes: 8388608
+    queue_jobs: 32
+    queue_bytes: 8388608
+    cooldown_seconds: 60
+    max_storage_mb: 500
+    max_files: 10000
+    max_deletes_per_second: 4
+
   alerts:
+    aggregation:
+      enabled: true
+      window_seconds: 60
+      max_keys: 10000
     event_budget:
       normal_per_minute: 120
       critical_reserve_per_minute: 30

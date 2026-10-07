@@ -52,6 +52,7 @@ async def test_enqueue_and_process(config, event_repo):
 @pytest.mark.asyncio
 async def test_rate_limiting(config, event_repo):
     """Same rate_limit_key sent 6 times should only store 5."""
+    config.section("alerts")["aggregation"] = {"enabled": False}
     dispatcher = AlertDispatcher(
         config=config,
         event_repo=event_repo,

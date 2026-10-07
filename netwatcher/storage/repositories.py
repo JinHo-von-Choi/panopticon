@@ -92,6 +92,28 @@ class EventRepository:
             return None
         return dict(row)
 
+    async def update_aggregates(self, updates: list[tuple[int, dict]]) -> None:
+        """창당 집계 절대값을 한 UPDATE로 반영한다. 재시도는 중복 가산하지 않는다."""
+        if not updates:
+            return
+        async with self._db.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """UPDATE events AS e SET metadata = e.metadata || jsonb_build_object(
+                           'aggregation', COALESCE(e.metadata->'aggregation', '{}'::jsonb) || u.summary)
+                       FROM unnest($1::bigint[], $2::jsonb[]) AS u(id, summary)
+                       WHERE e.id = u.id AND
+                         COALESCE((e.metadata->'aggregation'->>'count')::bigint, 0)
+                           <= (u.summary->>'count')::bigint""",
+                    [event_id for event_id, _ in updates], [summary for _, summary in updates],
+                )
+
+    async def update_pcap_state(self, event_id: int, state: dict) -> None:
+        await self._db.pool.execute(
+            "UPDATE events SET metadata = metadata || jsonb_build_object('pcap', $2::jsonb) WHERE id=$1",
+            event_id, state,
+        )
+
     async def list_recent(
         self,
         limit: int = 100,

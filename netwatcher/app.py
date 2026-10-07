@@ -65,7 +65,15 @@ class NetWatcher:
         self.db         = Database(config)
         self.registry   = EngineRegistry(config)
         self.correlator = AlertCorrelator()
-        self.pcap_writer = PCAPWriter()
+        evidence_cfg = config.section("evidence")
+        self.pcap_writer = PCAPWriter(
+            output_dir=evidence_cfg.get("directory", "data/pcaps"),
+            buffer_size=evidence_cfg.get("buffer_packets", 1000),
+            max_buffer_bytes=evidence_cfg.get("buffer_bytes", 8 * 1024 * 1024),
+            max_storage_mb=evidence_cfg.get("max_storage_mb", 500),
+            max_files=evidence_cfg.get("max_files", 10000),
+            max_deletes_per_second=evidence_cfg.get("max_deletes_per_second", 4),
+        )
 
         # 비동기 호스트명 해석
         self._dns_resolver = AsyncDNSResolver()

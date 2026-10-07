@@ -68,7 +68,8 @@ def classify_alert(alert: Any) -> EvidenceReport:
 
     has_summary = bool(title) and bool(description or metadata or reasoning)
     # confidence 만으로는 근거가 아니다 — 그 값은 파이프라인이 나중에 붙인다.
-    evidence_keys = {k: v for k, v in metadata.items() if k != "confidence"}
+    evidence_keys = {k: v for k, v in metadata.items()
+                     if k not in {"confidence", "aggregation", "evidence", "pcap"}}
     has_evidence = bool(evidence_keys) or bool((reasoning or "").strip())
     has_raw = bool(packet_info) and bool(
         packet_info.get("layers") or packet_info.get("length")

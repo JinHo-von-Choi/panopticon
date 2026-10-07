@@ -111,12 +111,19 @@ class HealthChecker:
             return {"status": "unconfigured"}
         qsize = queue.qsize()
         maxsize = queue.maxsize
-        return {
+        result = {
             "status":        "healthy" if maxsize > 0 and qsize < maxsize * 0.9 else "degraded",
             "depth":         qsize,
             "max_size":      maxsize,
             "ws_subscribers": len(getattr(self._dispatcher, "_ws_subscribers", set())),
         }
+        aggregator = getattr(self._dispatcher, "_aggregator", None)
+        if aggregator is not None and isinstance(getattr(aggregator, "active", None), dict):
+            result["aggregation"] = {"active_windows": len(aggregator.active),
+                                     "pending_windows": len(aggregator.pending),
+                                     "pending_repeats": sum(w.count - 1 for w in aggregator.pending),
+                                     "overflow_repeats": aggregator.overflow}
+        return result
 
     async def check_all(self) -> dict[str, Any]:
         """모든 컴포넌트의 건강 상태를 종합 진단한다.
