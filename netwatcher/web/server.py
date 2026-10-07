@@ -147,13 +147,13 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
         payload = SupportContract(config).describe()
 
-        observation = app.state.__dict__.get("observation_service")
+        observation = getattr(app.state, "observation_service", None)
         if observation is not None:
             # 계약 통과와 실제 관측은 별개다. 프로필이 유효해도 센서가
             # stale 이면 대시보드는 그 사실을 함께 보여줘야 한다.
             payload["observation"] = observation.snapshot()
 
-        manager = app.state.__dict__.get("feed_manager")
+        manager = getattr(app.state, "feed_manager", None)
         if manager is not None:
             health = manager.feed_health()
             payload["feeds"] = health

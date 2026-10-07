@@ -1,7 +1,7 @@
 """역할 기반 접근 제어 (RBAC).
 
-multi_user: false일 때는 기존 단일 사용자 인증을 그대로 유지한다.
-multi_user: true일 때만 JWT의 role 클레임을 기반으로 접근 제어를 수행한다.
+인증 활성화 시 JWT의 role 클레임을 기반으로 최소 역할을 검사한다.
+상위 역할은 하위 역할의 접근 권한을 포함한다. 다중 사용자 발급은 별도 계약이다.
 
 작성자: 최진호
 작성일: 2026-03-29
@@ -33,6 +33,8 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
     Role.VIEWER:  {"read", "export"},
 }
 
+ROLE_LEVEL = {Role.VIEWER: 0, Role.ANALYST: 1, Role.ADMIN: 2}
+
 
 def has_permission(role: Role, action: str) -> bool:
     """주어진 역할이 특정 액션에 대한 권한을 보유하는지 확인한다."""
@@ -41,7 +43,7 @@ def has_permission(role: Role, action: str) -> bool:
 
 
 def require_role(*roles: Role):
-    """JWT role 클레임 검증 FastAPI 의존성을 반환한다.
+    """지정된 최소 역할 중 하나를 충족하는 JWT 검증 의존성을 반환한다.
 
     사용 예시::
 
@@ -66,10 +68,10 @@ def require_role(*roles: Role):
         user_role_str = payload.get("role", Role.VIEWER.value)
         try:
             user_role = Role(user_role_str)
-        except ValueError:
+        except (ValueError, TypeError):
             raise HTTPException(status_code=403, detail=f"Unknown role: {user_role_str}")
 
-        if user_role not in roles:
+        if not any(ROLE_LEVEL[user_role] >= ROLE_LEVEL[role] for role in roles):
             raise HTTPException(
                 status_code=403,
                 detail=f"Role '{user_role.value}' is not authorized. Required: {[r.value for r in roles]}",
@@ -103,6 +105,6 @@ class RBACManager:
         role_str = payload.get("role", Role.VIEWER.value)
         try:
             return Role(role_str)
-        except ValueError:
+        except (ValueError, TypeError):
             logger.warning("Unknown role in token: %s", role_str)
             return None
