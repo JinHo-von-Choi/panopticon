@@ -30,8 +30,10 @@ export async function toggleWhitelist(type, value) {
         });
         if (resp.ok) {
             await fetchWhitelist();
+            return true;
         }
-    } catch (e) { alert("Failed to toggle whitelist: " + e.message); }
+        return false;
+    } catch (e) { alert("Failed to toggle whitelist: " + e.message); return false; }
 }
 
 export async function loadDevices() {
@@ -242,7 +244,7 @@ function renderDeviceModalContent(dev) {
 }
 
 window.handleWhitelistToggle = async function(type, value) {
-    await toggleWhitelist(type, value);
+    if (!await toggleWhitelist(type, value)) return;
     window.showDeviceDetail(value); // Refresh modal
     loadDevices(); // Refresh list
 };

@@ -615,6 +615,41 @@
     "find_screen": "화면 이름으로 검색",
     "no_devices": "관측된 자산이 없습니다. 센서 준비 상태와 감시 범위를 확인하세요.",
     "no_device_match": "조건에 맞는 자산이 없습니다. 검색과 필터를 조정하세요.",
-    "stats_unavailable": "통계 저장이 지연되고 있습니다. 저장소 상태를 확인하세요."
+    "stats_unavailable": "통계 저장이 지연되고 있습니다. 저장소 상태를 확인하세요.",
+    "event_context": {
+      "title": "사건 문맥",
+      "close": "사건 상세 닫기",
+      "signal": "관측 신호",
+      "occurrences": "관측 횟수",
+      "representative": "대표 경보의 요약입니다. 반복 각각의 원자료를 뜻하지 않습니다.",
+      "asset": "자산 · 업무 문맥",
+      "source": "관측한 출발지",
+      "role": "확인된 역할",
+      "role_unknown": "확인되지 않음",
+      "relationship_unknown": "기대 업무·통신 관계가 확인되지 않았습니다. 자산 소유자와 목적지를 먼저 확인하세요.",
+      "pcap": "패킷 증거 기록",
+      "state": "저장 상태",
+      "reason": "사유",
+      "file": "기록된 파일",
+      "pcap_note": "기본 증거는 발생 전 문맥입니다. 저장 완료 기록만으로 현재 파일 보존을 보장하지 않습니다.",
+      "observation": "현재 관측 범위",
+      "observation_unknown": "관측 상태를 확인하지 못했습니다.",
+      "observation_note": "현재 센서 상태입니다. 이 사건 당시의 관측 범위와는 다를 수 있습니다.",
+      "technical": "기술 메타데이터 펼치기",
+      "global_exception": "고급 · IP 전체 탐지 예외",
+      "global_exception_note": "이 예외는 해당 IP의 여러 엔진 탐지를 함께 건너뛸 수 있습니다. 정상 백업이라고 확인한 범위보다 넓게 적용하지 마세요.",
+      "global_exception_confirm": "{{value}}의 전체 탐지 예외를 변경합니다. 이 IP의 공격 탐지도 건너뛸 수 있습니다. 계속하시겠습니까?",
+      "write_failed": "변경을 저장하지 못했습니다. 현재 설정을 유지합니다.",
+      "pcap_states": {
+        "pending": "저장 대기",
+        "persisted": "저장 완료 기록",
+        "omitted": "수집 제외",
+        "failed": "저장 실패",
+        "volatile": "종료 중 미확인",
+        "unknown": "확인되지 않음"
+      },
+      "new_pending": "새 사건 {{count}}건 · 새로고침으로 확인",
+      "unmeasured": "측정하지 않음"
+    }
   }
 }

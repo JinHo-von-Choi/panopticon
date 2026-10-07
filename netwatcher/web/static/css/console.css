@@ -69,3 +69,41 @@ main { max-width: none; margin: 0 0 0 208px; padding: 32px 28px 48px; }
     .login-box { padding: 24px; max-width: calc(100vw - 32px); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+/* 사건 문맥: 렌즈 링을 배경으로 쓰는 우측 작업 콘솔. */
+.event-drawer-overlay { align-items: stretch; justify-content: flex-end; }
+.event-drawer-overlay .modal { width: min(640px, 100vw); max-width: none; max-height: 100dvh; border-radius: 0;
+    border-left: 1px solid var(--accent); border-top: 2px solid var(--copper); animation: none; }
+.event-drawer-overlay .modal-header { padding: 20px 24px; gap: 16px; }
+.event-drawer-overlay .modal-header h2 { overflow-wrap: anywhere; }
+.event-drawer-overlay .modal-close { min-width: 44px; min-height: 44px; }
+.event-drawer-overlay .modal-body { padding: 24px; }
+.event-context { position: relative; overflow: hidden; border: 1px solid var(--border); border-left: 2px solid var(--copper);
+    background: var(--surface2); padding: 22px; margin-bottom: 28px; }
+.event-context::before { content: ''; position: absolute; width: 150px; height: 150px; right: -46px; top: -48px;
+    border: 1px solid var(--accent); border-radius: 50%; box-shadow: 0 0 0 16px var(--surface2), 0 0 0 17px var(--border),
+    0 0 0 32px var(--surface2), 0 0 0 33px var(--border); opacity: .45; pointer-events: none; }
+.event-context > * { position: relative; }
+.event-context-count { display: flex; gap: 12px; align-items: baseline; margin: 16px 0; }
+.event-context-count strong { font-family: var(--font-mono); font-size: 44px; color: var(--accent); line-height: 1; }
+.event-context-count span { color: var(--text-dim); }
+.event-context-window { display: flex; gap: 10px; flex-wrap: wrap; font: 11px var(--font-mono); }
+.event-context p { margin-top: 14px; font-size: 12px; line-height: 1.6; }
+.event-observation { border-left: 2px solid var(--copper); background: var(--surface2); padding: 14px; }
+.event-observation p { margin-top: 8px; line-height: 1.7; overflow-wrap: anywhere; }
+.event-drawer-overlay .detail-section > p { margin-top: 12px; font-size: 12px; line-height: 1.7; }
+.event-drawer-overlay .detail-value { min-width: 0; overflow-wrap: anywhere; }
+.event-technical { border-top: 1px solid var(--border); padding-top: 16px; }
+.event-technical summary { cursor: pointer; color: var(--accent); min-height: 44px; padding: 12px 0; }
+.event-drawer-overlay .json-block { max-width: 100%; overflow: auto; }
+[data-pcap-state="persisted"] { color: var(--accent); }
+[data-pcap-state="failed"], [data-pcap-state="volatile"] { color: var(--copper); }
+@media (max-width: 768px) {
+    .event-drawer-overlay .modal { width: 100vw; }
+    .event-drawer-overlay .modal-header, .event-drawer-overlay .modal-body { padding: 16px; }
+    .event-drawer-overlay .detail-grid { grid-template-columns: 110px minmax(0, 1fr); }
+    .event-context { padding: 18px; }
+    .event-context-count strong { font-size: 36px; }
+}
+
+.events-live-pending { color: var(--copper); font: 11px var(--font-mono); padding: 8px 12px; border: 1px solid var(--border); }
+.events-live-pending[hidden] { display: none; }

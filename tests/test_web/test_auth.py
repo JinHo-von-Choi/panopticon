@@ -269,3 +269,16 @@ class TestAuthEndpoints:
             resp = await client.get("/api/auth/status")
             assert resp.status_code == 200
             assert resp.json() == {"enabled": True}
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", ["viewer", "analyst", "admin"])
+    async def test_auth_status_returns_verified_role(self, auth_app, role):
+        from datetime import datetime, timedelta, timezone
+        token = jwt.encode({"sub": "isolated-user", "role": role,
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+            auth_app.state.auth_manager._secret, algorithm="HS256")
+        async with AsyncClient(transport=ASGITransport(app=auth_app), base_url="http://test") as client:
+            response = await client.get("/api/auth/status", headers={"Authorization": "Bearer " + token})
+        assert response.status_code == 200
+        assert response.json()["role"] == role

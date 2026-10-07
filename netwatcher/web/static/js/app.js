@@ -3,8 +3,8 @@
  */
 
 import { initI18n } from './core/i18n.js';
-import { getAuthToken, setAuthToken, setAuthEnabled, setAuthRequired, isAuthEnabled, authFetch } from './core/api.js';
-import { loadEvents, renderEventRow, exportEvents } from './modules/events.js';
+import { getAuthToken, setAuthToken, setAuthEnabled, setAuthRequired, isAuthEnabled, authFetch, setCurrentRole } from './core/api.js';
+import { loadEvents, renderEventRow, exportEvents, receiveLiveEvent } from './modules/events.js';
 import { loadDevices, filterDevices, renderDevicesPage } from './modules/devices.js';
 import { loadStats, loadCharts, bumpSeverityCounter } from './modules/stats.js';
 import { loadEngines, populateEngineFilter } from './modules/engines.js';
@@ -15,6 +15,7 @@ import { registerHuntListeners } from './modules/hunting.js';
 import { initAiAnalyzerTab, loadAiAnalyzerStatus, loadAiLogs, registerAiAnalyzerListeners } from './modules/ai_analyzer.js';
 import { loadWhitelist, registerWhitelistListeners } from './modules/whitelist.js';
 import { loadSupportProfile, loadProposals, loadObservation } from './modules/governance.js';
+import { closeEventDrawer } from './core/detail-drawer.js';
 import { initConsole, loadConsoleState } from './modules/console.js';
 
 var ws = null;
@@ -78,10 +79,10 @@ function startFreshnessClock() {
 function connectWS() {
     if (ws) ws.close();
     const token = getAuthToken();
-    if (!token) return;
+    if (!isAuthEnabled()) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/events?token=${token}`;
+    const wsUrl = `${protocol}//${window.location.host}/api/ws/events` + (token ? `?token=${encodeURIComponent(token)}` : "");
     
     ws = new WebSocket(wsUrl);
     ws.onopen = () => document.getElementById("connection-status").className = "status-dot connected";
@@ -92,11 +93,7 @@ function connectWS() {
     ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
         if (ev.type === "alert") {
-            const body = document.getElementById("events-body");
-            if (body) {
-                const row = renderEventRow(ev);
-                body.insertBefore(row, body.firstChild);
-            }
+            receiveLiveEvent(ev);
             bumpSeverityCounter(ev.severity);
             markDataReceived();
         }
@@ -104,7 +101,7 @@ function connectWS() {
 }
 
 // Global UI Helpers
-window.closeModal = function() { document.getElementById("modal-overlay").classList.add("hidden"); };
+window.closeModal = closeEventDrawer;
 window.closeDeviceModal = function() { document.getElementById("device-modal-overlay").classList.add("hidden"); };
 
 function registerListeners() {
@@ -277,6 +274,9 @@ function registerListeners() {
                 const data = await resp.json();
                 if (resp.ok && data.token) {
                     setAuthToken(data.token);
+                    const status = await authFetch("/api/auth/status");
+                    const identity = status.ok ? await status.json() : {};
+                    setCurrentRole(identity.role);
                     initApp();
                 } else {
                     errEl.textContent = data.error || "Login failed";
@@ -311,7 +311,7 @@ function registerListeners() {
 window.addEventListener("DOMContentLoaded", () => {
     registerListeners();
     initConsole();
-    initI18n(() => { if (isAuthEnabled()) { loadEvents(0); loadEngines(); loadConsoleState(); } }).then(async () => {
+    initI18n(() => { if (isAuthEnabled()) { loadEvents(); loadEngines(); loadConsoleState(); } }).then(async () => {
         const token = getAuthToken();
         const headers = token ? { "Authorization": `Bearer ${token}` } : {};
         try {
@@ -323,6 +323,7 @@ window.addEventListener("DOMContentLoaded", () => {
                 setAuthRequired(false);
                 initApp();
             } else if (resp.ok && token) {
+                setCurrentRole(data?.role);
                 initApp();
             } else {
                 if (token) setAuthToken(null);

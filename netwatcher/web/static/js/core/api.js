@@ -5,6 +5,13 @@
 let _token = localStorage.getItem("nw_token");
 let _authEnabled = false;
 let _authRequired = true;
+let _currentRole = "viewer";
+
+export function setCurrentRole(role) {
+    _currentRole = ["viewer", "analyst", "admin"].includes(role) ? role : "viewer";
+}
+
+export function canConfigure() { return _currentRole === "admin"; }
 
 export function getAuthToken() {
     return _token;
@@ -16,6 +23,7 @@ export function setAuthToken(token) {
         localStorage.setItem("nw_token", token);
     } else {
         localStorage.removeItem("nw_token");
+        _currentRole = "viewer";
         _authEnabled = false; // 토큰이 없으면 인증도 비활성화
     }
 }
@@ -26,6 +34,7 @@ export function isAuthEnabled() {
 
 export function setAuthRequired(required) {
     _authRequired = required;
+    if (!required) _currentRole = "admin";
 }
 
 export function setAuthEnabled(enabled) {

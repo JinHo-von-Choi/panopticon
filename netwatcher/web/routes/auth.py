@@ -56,6 +56,7 @@ def create_auth_router(auth_manager: "AuthManager | None") -> APIRouter:
         payload = auth_manager.verify_token(auth_header[7:])
         if payload is None:
             return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
-        return {"enabled": True, "authenticated": True, "user": payload.get("sub")}
+        return {"enabled": True, "authenticated": True, "user": payload.get("sub"),
+                "role": payload.get("role", "viewer")}
 
     return router

@@ -1,4 +1,5 @@
 import { authFetch } from '../core/api.js';
+import { closeEventDrawer } from '../core/detail-drawer.js';
 
 const t = key => window.i18next?.t(`console.${key}`) || key;
 let palette;
@@ -52,6 +53,7 @@ function renderScreens() {
         button.textContent = name;
         button.addEventListener('click', () => {
             returnFocus = tab;
+            closeEventDrawer();
             palette.close();
             tab.click();
             tab.focus();

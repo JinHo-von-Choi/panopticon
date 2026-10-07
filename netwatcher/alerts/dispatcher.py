@@ -559,6 +559,7 @@ class AlertDispatcher:
 
         # 4. WebSocket 브로드캐스트
         alert_dict = alert.to_dict()
+        alert_dict["type"] = "alert"
         if event_id:
             alert_dict["id"] = event_id
         msg = json.dumps(alert_dict)

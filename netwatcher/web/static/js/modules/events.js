@@ -2,14 +2,44 @@
  * NetWatcher Events Module (Production Grade - No Omissions)
  */
 
-import { authFetch } from '../core/api.js';
+import { authFetch, canConfigure } from '../core/api.js';
 import { esc, escAttr, formatTime, formatHexDump, showToast, renderPagination } from '../core/utils.js';
+import { openEventDrawer } from '../core/detail-drawer.js';
 import { whitelistData, toggleWhitelist } from './devices.js';
 
 var eventsPage = 0;
 var eventsTotal = 0;
+var livePending = 0;
+var listRequest = 0;
 
-export async function loadEvents(page) {
+function renderLivePending() {
+    const badge = document.getElementById('events-live-pending');
+    if (!badge) return;
+    badge.hidden = !livePending;
+    badge.textContent = window.i18next.t('console.event_context.new_pending', { count: livePending });
+}
+
+export function receiveLiveEvent(event) {
+    const body = document.getElementById('events-body');
+    if (!body) return;
+    const filtered = ['filter-severity', 'filter-engine', 'filter-search', 'filter-since', 'filter-until']
+        .some(id => document.getElementById(id).value.trim());
+    if (eventsPage !== 0 || filtered || !document.getElementById('modal-overlay').classList.contains('hidden')) {
+        livePending += 1;
+        renderLivePending();
+        return;
+    }
+    if (body.querySelector('[data-event-id="' + CSS.escape(String(event.id)) + '"]')) return;
+    body.insertBefore(renderEventRow(event), body.firstChild);
+    const limit = parseInt(document.getElementById('filter-pagesize').value) || 100;
+    while (body.children.length > limit) body.lastElementChild.remove();
+    eventsTotal += 1;
+    renderPagination(document.getElementById('events-pagination'), eventsPage, eventsTotal, limit, loadEvents);
+}
+
+
+export async function loadEvents(page = eventsPage) {
+    const request = ++listRequest;
     eventsPage = page;
     var sev    = document.getElementById("filter-severity").value;
     var eng    = document.getElementById("filter-engine").value;
@@ -31,7 +61,10 @@ export async function loadEvents(page) {
         var resp = await authFetch("/api/events?" + params.toString());
         if (!resp || !resp.ok) return;
         var data = await resp.json();
+        if (request !== listRequest) return;
         eventsTotal = data.total || 0;
+        livePending = 0;
+        renderLivePending();
         
         var body = document.getElementById("events-body");
         if (!body) return;
@@ -103,19 +136,89 @@ export function renderEventRow(ev) {
     return tr;
 }
 
+let detailRequest = 0;
+let selectedEvent = null;
+const t = (key, options = {}) => window.i18next.t("console.event_context." + key, options);
+
 window.showEventDetail = async function(eventId) {
     if (!eventId) return;
+    const request = ++detailRequest;
+    selectedEvent = null;
     var modalBody = document.getElementById("modal-body");
+    document.getElementById("modal-title").textContent = t("title");
     modalBody.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">Loading Event Details...</div>';
-    document.getElementById("modal-overlay").classList.remove("hidden");
+    openEventDrawer();
 
     try {
         var resp = await authFetch("/api/events/" + eventId);
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
         var data = await resp.json();
-        if (data.event) renderEventDetail(data.event);
+        if (request !== detailRequest || document.getElementById("modal-overlay").classList.contains("hidden")) return;
+        if (data.event) {
+            selectedEvent = data.event;
+            renderEventDetail(data.event);
+            loadDrawerObservation(request);
+        }
         else modalBody.innerHTML = '<div style="padding:20px">Event not found.</div>';
-    } catch (e) { modalBody.innerHTML = '<div style="padding:20px">Error: ' + esc(e.message) + '</div>'; }
+    } catch (e) { if (request !== detailRequest || document.getElementById("modal-overlay").classList.contains("hidden")) return; modalBody.innerHTML = '<div style="padding:20px">Error: ' + esc(e.message) + '</div>'; }
 };
+
+async function loadDrawerObservation(request) {
+    try {
+        const response = await authFetch('/api/observation');
+        const data = response?.ok ? await response.json() : null;
+        if (request !== detailRequest || document.getElementById('modal-overlay').classList.contains('hidden')) return;
+        const panel = document.getElementById('event-observation');
+        if (!panel) return;
+        panel.textContent = '';
+        const state = document.createElement('strong');
+        state.textContent = ['observed', 'partial', 'stale', 'unknown'].includes(data?.state) ? data.state : 'unknown';
+        panel.appendChild(state);
+        const reason = document.createElement('p');
+        reason.textContent = data?.reasons?.join(' · ') || t('observation_unknown');
+        panel.appendChild(reason);
+    } catch (_) {
+        const panel = document.getElementById('event-observation');
+        if (request === detailRequest && panel) panel.textContent = t('observation_unknown');
+    }
+}
+
+function renderContext(ev) {
+    const meta = ev.metadata || {};
+    const aggregation = meta.aggregation || {};
+    const count = Number.isInteger(aggregation.count) && aggregation.count > 0 ? aggregation.count : 1;
+    const pcap = meta.pcap || {};
+    const state = ['pending', 'persisted', 'omitted', 'failed', 'volatile'].includes(pcap.state) ? pcap.state : 'unknown';
+    let html = `<section class="event-context"><div class="console-eyebrow">${esc(t('signal'))} / #${esc(ev.id)}</div>
+        <div class="event-context-count"><strong>${count.toLocaleString()}</strong><span>${esc(t('occurrences'))}</span></div>
+        <div class="event-context-window"><span>${esc(formatTime(aggregation.first_seen || ev.timestamp))}</span>
+        <span aria-hidden="true">→</span><span>${esc(formatTime(aggregation.last_seen || ev.timestamp))}</span></div>
+        <p class="text-dim">${esc(t('representative'))}</p></section>`;
+    html += `<section class="detail-section"><h3>${esc(t('asset'))}</h3><div class="detail-grid">`;
+    html += row(t('source'), ev.source_mac || ev.source_ip);
+    html += row(t('role'), ev.asset_context?.status === 'confirmed' ? ev.asset_context.role : t('role_unknown'));
+    html += `</div><p class="text-dim">${esc(t('relationship_unknown'))}</p></section>`;
+    html += `<section class="detail-section"><h3>${esc(t('pcap'))}</h3><div class="detail-grid">`;
+    html += htmlRow(t('state'), `<span class="evidence-layer" data-pcap-state="${state}">${esc(t('pcap_states.' + state))}</span>`);
+    html += row(t('reason'), pcap.reason);
+    if (state === 'persisted') {
+        html += row(t('file'), String(pcap.path || '').split('/').at(-1));
+        html += row('SHA256', pcap.sha256);
+    }
+    html += `</div><p class="text-dim">${esc(t('pcap_note'))}</p></section>`;
+    html += `<section class="detail-section"><h3>${esc(t('observation'))}</h3>
+        <div id="event-observation" class="event-observation">${esc(t('observation_unknown'))}</div>
+        <p class="text-dim">${esc(t('observation_note'))}</p></section>`;
+    return html;
+}
+
+window.i18next?.on('languageChanged', () => {
+    renderLivePending();
+    if (selectedEvent && !document.getElementById('modal-overlay').classList.contains('hidden')) {
+        renderEventDetail(selectedEvent);
+        loadDrawerObservation(detailRequest);
+    }
+});
 
 /**
  * detail-grid 한 줄. value 는 이미 안전한 HTML 조각이거나 평문이다.
@@ -187,8 +290,9 @@ function renderEventDetail(ev) {
         }));
     }
     modalTitle.textContent = `[${ev.severity}] ${title}`;
+    document.getElementById("modal-close-btn").setAttribute("aria-label", t("close"));
 
-    let html = '<div class="detail-section"><h3>Overview</h3><div class="detail-grid">';
+    let html = renderContext(ev) + '<div class="detail-section"><h3>Overview</h3><div class="detail-grid">';
     html += row("Event ID", ev.id);
     html += row("Timestamp", formatTime(ev.timestamp));
     html += row("Engine", ev.engine);
@@ -216,7 +320,7 @@ function renderEventDetail(ev) {
             html += '<div style="margin-bottom:12px">' + pkt.layers.map(l => `<span class="layer-badge">${esc(l)}</span>`).join("") + '</div>';
         }
         html += '<div class="detail-grid">';
-        html += row("Length", `${pkt.length} bytes`);
+        html += row("Length", Number.isInteger(pkt.length) && pkt.length >= 0 ? `${pkt.length} bytes` : t("unmeasured"));
         if (pkt.ip_ttl) html += row("TTL", pkt.ip_ttl);
         if (pkt.src_port) html += row("Src Port", pkt.src_port);
         if (pkt.dst_port) html += row("Dst Port", pkt.dst_port);
@@ -241,17 +345,17 @@ function renderEventDetail(ev) {
 
     // Metadata
     if (ev.metadata && Object.keys(ev.metadata).length > 0) {
-        html += '<div class="detail-section"><h3>Technical Metadata</h3>';
-        html += `<pre class="json-block">${esc(JSON.stringify(ev.metadata, null, 2))}</pre></div>`;
+        html += '<details class="detail-section event-technical"><summary>' + esc(t('technical')) + '</summary>';
+        html += `<pre class="json-block">${esc(JSON.stringify(ev.metadata, null, 2))}</pre></details>`;
     }
 
     // Whitelist Actions
-    if (ev.source_ip) {
+    if (ev.source_ip && canConfigure()) {
         var isWhitelisted = (whitelistData.ips || []).includes(ev.source_ip);
         var btnText = isWhitelisted ? window.i18next.t("whitelist.remove_ip") : window.i18next.t("whitelist.add_ip");
-        html += `<div class="detail-section"><h3>Exception Management</h3><div style="display:flex;gap:10px;margin-top:8px">`;
+        html += `<details class="detail-section event-technical"><summary>${esc(t("global_exception"))}</summary><p class="scope-note">${esc(t("global_exception_note"))}</p><div style="display:flex;gap:10px;margin-top:8px">`;
         html += `<button class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-event-ip="${escAttr(ev.source_ip)}">
-                 ${esc(btnText)} (${esc(ev.source_ip)})</button></div></div>`;
+                 ${esc(btnText)} (${esc(ev.source_ip)})</button></div></details>`;
     }
 
     modalBody.innerHTML = html;
@@ -309,7 +413,11 @@ function renderReasoning(ev) {
 }
 
 window.handleEventWhitelistToggle = async function(type, value) {
-    await toggleWhitelist(type, value);
+    if (!confirm(t("global_exception_confirm", { value }))) return;
+    if (!await toggleWhitelist(type, value)) {
+        showToast(t("global_exception"), t("write_failed"), "CRITICAL");
+        return;
+    }
     window.closeModal();
     showToast("Whitelist Updated", `${value} toggled`, "info");
 };

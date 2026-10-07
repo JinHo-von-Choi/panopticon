@@ -615,6 +615,41 @@
     "find_screen": "Find a screen",
     "no_devices": "No assets observed. Check sensor readiness and observation scope.",
     "no_device_match": "No matching assets. Adjust the search and filters.",
-    "stats_unavailable": "Statistics persistence is delayed. Check storage health."
+    "stats_unavailable": "Statistics persistence is delayed. Check storage health.",
+    "event_context": {
+      "title": "Incident context",
+      "close": "Close event details",
+      "signal": "Observed signal",
+      "occurrences": "observations",
+      "representative": "This is a representative summary, not individual raw evidence for every repeat.",
+      "asset": "Asset · business context",
+      "source": "Observed source",
+      "role": "Confirmed role",
+      "role_unknown": "Unconfirmed",
+      "relationship_unknown": "Expected business relationships are unconfirmed. Check the asset owner and destination first.",
+      "pcap": "Packet evidence record",
+      "state": "Storage state",
+      "reason": "Reason",
+      "file": "Recorded file",
+      "pcap_note": "Default evidence contains pre-alert context. A saved record does not guarantee the file is still retained.",
+      "observation": "Current observation scope",
+      "observation_unknown": "Observation state could not be confirmed.",
+      "observation_note": "This is the current sensor state; it may differ from the scope at the time of this event.",
+      "technical": "Expand technical metadata",
+      "global_exception": "Advanced · IP-wide detection exception",
+      "global_exception_note": "This exception can bypass multiple detection engines for this IP. Keep exceptions within the confirmed business scope.",
+      "global_exception_confirm": "Change the IP-wide detection exception for {{value}}? Attack detection for this IP may also be bypassed.",
+      "write_failed": "The change could not be saved. Current settings remain active.",
+      "pcap_states": {
+        "pending": "Pending storage",
+        "persisted": "Saved record",
+        "omitted": "Collection omitted",
+        "failed": "Storage failed",
+        "volatile": "Shutdown unconfirmed",
+        "unknown": "Unconfirmed"
+      },
+      "new_pending": "{{count}} new events · refresh to review",
+      "unmeasured": "Not measured"
+    }
   }
 }
