@@ -15,7 +15,7 @@ from typing import Any
 from scapy.all import IP, Packet
 
 from netwatcher.detection.base import DetectionEngine
-from netwatcher.detection.eviction import BoundedDefaultDict
+from netwatcher.detection.eviction import BoundedDefaultDict, LRUSet
 from netwatcher.detection.models import Alert, Severity
 from netwatcher.detection.stats import AdaptiveEWMA, MADDetector, SeasonalBuffer
 
@@ -34,6 +34,9 @@ class _HostStats:
     """호스트별 EWMA + MAD 추적 상태."""
     ewma: AdaptiveEWMA = field(default=None)
     mad:  MADDetector   = field(default=None)
+    rejected_ticks: int = 0
+    consecutive_rejections: int = 0
+    restored: bool = False
 
     def __post_init__(self) -> None:
         if self.ewma is None:
@@ -59,6 +62,10 @@ class TrafficAnomalyEngine(DetectionEngine):
     engine_type = "cpu"
     mitre_attack_ids = ["T1018", "T1041"]
     config_schema = {
+        "warmup_ticks": {
+            "type": int, "default": 3, "min": 3, "max": 1000,
+            "label": "최소 정상 학습 틱", "description": "볼륨 평가를 시작할 최소 표본 수. 독립 탐지를 면제하지 않는다.",
+        },
         "ewma_span": {
             "type": int, "default": 60, "min": 5, "max": 1440,
             "label": "EWMA 스팬(틱 수)",
@@ -95,6 +102,7 @@ class TrafficAnomalyEngine(DetectionEngine):
         self._ewma_span       = config.get("ewma_span", 60)
         self._z_threshold     = config.get("z_threshold", 3.0)
         self._mad_threshold   = config.get("mad_threshold", 3.5)
+        self._warmup_ticks    = max(3, min(1000, int(config.get("warmup_ticks", 3))))
         max_hosts             = config.get("max_tracked_hosts", 5000)
 
         # 호스트별 현재 틱 카운터
@@ -119,7 +127,17 @@ class TrafficAnomalyEngine(DetectionEngine):
         self._current_bytes   = 0
 
         # 신규 장치 탐지
-        self._new_devices_alerted: set[str] = set()
+        self._new_devices_alerted = LRUSet(maxlen=max_hosts)
+
+    def baseline_status(self, src_ip: str) -> dict:
+        stats = self._host_stats.get(src_ip)
+        count = stats.ewma.count if stats else 0
+        state = 'cold_start' if count == 0 else 'learning' if count < self._warmup_ticks else (
+            'drift_suspected' if stats.consecutive_rejections >= 5 else
+            'restored' if stats.restored else 'sufficient_samples')
+        return {'state': state, 'accepted_samples': count, 'required_samples': self._warmup_ticks,
+                'rejected_ticks': stats.rejected_ticks if stats else 0,
+                'scope': 'host_volume', 'human_verified_normal': False}
 
     def analyze(self, packet: Packet) -> Alert | None:
         """패킷을 호스트별로 카운팅하고 신규 장치를 탐지한다."""
@@ -189,20 +207,29 @@ class TrafficAnomalyEngine(DetectionEngine):
             value = float(packets)
 
             # 계절 보정: 계절 계수로 나누어 비계절화
-            seasonal_factor = self._seasonal.get_factor(hour_of_week)
+            seasonal_factor = self._seasonal.get_factor(hour_of_week, min_slot_samples=3,
+                                                        min_covered_slots=168)
             adjusted_value = value / seasonal_factor if seasonal_factor > 0.0 else value
 
-            # EWMA 및 MAD 갱신
+            # 이전 기준으로 판정한다. 탐지한 급증을 정상 표본에 넣지 않는다.
             stats = self._host_stats[src_ip]
-            ewma_z = stats.ewma.update(adjusted_value)
-            mad_z  = stats.mad.update(adjusted_value)
-
-            # 계절 버퍼 갱신 (원본 값)
-            self._seasonal.update(hour_of_week, value)
+            ready = stats.ewma.count >= self._warmup_ticks
+            # 1 packet/tick 하한은 일정한 표본의 0 분산을 유한하게 평가한다.
+            ewma_z = stats.ewma.score(adjusted_value, min_scale=1.0) if ready else 0.0
+            mad_z = stats.mad.score(adjusted_value, min_scale=1.0) if ready else 0.0
 
             # 임계값 판정
             triggered_ewma = abs(ewma_z) > self._z_threshold
             triggered_mad  = abs(mad_z) > self._mad_threshold
+
+            if triggered_ewma or triggered_mad:
+                stats.rejected_ticks += 1
+                stats.consecutive_rejections += 1
+            else:
+                stats.ewma.update(adjusted_value)
+                stats.mad.update(adjusted_value)
+                self._seasonal.update(hour_of_week, value)
+                stats.consecutive_rejections = 0
 
             if triggered_ewma or triggered_mad:
                 # 가장 높은 z-score 기준으로 보고
@@ -234,6 +261,11 @@ class TrafficAnomalyEngine(DetectionEngine):
                         "method": method,
                         "seasonal_factor": round(seasonal_factor, 3),
                         "ewma_mean": round(stats.ewma.mean, 1),
+                        "baseline": self.baseline_status(src_ip),
+                        "baseline_updated": False,
+                        "seasonal_status": 'sufficient_samples' if (
+                            all(self._seasonal._counts) and self._seasonal._counts[hour_of_week] >= 3
+                        ) else 'unknown',
                     },
                 ))
 
@@ -258,6 +290,8 @@ class TrafficAnomalyEngine(DetectionEngine):
                     "count": stats.ewma._count,
                 },
                 "mad_window": list(stats.mad._window),
+                "rejected_ticks": stats.rejected_ticks,
+                "consecutive_rejections": stats.consecutive_rejections,
             }
 
         return {
@@ -274,6 +308,9 @@ class TrafficAnomalyEngine(DetectionEngine):
         """이전에 내보낸 트래픽 이상 탐지 상태를 복원한다."""
         for src_ip, data in state.get("host_stats", {}).items():
             stats = self._host_stats[src_ip]
+            stats.restored = True
+            stats.rejected_ticks = max(0, int(data.get('rejected_ticks', 0)))
+            stats.consecutive_rejections = max(0, int(data.get('consecutive_rejections', 0)))
             ewma_data = data.get("ewma", {})
             stats.ewma._alpha = float(ewma_data.get("alpha", stats.ewma._alpha))
             stats.ewma._mu = float(ewma_data.get("mu", 0.0))

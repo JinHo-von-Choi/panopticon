@@ -185,6 +185,7 @@ netwatcher:
       enabled: true
     traffic_anomaly:
       enabled: true
+      warmup_ticks: 30               # accepted active-host samples before volume scoring
       max_tracked_hosts: 50000        # max hosts tracked
 
     tls_fingerprint:

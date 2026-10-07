@@ -201,6 +201,15 @@ function renderContext(ev) {
         html += row(window.i18next.t('console.asset_context.title'), window.i18next.t('console.asset_context.scope'));
     }
     html += `</div><p class="text-dim">${esc(t('relationship_unknown'))}</p></section>`;
+    if (meta.baseline) {
+        const baseline = meta.baseline;
+        const states = ['cold_start', 'learning', 'sufficient_samples', 'restored', 'drift_suspected'];
+        const state = states.includes(baseline.state) ? baseline.state : 'unknown';
+        html += `<section class="detail-section"><h3>${esc(t('baseline'))}</h3><div class="detail-grid">`;
+        html += row(t('state'), t('baseline_states.' + state));
+        html += row(t('samples'), Number.isInteger(baseline.accepted_samples) ? baseline.accepted_samples : t('unmeasured'));
+        html += `</div><p class="text-dim">${esc(t('statistical_baseline'))}</p></section>`;
+    }
     html += `<section class="detail-section"><h3>${esc(t('pcap'))}</h3><div class="detail-grid">`;
     html += htmlRow(t('state'), `<span class="evidence-layer" data-pcap-state="${state}">${esc(t('pcap_states.' + state))}</span>`);
     html += row(t('reason'), pcap.reason);

@@ -61,6 +61,11 @@ class AdaptiveEWMA:
         """충분한 데이터가 수집되었는지 여부 (count >= 3)."""
         return self._count >= 3
 
+    def score(self, value: float, *, min_scale: float = 0.0) -> float:
+        """현재 기준으로 평가만 한다. min_scale은 입력 단위의 분산 하한이다."""
+        scale = max(self._sigma, min_scale)
+        return (value - self._mu) / scale if self.ready and scale > 0 else 0.0
+
     @property
     def mean(self) -> float:
         return self._mu
@@ -92,13 +97,15 @@ class SeasonalBuffer:
         self._counts[idx] += 1
         self._total_updates += 1
 
-    def get_factor(self, hour_of_week: int) -> float:
+    def get_factor(self, hour_of_week: int, *, min_slot_samples: int = 1,
+                   min_covered_slots: int = 1) -> float:
         """계절 보정 계수를 반환한다 (슬롯 평균 / 전역 평균). 데이터 부족 시 1.0."""
         if not self.ready:
             return 1.0
 
         idx = hour_of_week % self._SLOTS
-        if self._counts[idx] == 0:
+        if (self._counts[idx] < min_slot_samples or
+                sum(count > 0 for count in self._counts) < min_covered_slots):
             return 1.0
 
         slot_mean = self._sums[idx] / self._counts[idx]
@@ -156,3 +163,11 @@ class MADDetector:
     def window(self) -> deque[float]:
         """내부 윈도우 참조를 반환한다 (테스트용)."""
         return self._window
+
+    def score(self, value: float, *, min_scale: float = 0.0) -> float:
+        """새 값을 표본에 넣기 전에 이전 중앙값/MAD로 평가한다."""
+        if len(self._window) < 3:
+            return 0.0
+        median = _stats.median(self._window)
+        scale = max(_stats.median(abs(x - median) for x in self._window), min_scale)
+        return self._K * (value - median) / scale if scale > 0 else 0.0

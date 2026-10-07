@@ -649,7 +649,18 @@
         "unknown": "Unconfirmed"
       },
       "new_pending": "{{count}} new events · refresh to review",
-      "unmeasured": "Not measured"
+      "unmeasured": "Not measured",
+      "baseline": "Volume learning state",
+      "samples": "Accepted samples",
+      "statistical_baseline": "Statistical baseline, not human-confirmed normal work. Detected spikes are excluded from learning.",
+      "baseline_states": {
+        "cold_start": "Cold start",
+        "learning": "Learning",
+        "sufficient_samples": "Minimum samples collected",
+        "restored": "Restored baseline",
+        "drift_suspected": "Persistent change · review required",
+        "unknown": "Unknown"
+      }
     },
     "asset_context": {
       "title": "Human-confirmed asset role",

@@ -85,6 +85,9 @@ class LRUSet:
     def __len__(self) -> int:
         return len(self._data)
 
+    def __iter__(self):
+        return iter(self._data)
+
     def __bool__(self) -> bool:
         return bool(self._data)
 

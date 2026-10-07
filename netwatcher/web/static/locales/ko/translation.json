@@ -649,7 +649,18 @@
         "unknown": "확인되지 않음"
       },
       "new_pending": "새 사건 {{count}}건 · 새로고침으로 확인",
-      "unmeasured": "측정하지 않음"
+      "unmeasured": "측정하지 않음",
+      "baseline": "볼륨 학습 상태",
+      "samples": "채택한 표본",
+      "statistical_baseline": "통계 기준선입니다. 사람이 확인한 정상 업무를 뜻하지 않습니다. 탐지된 급증은 학습에서 제외합니다.",
+      "baseline_states": {
+        "cold_start": "초기 관측",
+        "learning": "학습 중",
+        "sufficient_samples": "최소 표본 확보",
+        "restored": "기준선 복원",
+        "drift_suspected": "지속 변화 · 재검토 필요",
+        "unknown": "알 수 없음"
+      }
     },
     "asset_context": {
       "title": "사람이 확인한 자산 역할",

@@ -342,3 +342,66 @@ class TestGlobalCounters:
         engine.on_tick(0)
         assert engine._current_packets == 0
         assert engine._current_bytes == 0
+
+class TestBaselineContamination:
+    @staticmethod
+    def tick(engine, count):
+        for _ in range(count):
+            engine.analyze(_make_tcp_packet(src_ip='192.0.2.10'))
+        return engine.on_tick(0)
+
+    def test_repeated_spikes_do_not_become_normal(self):
+        engine = _make_engine({'warmup_ticks': 10})
+        assert engine.baseline_status('192.0.2.10')['state'] == 'cold_start'
+        for i in range(10):
+            self.tick(engine, 10 + i % 2)
+        baseline = engine.export_state()['host_stats']['192.0.2.10']
+        seasonal = engine.export_state()['seasonal']
+        for _ in range(8):
+            alerts = self.tick(engine, 300)
+            assert len(alerts) == 1
+            assert alerts[0].metadata['baseline_updated'] is False
+        after = engine.export_state()['host_stats']['192.0.2.10']
+        assert after['ewma'] == baseline['ewma']
+        assert after['mad_window'] == baseline['mad_window']
+        assert engine.export_state()['seasonal'] == seasonal
+        assert engine.baseline_status('192.0.2.10')['state'] == 'drift_suspected'
+        assert engine.baseline_status('192.0.2.10')['accepted_samples'] == 10
+        assert self.tick(engine, 10) == []
+        assert engine.baseline_status('192.0.2.10')['state'] == 'sufficient_samples'
+
+    def test_constant_baseline_still_detects_spike(self):
+        engine = _make_engine({'warmup_ticks': 10})
+        for _ in range(10):
+            assert self.tick(engine, 10) == []
+        alerts = self.tick(engine, 100)
+        assert len(alerts) == 1
+        assert alerts[0].severity == Severity.CRITICAL
+        assert alerts[0].metadata['ewma_mean'] == 10
+
+    def test_learning_and_restored_states_are_distinct(self):
+        engine = _make_engine({'warmup_ticks': 10})
+        for _ in range(9):
+            self.tick(engine, 10)
+        assert engine.baseline_status('192.0.2.10')['state'] == 'learning'
+        self.tick(engine, 10)
+        restored = _make_engine({'warmup_ticks': 10})
+        restored.import_state(engine.export_state())
+        assert restored.baseline_status('192.0.2.10')['state'] == 'restored'
+        assert restored.baseline_status('192.0.2.10')['human_verified_normal'] is False
+        assert self.tick(restored, 100)
+
+    def test_same_hour_samples_are_not_weekly_coverage(self):
+        seasonal = SeasonalBuffer()
+        for _ in range(1000):
+            seasonal.update(0, 100)
+        assert seasonal.get_factor(0, min_slot_samples=3, min_covered_slots=168) == 1.0
+
+    def test_scores_do_not_mutate_samples(self):
+        ewma = AdaptiveEWMA();mad = MADDetector()
+        for value in (10,11,10,11):
+            ewma.update(value);mad.update(value)
+        before = (ewma.count, ewma.mean, list(mad.window))
+        assert ewma.score(100, min_scale=1) > 3
+        assert mad.score(100, min_scale=1) > 3
+        assert (ewma.count,ewma.mean,list(mad.window)) == before
