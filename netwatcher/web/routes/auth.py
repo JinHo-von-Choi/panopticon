@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import asyncio
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -25,10 +26,15 @@ def create_auth_router(auth_manager: "AuthManager | None") -> APIRouter:
     router = APIRouter(prefix="/auth", tags=["auth"])
 
     @router.post("/login")
-    async def login(body: LoginRequest):
+    async def login(body: LoginRequest, request: Request):
         if auth_manager is None or not auth_manager.enabled:
             return JSONResponse({"error": "Authentication is disabled"}, status_code=404)
-        token = auth_manager.authenticate(body.username, body.password)
+        limiter = getattr(request.app.state, "login_limiter", None)
+        ip = request.client.host if request.client else "unknown"
+        if limiter is not None and not await limiter.check("login:" + ip):
+            return JSONResponse({"error": "Too many login attempts"}, status_code=429,
+                                headers={"Retry-After": "60"})
+        token = await asyncio.to_thread(auth_manager.authenticate, body.username, body.password)
         if token is None:
             return JSONResponse({"error": "Invalid credentials"}, status_code=401)
         return {"token": token}

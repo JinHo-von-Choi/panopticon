@@ -406,6 +406,10 @@ class NetWatcher:
         # 어긋나지 않는다.
         kernel_probe = KernelDropProbe(observation)
 
+        from netwatcher.observability.health import HealthChecker
+        from netwatcher.web.audit_log import AuditLogger
+        health_checker = HealthChecker(database=self.db, dispatcher=dispatcher,
+                                       registry=self.registry, observation=observation)
         app = create_app(
             config=self.config,
             event_repo=event_repo,
@@ -431,6 +435,9 @@ class NetWatcher:
             response_repository=response_repository,
             response_executor=response_executor,
             response_proposal_repo=response_proposal_repo,
+            health_checker=health_checker,
+            audit_logger=AuditLogger(self.db.pool),
+            audit_required=True,
         )
 
         import uvicorn
@@ -504,6 +511,7 @@ class NetWatcher:
             observation=observation, kernel_probe=kernel_probe,
         )
         sniffer.start()
+        health_checker.set_sniffer(sniffer)
 
         # 스니퍼가 필요한 서비스에 주입
         tick_service.set_sniffer(sniffer)

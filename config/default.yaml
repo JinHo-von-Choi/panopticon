@@ -36,6 +36,7 @@ netwatcher:
     pool_size: 20
     max_overflow: 40
     ssl_mode: "disable"  # disable, allow, prefer, require, verify-ca, verify-full
+    ssl_ca_file: ""       # verify-ca/full의 CA PEM. 빈 값이면 시스템 신뢰 저장소
 
   logging:
     level: "INFO"
@@ -72,6 +73,7 @@ netwatcher:
     username: "admin"
     password: ""          # 반드시 환경변수(NETWATCHER_LOGIN_PASSWORD)로 설정
     token_expire_hours: 24
+    login_attempts_per_minute: 10
     multi_user: false        # false = 기존 단일 사용자 모드 유지
     default_admin_password: ""
     api_rate_limit:

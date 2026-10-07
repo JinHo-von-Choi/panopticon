@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request, Depends
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,7 +14,7 @@ from netwatcher.web.routes.devices import create_devices_router
 from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
-def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None):
+def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False):
     web_cfg = config.section("web") if hasattr(config, 'section') else {}
     cors_cfg = web_cfg.get("cors", {}) if isinstance(web_cfg, dict) else {}
     allowed_origins = cors_cfg.get("allowed_origins", ["http://localhost:38585"])
@@ -32,6 +32,22 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
         # rbac.require_role() 이 토큰 role 클레임을 보려면 app.state 가 필요하다.
         # 이게 없으면 권한 검사가 조용히 anonymous-admin 으로 통과한다(PR 03).
         app.state.auth_manager = auth_manager
+
+    from netwatcher.web.api_rate_limiter import APIRateLimiter
+    from netwatcher.web.request_guard import RequestGuard
+    from netwatcher.observability.health import HealthChecker
+    auth_cfg = config.section("auth")
+    auth_cfg = auth_cfg if isinstance(auth_cfg, dict) else {}
+    rate_cfg = auth_cfg.get("api_rate_limit", {})
+    limiter = APIRateLimiter(requests_per_minute=rate_cfg.get("requests_per_minute", 60),
+                             burst=rate_cfg.get("burst", 10)) if rate_cfg.get("enabled", True) else None
+    app.state.login_limiter = APIRateLimiter(requests_per_minute=auth_cfg.get("login_attempts_per_minute", 10), burst=0)
+    app.state.audit_logger = audit_logger
+    app.state.audit_required = audit_required
+    app.state.health_checker = health_checker or HealthChecker(
+        dispatcher=dispatcher, sniffer=sniffer, registry=registry, observation=observation_service,
+    )
+    app.add_middleware(RequestGuard, limiter=limiter, audit_logger=audit_logger)
 
     # 피드 신선도는 상태 경로에서 조회하므로 app.state 로 노출한다 (PR 07)
     if feed_manager is not None:
@@ -126,7 +142,20 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
     @app.get("/health")
     async def health_check():
+        """프로세스 liveness. 센서·DB 준비 상태는 /ready에서 조회한다."""
         return {"status": "healthy"}
+
+    @app.get("/ready")
+    async def ready():
+        result = await app.state.health_checker.readiness()
+        return JSONResponse({"status": "ready" if result["ready"] else "not_ready"},
+                            status_code=200 if result["ready"] else 503)
+
+    from netwatcher.web.rbac import Role, require_role
+
+    @app.get("/api/health", dependencies=[Depends(require_role(Role.VIEWER))])
+    async def detailed_health():
+        return await app.state.health_checker.readiness()
 
     @app.get("/api/support-profile")
     async def support_profile():
@@ -151,15 +180,23 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
         if observation is not None:
             # 계약 통과와 실제 관측은 별개다. 프로필이 유효해도 센서가
             # stale 이면 대시보드는 그 사실을 함께 보여줘야 한다.
-            payload["observation"] = observation.snapshot()
+            try:
+                payload["observation"] = observation.snapshot()
+            except Exception:
+                payload["observation"] = {"state": "unknown", "reasons": ["관측 상태 조회 실패"]}
 
         manager = getattr(app.state, "feed_manager", None)
         if manager is not None:
-            health = manager.feed_health()
+            try:
+                health = manager.feed_health()
+                violations = manager.health_as_violations() if health["status"] != "ok" else []
+            except Exception:
+                health = {"status": "unknown", "reason": "위협 피드 상태 조회 실패"}
+                violations = []
             payload["feeds"] = health
             if health["status"] != "ok":
                 payload["violations"] = list(payload["violations"]) + [
-                    v.as_dict() for v in manager.health_as_violations()
+                    v.as_dict() for v in violations
                 ]
                 payload["profile_note"] = (
                     "위반이 있어도 기동은 하지만, threat_intel 은 지표가 없어 "

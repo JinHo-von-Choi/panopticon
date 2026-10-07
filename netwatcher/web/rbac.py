@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -55,7 +56,9 @@ def require_role(*roles: Role):
         auth_manager: AuthManager | None = request.app.state.auth_manager if hasattr(request.app.state, "auth_manager") else None
 
         if auth_manager is None or not auth_manager.enabled:
-            return {"sub": "anonymous", "role": Role.ADMIN.value}
+            payload = {"sub": "anonymous", "role": Role.ADMIN.value}
+            await _audit_intent(request, payload)
+            return payload
 
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -76,9 +79,28 @@ def require_role(*roles: Role):
                 status_code=403,
                 detail=f"Role '{user_role.value}' is not authorized. Required: {[r.value for r in roles]}",
             )
+        await _audit_intent(request, payload)
         return payload
 
     return _dependency
+
+
+async def _audit_intent(request: Request, payload: dict) -> None:
+    if request.method == "POST" and request.url.path.endswith(("/approve", "/activate")):
+        audit = getattr(request.app.state, "audit_logger", None)
+        if getattr(request.app.state, "audit_required", False):
+            try:
+                async with asyncio.timeout(2):
+                    saved = audit is not None and await audit.log(
+                        user=str(payload.get("sub", "unknown")),
+                        action="authorized_intent", resource=request.url.path,
+                        details={"method": request.method},
+                        ip=request.client.host if request.client else "",
+                    )
+            except Exception:
+                saved = False
+            if not saved:
+                raise HTTPException(503, "Required approval audit is unavailable")
 
 
 class RBACManager:

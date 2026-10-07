@@ -28,6 +28,7 @@ _PUBLIC_PREFIXES = (
     "/api/auth/login",
     "/api/auth/status",
     "/health",
+    "/ready",
     "/metrics",
 )
 
@@ -162,7 +163,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if not auth_header.startswith("Bearer "):
                 return JSONResponse({"error": "Missing or invalid Authorization header"}, status_code=401)
             token = auth_header[7:]
-            if not self._auth.verify_token(token):
+            payload = self._auth.verify_token(token)
+            if not payload:
                 return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
+            request.state.user = payload
 
         return await call_next(request)

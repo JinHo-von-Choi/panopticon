@@ -142,7 +142,7 @@ class TestRateLimiterDependency:
             assert resp.status_code == 429
 
     @pytest.mark.asyncio
-    async def test_dependency_uses_token_key(self):
+    async def test_unverified_tokens_cannot_reset_ip_bucket(self):
         limiter = APIRateLimiter(redis_client=None, requests_per_minute=1, burst=0)
         app     = FastAPI()
         dep     = limiter.as_dependency()
@@ -159,6 +159,6 @@ class TestRateLimiterDependency:
             # 토큰 A: 초과
             resp = await client.get("/test", headers={"Authorization": "Bearer tokenAAA"})
             assert resp.status_code == 429
-            # 토큰 B: 별도 버킷이므로 허용
+            # 검증되지 않은 토큰 B도 같은 IP 버킷이다.
             resp = await client.get("/test", headers={"Authorization": "Bearer tokenBBB"})
-            assert resp.status_code == 200
+            assert resp.status_code == 429

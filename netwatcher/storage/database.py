@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 from datetime import datetime
 
 import asyncpg
@@ -66,6 +67,19 @@ class Database:
         self._pool_size = pg.get("pool_size", 20)
         self._search_path = pg.get("search_path", "netwatcher,public")
         self._pool: asyncpg.Pool | None = None
+        mode = pg.get("ssl_mode", "disable")
+        if mode not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+            raise ValueError("Unsupported postgresql.ssl_mode")
+        if mode == "disable":
+            self._ssl = False
+        elif mode in {"allow", "prefer"}:
+            self._ssl = mode
+        else:
+            context = ssl.create_default_context(cafile=pg.get("ssl_ca_file") or None)
+            context.check_hostname = mode == "verify-full"
+            if mode == "require":
+                context.verify_mode = ssl.CERT_NONE
+            self._ssl = context
 
     async def connect(self, max_retries: int = 5, base_delay: float = 1.0) -> None:
         """지수 백오프 재시도를 통해 커넥션 풀을 생성한다."""
@@ -77,6 +91,7 @@ class Database:
                     database=self._pg_database,
                     user=self._pg_user,
                     password=self._pg_password,
+                    ssl=self._ssl,
                     min_size=2,
                     max_size=self._pool_size,
                     server_settings={"search_path": self._search_path},

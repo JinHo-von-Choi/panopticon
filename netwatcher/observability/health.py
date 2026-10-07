@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import netwatcher
@@ -34,6 +35,8 @@ class HealthChecker:
         sniffer: Any = None,
         registry: Any = None,
         redis_client: Any = None,
+        observation: Any = None,
+        timeout_seconds: float = 2.0,
     ) -> None:
         self._database     = database
         self._dispatcher   = dispatcher
@@ -41,6 +44,11 @@ class HealthChecker:
         self._registry     = registry
         self._redis_client = redis_client
         self._start_time   = time.monotonic()
+        self._observation = observation
+        self._timeout_seconds = timeout_seconds
+
+    def set_sniffer(self, sniffer: Any) -> None:
+        self._sniffer = sniffer
 
     async def _check_database(self) -> dict[str, Any]:
         """데이터베이스 연결 상태를 확인한다."""
@@ -50,31 +58,35 @@ class HealthChecker:
             pool = getattr(self._database, "pool", None)
             if pool is None:
                 return {"status": "unhealthy", "error": "no pool"}
-            async with pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
+            async with asyncio.timeout(self._timeout_seconds):
+                async with pool.acquire() as conn:
+                    await conn.fetchval("SELECT 1")
             return {
                 "status": "healthy",
                 "pool_size": pool.get_size(),
                 "pool_free": pool.get_idle_size(),
             }
         except Exception as exc:
-            return {"status": "unhealthy", "error": str(exc)}
+            return {"status": "unhealthy", "reason": type(exc).__name__}
 
     async def _check_redis(self) -> dict[str, Any]:
         """Redis 연결 상태를 확인한다."""
         if self._redis_client is None:
             return {"status": "unconfigured"}
         try:
-            await self._redis_client.ping()
+            async with asyncio.timeout(self._timeout_seconds):
+                await self._redis_client.ping()
             return {"status": "healthy"}
         except Exception as exc:
-            return {"status": "unhealthy", "error": str(exc)}
+            return {"status": "unhealthy", "reason": type(exc).__name__}
 
     def _check_sniffer(self) -> dict[str, Any]:
         """패킷 캡처 스니퍼 상태를 확인한다."""
         if self._sniffer is None:
             return {"status": "unconfigured"}
-        running = getattr(self._sniffer, "running", False)
+        running = getattr(self._sniffer, "is_running", None)
+        if not isinstance(running, bool):
+            running = getattr(self._sniffer, "running", False)
         return {"status": "healthy" if running else "unhealthy"}
 
     def _check_engines(self) -> dict[str, Any]:
@@ -82,7 +94,8 @@ class HealthChecker:
         if self._registry is None:
             return {"status": "unconfigured"}
         engines = getattr(self._registry, "_engines", {})
-        enabled = [n for n, e in engines.items() if getattr(e, "enabled", True)]
+        values = engines.values() if isinstance(engines, dict) else engines
+        enabled = [e for e in values if getattr(e, "enabled", True)]
         return {
             "status":  "healthy" if enabled else "degraded",
             "total":   len(engines),
@@ -99,7 +112,7 @@ class HealthChecker:
         qsize = queue.qsize()
         maxsize = queue.maxsize
         return {
-            "status":        "healthy" if qsize < maxsize * 0.9 else "degraded",
+            "status":        "healthy" if maxsize > 0 and qsize < maxsize * 0.9 else "degraded",
             "depth":         qsize,
             "max_size":      maxsize,
             "ws_subscribers": len(getattr(self._dispatcher, "_ws_subscribers", set())),
@@ -142,3 +155,22 @@ class HealthChecker:
             "uptime_seconds": round(uptime_seconds, 1),
             "components":     components,
         }
+
+    async def readiness(self) -> dict[str, Any]:
+        result = await self.check_all()
+        components = result["components"]
+        if self._observation is None:
+            components["observation"] = {"status": "unconfigured"}
+        else:
+            try:
+                snapshot = self._observation.snapshot()
+                state = snapshot["state"]
+                components["observation"] = {
+                    "status": "healthy" if state == "observed" else "degraded",
+                    "state": state, "reasons": snapshot.get("reasons", []),
+                }
+            except Exception as exc:
+                components["observation"] = {"status": "unknown", "reason": type(exc).__name__}
+        required = ("database", "sniffer", "engines", "alert_queue", "observation")
+        result["ready"] = all(components[name]["status"] == "healthy" for name in required)
+        return result

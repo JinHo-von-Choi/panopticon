@@ -32,7 +32,7 @@ class AuditLogger:
         resource: str,
         details: dict[str, Any] | None = None,
         ip: str = "",
-    ) -> None:
+    ) -> bool:
         """감사 이벤트를 audit_log 테이블에 기록한다."""
         sql = """
             INSERT INTO audit_log (user_id, action, resource, details, ip, created_at)
@@ -50,10 +50,12 @@ class AuditLogger:
                     ip[:45] if ip else "",
                     now,
                 )
+            return True
         except asyncpg.UndefinedTableError:
             logger.debug("audit_log table does not exist; skipping audit entry")
         except Exception:
             logger.exception("Failed to write audit log entry")
+        return False
 
     async def query(
         self,

@@ -37,7 +37,7 @@ PROFILE_LIMITED = "limited"
 PROFILE_FULL = "full"
 SUPPORTED_PROFILES = (PROFILE_LIMITED, PROFILE_FULL)
 
-# PostgreSQL ssl_mode 허용 값 (Config가 그대로 DSN에 전달한다)
+# PostgreSQL ssl_mode 허용 값 (Database가 asyncpg SSL 설정으로 변환한다)
 SUPPORTED_SSL_MODES = (
     "disable", "allow", "prefer", "require", "verify-ca", "verify-full",
 )

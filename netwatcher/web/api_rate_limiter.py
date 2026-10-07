@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import time
+import hashlib
+import uuid
 from collections import defaultdict
 from typing import Any
 
@@ -33,21 +35,26 @@ class APIRateLimiter:
         redis_client: Any = None,
         requests_per_minute: int = 60,
         burst: int = 10,
+        max_keys: int = 10000,
     ) -> None:
         self._redis             = redis_client
         self._rpm               = max(requests_per_minute, 1)
         self._burst             = max(burst, 0)
         self._max_per_window    = self._rpm + self._burst
         self._window_seconds    = 60
+        self._max_keys = max(1, max_keys)
+        self._next_cleanup = 0.0
 
         # 인메모리 폴백: key -> list[timestamp]
         self._buckets: dict[str, list[float]] = defaultdict(list)
 
     async def check(self, key: str) -> bool:
         """요청 허용 여부를 반환한다. True = 허용, False = 거부."""
+        if not self._check_memory(key):
+            return False
         if self._redis is not None:
             return await self._check_redis(key)
-        return self._check_memory(key)
+        return True
 
     async def _check_redis(self, key: str) -> bool:
         """Redis sorted set 기반 슬라이딩 윈도우."""
@@ -59,19 +66,27 @@ class APIRateLimiter:
             pipe = self._redis.pipeline()
             pipe.zremrangebyscore(rkey, 0, window)
             pipe.zcard(rkey)
-            pipe.zadd(rkey, {str(now): now})
+            pipe.zadd(rkey, {uuid.uuid4().hex: now})
             pipe.expire(rkey, self._window_seconds + 1)
             results = await pipe.execute()
             count   = results[1]
             return count < self._max_per_window
         except Exception:
-            logger.warning("Redis rate limit check failed; falling back to allow")
+            logger.debug("Redis rate limit unavailable; using bounded local admission")
             return True
 
     def _check_memory(self, key: str) -> bool:
         """인메모리 슬라이딩 윈도우."""
         now    = time.time()
         window = now - self._window_seconds
+
+        if now >= self._next_cleanup:
+            for stale_key in list(self._buckets):
+                if not self._buckets[stale_key] or self._buckets[stale_key][-1] <= window:
+                    del self._buckets[stale_key]
+            self._next_cleanup = now + self._window_seconds
+        if key not in self._buckets and len(self._buckets) >= self._max_keys:
+            return False
 
         timestamps = self._buckets[key]
         # 만료된 항목 제거
@@ -89,18 +104,27 @@ class APIRateLimiter:
 
         async def _rate_limit_dep(request: Request) -> None:
             # 키: 인증된 사용자 또는 클라이언트 IP
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                key = f"token:{auth_header[7:20]}"
-            else:
-                client_ip = request.client.host if request.client else "unknown"
-                key = f"ip:{client_ip}"
-
-            allowed = await limiter.check(key)
+            allowed = await limiter.check(request_key(request))
             if not allowed:
                 raise HTTPException(
                     status_code=429,
                     detail="Too many requests. Please try again later.",
+                    headers={"Retry-After": "60"},
                 )
 
         return _rate_limit_dep
+
+
+def request_key(request: Request) -> str:
+    """검증된 주체만 사용자 버킷에 사용한다. 전달 헤더는 신뢰하지 않는다."""
+    payload = getattr(request.state, "user", None)
+    if payload is None:
+        auth = getattr(request.app.state, "auth_manager", None)
+        header = request.headers.get("authorization", "")
+        if auth is not None and auth.enabled and header.startswith("Bearer "):
+            payload = auth.verify_token(header[7:])
+            if payload is not None:
+                request.state.user = payload
+    if isinstance(payload, dict) and isinstance(payload.get("sub"), str):
+        return "user:" + hashlib.sha256(payload["sub"].encode()).hexdigest()
+    return "ip:" + (request.client.host if request.client else "unknown")
