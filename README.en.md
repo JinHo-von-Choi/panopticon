@@ -2,54 +2,96 @@
 
 # Panopticon
 
-Panopticon is a console for investigating security alerts in small offices, labs, and development networks. It reads existing Suricata EVE logs, groups repeated alerts, and brings device roles, work schedules, and communication evidence into the investigation.
+Panopticon is a security console for investigating Suricata alerts and recording decisions. It targets small offices, labs, and development networks.
 
-Review whether a transfer matches a backup job or involves an unfamiliar peer, then record the evidence behind your decision. Investigation records stay in PostgreSQL on your own server. AI analysis and notifications are optional.
+It reads the EVE log that Suricata writes, groups repeated alerts, and puts device roles, work schedules, and traffic evidence side by side. An analyst decides whether a transfer is a known backup or contact with an unfamiliar peer, then records the evidence, owner, and expiry. Records stay in PostgreSQL on your own server.
 
-## Getting started
+## Architecture
 
-1. **Connect Suricata logs.** Install using a readable `eve.json` file. The default installation needs no packet capture privileges.
-2. **Check collection and retention.** Review input connectivity, storage failures, possible gaps, and retention capacity.
-3. **Investigate priority cases.** Open a representative event and compare previous alerts, the source device, its peer, and original evidence.
-4. **Record decisions and handoffs.** Assign an owner and document the evidence, scope, and expiry of a normal-activity review. Revisit it when conditions change.
+```mermaid
+flowchart LR
+    S[Suricata] -->|eve.json| C
+    subgraph C[Panopticon console]
+        T[Log ingest] --> G[Group repeats]
+        G --> R[Investigate, decide, hand off]
+    end
+    C --> DB[(PostgreSQL)]
+    A[Host agent] -.->|optional| C
+    N[Direct capture sensor] -.->|optional| C
+```
 
-Start with the [installation guide](docs/INSTALL.md) and [user guide](docs/USER-GUIDE.md). Detailed guides are in Korean; the console supports Korean and English.
+The default installation is the solid path only. The console reads a log file and needs no capture privileges. Dotted paths are optional deployments.
 
-## What it provides
+| Deployment | Input | Privileges |
+| --- | --- | --- |
+| EVE (default) | Suricata `eve.json` | Read access to the log |
+| native | Packets captured directly | `CAP_NET_RAW` for the sensor only; console runs unprivileged |
+| Host agent | Linux TCP sockets and load | root on the target host (install only) |
 
-| Feature | Purpose |
+## Quick start
+
+See the console with a bundled sample log, no Suricata required:
+
+```bash
+./install.sh demo
+```
+
+Connect a real Suricata log:
+
+```bash
+PANOPTICON_EVE_FILE=/var/log/suricata/eve.json ./install.sh eve
+```
+
+The console opens at `http://127.0.0.1:38585`. The [installation guide](docs/INSTALL.md) covers every path. Detailed guides are in Korean.
+
+## Features
+
+| Feature | What it does |
 | --- | --- |
-| Repeated alerts and previous cases | Compare representative events while retaining individual originals |
-| Device roles and work schedules | Record ownership, expected communication, and planned jobs |
-| Decisions and collaboration | Track assignees, case status, handoff notes, and review history with separate admin, analyst, and viewer permissions |
-| Evidence retention | Inspect original alerts and investigation evidence; retained packets are available in direct capture deployments |
-| Tuning proposals and approval | Compare normal and attack samples before an administrator approves a change in a supported sensor deployment |
-| Lightweight host agent | Collect Linux TCP sockets, load and memory with a Rust executable; the local release build is about 1.6 MiB. A systemd installer and HMAC-SHA256 gateway support consecutive event sequences and idempotent retries. See [agent installation](docs/INSTALL.md#호스트-에이전트-설치) |
-| Tenant isolation foundation | PostgreSQL RLS and transaction tenant contexts cover `events`, `devices`, `incidents` and `audit_log`; HTTP tenant selection and isolation of all project data require further integration |
-| Hash-chained audit trail | SHA-256 `prev_hash` and `entry_hash` fields with `verify_chain(tenant_id)` detect content/link mismatches and identify the first broken row. See [verification scope](docs/API.md#감사-로그-무결성과-테넌트-컨텍스트) |
-| Operation themes and visualization | Operator, Auditor and Cinematic themes; Canvas2D topology; NIST CSF / PCI DSS coverage and KPIs; a tactic-grouped MITRE ATT&CK frequency heatmap with Navigator Layer JSON export |
+| Grouped repeats | Groups alerts sharing sensor, rule, source, destination, and service per hour. Originals are kept |
+| Business context | Registers device roles, owners, expected traffic, and work schedules for comparison with alerts |
+| Decisions and handoff | Tracks owner, case status, handoff notes, and decision history. Admin, analyst, and viewer roles |
+| Priorities | Lists unclosed, unassigned, undecided, and expired-decision cases separately |
+| Evidence | Traces the original EVE record. Direct capture deployments offer PCAP download |
+| Tuning review | Compares a proposed change against normal and attack samples before administrator approval |
+| Host agent | Rust executable (about 1.6 MiB) sends TCP connections, load, and memory with HMAC signatures |
+| Audit trail | Stores administrative changes in a SHA-256 hash chain |
+| Visualization | Topology, NIST CSF and PCI DSS coverage, MITRE ATT&CK heatmap with Navigator export |
 
-Press `Ctrl+K` or `Cmd+K` to find a console screen.
+The console supports Korean and English. Press `Ctrl+K` (`Cmd+K` on macOS) to search screens.
 
-## Requirements and limits
+## What it does not do
 
-- Use Linux with Docker Compose or Python 3.12+, and PostgreSQL. Size storage for the traffic volume and retention period.
-- The default EVE deployment investigates alerts recorded by Suricata. It does not invent missing packet evidence or infer verified device ownership.
-- Direct capture requires a separate sensor, SPAN or TAP access, and capture privileges. The web console runs without capture privileges. See [direct capture installation](docs/INSTALL.md#직접-패킷을-캡처하기).
-- Panopticon does not decrypt HTTPS payloads or assess traffic outside its coverage. Capacity depends on the input, ruleset, and hardware.
-- The default direct capture configuration uses one sensor and one worker. Multi-worker and high-availability deployments are outside that configuration.
-- The default installation is for read-only investigation. A normal-activity review does not automatically create detection exceptions or change the firewall. AI does not approve configuration changes.
+- A decision never creates detection exceptions or firewall rules.
+- AI explains and proposes. Administrators approve configuration changes.
+- It does not decrypt HTTPS payloads or judge traffic the sensor cannot see.
+- Supported scope is one sensor and one worker. Multi-worker and high availability are not supported.
+
+## Requirements
+
+- Linux
+- Docker Compose, or Python 3.12+
+- PostgreSQL (bundled with the Docker Compose installation)
+- Disk space sized for retention and traffic volume
 
 ## Documentation
 
 - [Installation and upgrades](docs/INSTALL.md)
-- [Release verification](docs/RELEASE-VERIFICATION.md)
+- [Suricata EVE connection](docs/EVE.md)
 - [Console and investigations](docs/USER-GUIDE.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Operations and recovery](docs/OPERATIONS-GUIDE.md)
 - [API integration](docs/API.md)
+- [Release verification](docs/RELEASE-VERIFICATION.md)
 - [Development](docs/DEVELOPMENT.md)
 - [Release notes](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 
 [한국어](README.md) · [MIT License](LICENSE)
+
+---
+
+<p align="center">
+  Made by <a href="mailto:jinho.von.choi@nerdvana.kr">Jinho Choi</a> &nbsp;|&nbsp;
+  <a href="https://buymeacoffee.com/jinho.von.choi">Buy me a coffee</a>
+</p>
