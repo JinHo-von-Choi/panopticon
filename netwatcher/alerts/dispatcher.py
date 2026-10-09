@@ -8,7 +8,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from netwatcher.alerts.rate_limiter import RateLimiter, EventBudget
 from netwatcher.alerts.aggregation import AlertAggregator
@@ -331,11 +331,6 @@ class AlertDispatcher(EventStream):
                     STAGE_RESULT_QUEUE, KIND_DROPPED, 1, drop_source=DROP_SOURCE_APP,
                 )
             logger.warning("Alert queue full, dropping alert: %s", alert.title)
-            try:
-                from netwatcher.web.metrics import alerts_queue_depth
-                # 큐 깊이가 이미 최대치
-            except ImportError:
-                pass
 
     @property
     def oldest_queue_age_seconds(self) -> float | None:

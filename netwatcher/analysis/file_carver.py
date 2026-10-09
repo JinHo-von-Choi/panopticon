@@ -13,7 +13,6 @@ import quopri
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 logger = logging.getLogger("netwatcher.analysis.file_carver")
 

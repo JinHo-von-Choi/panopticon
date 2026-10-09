@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import copy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, APIRouter, HTTPException, Request
 from pydantic import BaseModel, StrictBool

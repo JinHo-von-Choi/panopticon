@@ -11,7 +11,7 @@ import multiprocessing as mp
 import os
 import time
 from multiprocessing import Process, Queue
-from typing import Any, Callable
+from typing import Any
 
 from netwatcher.utils.config import Config
 from netwatcher.capture.worker_control import WorkerEngineChange, WorkerWhitelistChange, WorkerFeedChange, WorkerRulesChange, WorkerEngineReceipt, WorkerSynchronizationError

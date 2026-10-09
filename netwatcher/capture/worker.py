@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import json
-import multiprocessing as mp
 import os
 import signal
 import time
@@ -20,7 +19,6 @@ from multiprocessing import Queue
 from typing import Any
 from types import FrameType
 
-from netwatcher.detection.models import Alert
 from netwatcher.utils.config import Config
 from netwatcher.capture.worker_control import WorkerEngineChange, WorkerWhitelistChange, WorkerFeedChange, WorkerRulesChange, WorkerEngineReceipt
 
@@ -83,7 +81,6 @@ class PacketWorker:
         4. 주기적 tick 호출 (1초 간격)
         """
         # 워커 프로세스 안에서 탐지 라이브러리를 초기화한다.
-        from scapy.layers.l2 import Ether
 
         from netwatcher.detection.registry import EngineRegistry
 

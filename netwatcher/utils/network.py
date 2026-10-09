@@ -7,7 +7,6 @@ import ipaddress
 import logging
 import socket
 from functools import lru_cache
-from typing import Any
 from urllib.parse import urlparse
 
 from scapy.all import conf, get_if_list

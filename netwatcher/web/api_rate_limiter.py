@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 
 logger = logging.getLogger("netwatcher.web.api_rate_limiter")
 

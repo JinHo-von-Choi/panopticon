@@ -429,7 +429,7 @@ class AIAnalyzerService:
         
         # 기본 언어 설정 가져오기
         lang = self._config.get("netwatcher.language.default", "ko")
-        lang_instruction = f"Respond in Korean." if lang == "ko" else "Respond in English."
+        lang_instruction = "Respond in Korean." if lang == "ko" else "Respond in English."
 
         # 화이트리스트 문맥 정보 구성
         whitelist_info = ""

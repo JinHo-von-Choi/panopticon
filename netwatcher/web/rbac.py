@@ -15,7 +15,7 @@ from uuid import uuid4
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 
 if TYPE_CHECKING:
     from netwatcher.web.auth import AuthManager

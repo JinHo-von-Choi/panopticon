@@ -837,6 +837,47 @@ def gate_schema_parity() -> GateResult:
     return GateResult("G0-13", "스키마 정합성", True, "", checks)
 
 
+def gate_static_analysis() -> GateResult:
+    """G0-15: 정적 분석 기준선이 깨지지 않아야 한다.
+
+    이 저장소에는 오랫동안 린터가 없었다. pyproject.toml 의 ruff 설정이
+    항상 켜는 규칙(E9 문법, F401 미사용 임포트, F541 무의미 f-string)을
+    강제한다. 여기에 도입 시점에 남아 있던 부채는 카운트 상한으로 묶어,
+    **늘어날 수만 없게** 했다. 하나를 고칠 때마다 상한을 낮춘다.
+    """
+    debt_rules = "B904,B007,F841,B905,B023,B015"
+    budget = {"B904": 12, "B007": 10, "F841": 10, "B905": 8, "B023": 1, "B015": 1}
+    checks: list[str] = []
+
+    proc = subprocess.run([sys.executable, "-m", "ruff", "check", "netwatcher/", "scripts/", "tests/"],
+                          cwd=REPO_ROOT, capture_output=True, text=True, timeout=300)
+    if proc.returncode != 0:
+        return GateResult("G0-15", "정적 분석", False,
+                          (proc.stdout or proc.stderr or "").strip()[-400:], checks)
+    checks.append("ruff-check=clean")
+
+    # --isolated 가 필수다. pyproject.toml 의 ignore 목록이 --select 를 덮어써서,
+    # 없으면 상한을 잴 대상이 통째로 사라지고 게이트가 "0건"을 보고한다.
+    # 부채가 없다고 믿게 만드는 게이트는 없는 것보다 나쁘다.
+    proc = subprocess.run([sys.executable, "-m", "ruff", "check", "--isolated",
+                           "--select", debt_rules, "--statistics",
+                           "netwatcher/", "scripts/", "tests/"],
+                          cwd=REPO_ROOT, capture_output=True, text=True, timeout=300)
+    counts: dict[str, int] = {}
+    for line in (proc.stdout or "").splitlines():
+        # ruff --statistics 는 "개수<TAB>규칙ID<TAB>설명" 순서다.
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isupper():
+            counts[parts[1]] = int(parts[0])
+    grown = [f"{rule} {counts.get(rule, 0)}/{limit}" for rule, limit in budget.items()
+             if counts.get(rule, 0) > limit]
+    checks.append("debt=" + ",".join(f"{r}:{counts.get(r, 0)}/{l}" for r, l in budget.items()))
+    if grown:
+        return GateResult("G0-15", "정적 분석", False,
+                          "정적 분석 부채 상한 초과: " + ", ".join(grown), checks)
+    return GateResult("G0-15", "정적 분석", True, "", checks)
+
+
 def gate_tests() -> GateResult:
     """G0-5: 회귀 스위트가 통과해야 한다."""
     cmd = [sys.executable, "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider"]
@@ -917,6 +958,7 @@ GATES: tuple[Callable[..., GateResult], ...] = (
     gate_enforcement_honesty,
     gate_schema_parity,
     gate_mutation_permissions,
+    gate_static_analysis,
     gate_tests,
 )
 
@@ -935,6 +977,7 @@ GATE_BY_ID = {
     "G0-12": gate_enforcement_honesty,
     "G0-13": gate_schema_parity,
     "G0-14": gate_mutation_permissions,
+    "G0-15": gate_static_analysis,
     "G0-5": gate_tests,
 }
 

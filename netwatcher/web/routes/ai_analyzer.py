@@ -17,7 +17,7 @@ from netwatcher.services.sensor_control import SensorControlError
 from netwatcher.web.rbac import Role, require_role
 
 if TYPE_CHECKING:
-    from netwatcher.services.ai_analyzer import AIAnalyzerService
+    pass
 
 logger = logging.getLogger(__name__)
 

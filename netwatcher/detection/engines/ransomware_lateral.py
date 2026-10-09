@@ -13,7 +13,6 @@ from scapy.all import IP, Packet, TCP
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity
-from netwatcher.utils.network import is_private_ip
 
 logger = logging.getLogger("netwatcher.detection.engines.ransomware_lateral")
 
@@ -119,12 +118,12 @@ class RansomwareLateralEngine(DetectionEngine):
                         engine=self.name,
                         severity=Severity.CRITICAL,
                         title=f"{svc} Brute Force Detected",
-                        title_key=f"engines.ransomware_lateral.alerts.brute_force.title",
+                        title_key="engines.ransomware_lateral.alerts.brute_force.title",
                         description=(
                             f"Host {src_ip} attempted {len(times)} {svc} connections "
                             f"to {dst_ip} in {self._window}s. Possible credential attack."
                         ),
-                        description_key=f"engines.ransomware_lateral.alerts.brute_force.description",
+                        description_key="engines.ransomware_lateral.alerts.brute_force.description",
                         source_ip=src_ip,
                         dest_ip=dst_ip,
                         confidence=0.9,

@@ -6,7 +6,6 @@ Alert 객체를 STIX Indicator + Sighting 으로 변환하고,
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime, timezone

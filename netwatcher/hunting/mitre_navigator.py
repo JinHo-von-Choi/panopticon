@@ -6,7 +6,7 @@ import logging
 from collections import Counter
 from typing import Any
 
-from netwatcher.detection.attack_mapping import TTP_REGISTRY, KILL_CHAIN_ORDER
+from netwatcher.detection.attack_mapping import TTP_REGISTRY
 
 logger = logging.getLogger("netwatcher.hunting.mitre_navigator")
 

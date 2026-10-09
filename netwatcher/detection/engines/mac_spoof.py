@@ -9,7 +9,7 @@ from typing import Any
 
 from netwatcher.detection.eviction import BoundedDefaultDict
 
-from scapy.all import ARP, IP, Packet
+from scapy.all import ARP, Packet
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity

@@ -13,7 +13,6 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 
 from scapy.all import Packet
 

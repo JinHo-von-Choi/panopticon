@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import defaultdict, deque
+from collections import deque
 from typing import Any
 
-from scapy.all import BOOTP, DHCP, IP, UDP, Ether, Packet
+from scapy.all import DHCP, IP, Ether, Packet
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity

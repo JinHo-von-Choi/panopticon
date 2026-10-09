@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from prometheus_client import Counter, Gauge

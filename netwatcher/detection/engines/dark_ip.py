@@ -5,7 +5,6 @@ from __future__ import annotations
 import ipaddress
 import logging
 import time
-from collections import defaultdict
 
 from netwatcher.detection.eviction import BoundedDefaultDict, prune_expired_entries
 from typing import Any

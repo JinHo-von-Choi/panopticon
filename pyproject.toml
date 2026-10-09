@@ -1,0 +1,82 @@
+[project]
+name = "netwatcher"
+version = "0.6.1"
+description = "Suricata EVE 로그 기반 보안 조사 콘솔"
+requires-python = ">=3.12"
+
+# 정적 분석 기준선.
+#
+# 이 저장소에는 오랫동안 린터·타입 검사기·커버리지 측정이 없었다. 모든 불변식을
+# scripts/gates.py의 14개 계약 게이트에 수동으로 맡겨 두고 있었다.
+#
+# 규칙을 좁게 둔 이유는 "처음부터 통과하는 기준"을 만드는 것이다. 넓은 기본
+# 규칙을 적용하면 import 정렬 같은 취향 문제가 699건 나와서, 실제 결함을
+# 숨기고.diff 리뷰를 방해한다. 아래 선택은 이 코드베이스에서 결함을 가리키면서
+# 오탐이 적은 조합이다.
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [".venv", ".venv-new", "alembic/versions", "node_modules"]
+
+[tool.ruff.lint]
+select = [
+    "E9",    # 문법·런타임 오류 (현재 0건)
+    "F",     # pyflakes: 정의되지 않은 이름, 미사용 임포트, 미사용 변수
+    "B",     # bugbear: 클로저 버그, 예외 전파 누락
+]
+ignore = [
+    # FastAPI 는 Depends() 를 기본 인자로 쓰는 것이 프레임워크 관례다.
+    "B008",
+    # DetectionEngine.shutdown 등 기반 클래스 훅은 의도적으로 비어 있다.
+    # abstract 로 만들면 모든 엔진이 강제로 구현해야 한다.
+    "B027",
+    # 이 저장소는 순환 의존을 끊기 위해 함수 안에서 임포트를 지연한다
+    # (services/sensor_control.py, web/server.py, app.py).
+    # F811 은 그 패턴을 전부 재정의 오류로 본다.
+    "F811",
+
+    # ── 아래는 도입 시점에 남아 있던 잔여 부채다. ──────────────────────
+    # 계측값: B904 12, B007 10, F841 10, B905 8, B023 1, B015 1
+    # 모두 정리하면 위 목록에서 한 줄씩 지운다. 지금은 항상 켜는 규칙
+    # (E9, F401, F541)만 회귀를 막고, 이들은 카운트가 늘면 되돌아오게
+    # 별도 게이트에서 센다 (scripts/gates.py gate_static_analysis).
+    "B904",
+    "B007",
+    "F841",
+    "B905",
+    "B023",
+    "B015",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# __init__.py 는 재수출이 목적이므로 미사용 임포트가 정상이다.
+"**/__init__.py" = ["F401"]
+# 시험은 의존성을 흉내 내기 위해 자주 임포트한다.
+"tests/**" = ["F401", "F811"]
+
+[tool.ruff.lint.flake8-type-checking]
+# 타입 전용 임포트를 TYPE_CHECKING 안으로 옮기는 것은 순환 의존을 만들 수
+# 있어 자동 적용하지 않는다.
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "fastapi.FastAPI",
+]
+
+[tool.mypy]
+python_version = "3.12"
+# 이 저장소는 어노테이션이 부분적이다. 전량을 요구하면 신호가 아니라 잡음이 된다.
+check_untyped_defs = false
+disallow_untyped_defs = false
+warn_unused_ignores = false
+ignore_missing_imports = true
+follow_imports = "silent"
+exclude = ["^\\.venv", "^\\.venv-new", "^alembic/versions"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+# 기존 동작 유지: asyncio 모드는 명시하지 않는다. 모든 비동기 시험이
+# @pytest.mark.asyncio 를 직접 달고 있어야 하고, 그렇게 되어 있다.
+testpaths = ["tests"]

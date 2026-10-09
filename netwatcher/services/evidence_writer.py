@@ -89,6 +89,8 @@ class EvidenceWriter:
                 if path:
                     digest = hashlib.sha256()
                     # 해시는 실제 생성된 PCAP 파일 전체에 대해 계산한다.
+                    # ruff: noqa: B023 — hash_file 은 정의한 직후 같은 반복에서
+                    # await 되므로 path/digest 는 그 사이에 바뀌지 않는다.
                     def hash_file():
                         with open(path, "rb") as stream:
                             for block in iter(lambda: stream.read(65536), b""):

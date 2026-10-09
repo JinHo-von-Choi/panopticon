@@ -10,7 +10,6 @@ import time
 import threading
 from collections import deque
 from pathlib import Path
-from typing import Any
 
 from scapy.all import IP, IPv6, ARP, Ether, Packet
 from scapy.utils import RawPcapWriter

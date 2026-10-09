@@ -10,7 +10,6 @@ import logging
 import os
 import socket
 import ssl
-import time
 from typing import Any
 
 from netwatcher.alerts.channels.base import NotificationChannel
@@ -93,12 +92,12 @@ def format_cef(alert: Alert) -> str:
 
     extensions.append(f"msg={_cef_escape(alert.description)}")
     extensions.append(f"cn1={alert.confidence}")
-    extensions.append(f"cn1Label=confidence")
+    extensions.append("cn1Label=confidence")
     extensions.append(f"rt={alert.timestamp}")
 
     if alert.mitre_attack_id:
         extensions.append(f"cs1={alert.mitre_attack_id}")
-        extensions.append(f"cs1Label=mitreAttackId")
+        extensions.append("cs1Label=mitreAttackId")
 
     ext_str = " ".join(extensions)
     return f"CEF:0|Panopticon|NetWatcher|1.0|{engine_escaped}|{title_escaped}|{cef_sev}|{ext_str}"
