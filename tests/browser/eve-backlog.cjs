@@ -13,7 +13,10 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
         await page.waitForFunction(async () =>
             (await import('/js/core/api.js')).isAuthEnabled() &&
             (await import('/js/core/capabilities.js')).featureEnabled('eve_observations'));
-        await page.locator('[data-tab="governance"]').click();
+        const navigation = page.locator('[data-tab="governance"]');
+        await navigation.waitFor({state:'visible'});
+        await navigation.press('Enter');
+        await page.locator('#tab-governance.active').waitFor({state:'visible'});
         const box = page.locator('#observation-box');
         await box.getByRole('columnheader', {name:'수집 대기량',exact:true}).waitFor();
         const cells = box.locator('tbody tr').first().locator('td');
