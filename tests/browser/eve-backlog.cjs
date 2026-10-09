@@ -45,7 +45,7 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
             assert.match(await cells.nth(3).innerText(), /MB|MiB/);
         } else {
             assert.equal(await cells.nth(3).innerText(), '확인 불가');
-            assert.equal(await cells.nth(1).innerText(), '수집 상태 점검 필요');
+            assert.equal(await cells.nth(1).innerText(), '수집 확인 필요');
         }
         assert.equal(await cells.nth(4).innerText(), '0');
         assert.equal(await cells.nth(5).innerText(), '0');

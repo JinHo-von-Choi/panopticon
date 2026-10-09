@@ -57,6 +57,8 @@ async def test_backlog_and_unknown_position_reach_actual_console(db, config, tmp
             for phase in ('backlog', 'unknown'):
                 if phase == 'unknown':
                     path.write_bytes(b'')
+                    # The collector is deliberately paused; make its stale state deterministic.
+                    collector.last_poll -= 31
                 capabilities = await client.get('/api/capabilities')
                 assert capabilities.status_code == 200
                 assert capabilities.json()['features']['eve_observations'] is True
@@ -69,6 +71,7 @@ async def test_backlog_and_unknown_position_reach_actual_console(db, config, tmp
                     assert source['pending_bytes'] == len(alert_line()) * 299
                 else:
                     assert source['pending_bytes'] is None
+                    assert source['status'] == 'unhealthy'
                 fixture = tmp_path / ('browser-' + phase + '.json')
                 fixture.write_text(json.dumps({'url': 'http://127.0.0.1:' + str(listener.getsockname()[1]),
                                               'phase': phase}))
