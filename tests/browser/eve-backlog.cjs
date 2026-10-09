@@ -20,6 +20,19 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
         await page.waitForFunction(async () =>
             (await import('/js/core/api.js')).isAuthEnabled() &&
             (await import('/js/core/capabilities.js')).featureEnabled('eve_observations'));
+        stage = "initial-data";
+        await page.locator("#connection-status.connected").waitFor({state: "visible"});
+        await page.locator('#console-readiness[data-state="not_ready"]').waitFor({state: "visible"});
+        await page.evaluate(() => {
+            window.eveInputTrace = [];
+            for (const type of ['pointerdown', 'pointerup', 'click']) {
+                document.addEventListener(type, event => {
+                    const button = event.target.closest('button');
+                    window.eveInputTrace.push({type, trusted: event.isTrusted,
+                        button: button?.id, tab: button?.dataset.tab});
+                }, true);
+            }
+        });
         stage = "select-governance";
         await page.locator('#console-readiness').click();
         await page.locator('#tab-governance.active').waitFor({state:'visible'});
@@ -44,6 +57,8 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
         process.stdout.write('EVE backlog browser checks passed\n' + JSON.stringify({phase: fixture.phase, requests: responses.length}) + '\n');
     } catch (error) {
         if (page) process.stderr.write(JSON.stringify({phase: fixture.phase, stage, responses, error: error.message, state: await page.evaluate(async () => ({
+            inputTrace: window.eveInputTrace,
+            focus: document.activeElement?.id,
             authEnabled: (await import("/js/core/api.js")).isAuthEnabled(),
             eveEnabled: (await import("/js/core/capabilities.js")).featureEnabled("eve_observations"),
             activeTab: document.querySelector('.tab.active')?.dataset.tab,
