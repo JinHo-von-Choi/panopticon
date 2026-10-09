@@ -80,6 +80,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     from netwatcher.web.routes.agent_gateway import AgentGatewayStore, create_agent_gateway_router
     app.state.agent_gateway = AgentGatewayStore(
         config.get("agent_gateway.database", "data/agent-gateway.sqlite3"),
+        enrollment_token=config.get("agent_gateway.enrollment_token"),
     )
     app.include_router(create_agent_gateway_router(app.state.agent_gateway), prefix=api_prefix)
     from netwatcher.web.rbac import Role, require_role
