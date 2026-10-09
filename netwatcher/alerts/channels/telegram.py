@@ -7,6 +7,8 @@ from typing import Any
 
 import aiohttp
 
+from netwatcher.utils.public_http import public_client_session
+
 from netwatcher.alerts.channels.base import NotificationChannel
 from netwatcher.detection.models import Alert
 
@@ -42,7 +44,7 @@ class TelegramChannel(NotificationChannel):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with public_client_session() as session:
                 async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         logger.debug("Telegram alert sent: %s", alert.title)

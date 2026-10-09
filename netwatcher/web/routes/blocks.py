@@ -9,8 +9,10 @@ from __future__ import annotations
 import ipaddress
 import logging
 
-from fastapi import APIRouter
+from fastapi import Depends, APIRouter, Request
 from fastapi.responses import JSONResponse
+from netwatcher.web.rbac import Role, require_role
+from netwatcher.web.change_audit import ChangeAudit
 from pydantic import BaseModel
 
 from netwatcher.response.blocker import BlockManager
@@ -27,6 +29,14 @@ class BlockRequest(BaseModel):
 def create_blocks_router(block_manager: BlockManager) -> APIRouter:
     """IP 차단 관리 엔드포인트용 라우터를 생성한다."""
     router = APIRouter(tags=["blocks"])
+    changes = ChangeAudit()
+
+    def snapshot(**args):
+        ip = args["body"].ip if "body" in args else args["ip"]
+        entry = next((block for block in block_manager.get_active_blocks() if block["ip"] == ip), None)
+        return {"target_ip": ip, "active": entry is not None,
+                "duration": entry["duration"] if entry else None,
+                "expires_at": entry["expires_at"] if entry else None}
 
     @router.get("/blocks")
     async def list_blocks():
@@ -34,8 +44,9 @@ def create_blocks_router(block_manager: BlockManager) -> APIRouter:
         blocks = block_manager.get_active_blocks()
         return {"blocks": blocks, "total": len(blocks)}
 
-    @router.post("/blocks")
-    async def add_block(body: BlockRequest):
+    @router.post("/blocks", dependencies=[Depends(require_role(Role.ADMIN))])
+    @changes.guard(snapshot)
+    async def add_block(body: BlockRequest, request: Request):
         """수동으로 IP 주소를 차단한다."""
         # IP 형식 검증
         try:
@@ -58,8 +69,9 @@ def create_blocks_router(block_manager: BlockManager) -> APIRouter:
             )
         return {"ok": True, "ip": body.ip}
 
-    @router.delete("/blocks/{ip}")
-    async def remove_block(ip: str):
+    @router.delete("/blocks/{ip}", dependencies=[Depends(require_role(Role.ADMIN))])
+    @changes.guard(snapshot)
+    async def remove_block(ip: str, request: Request):
         """지정된 IP에 대한 활성 차단을 제거한다."""
         # IP 형식 검증
         try:

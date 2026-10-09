@@ -104,7 +104,7 @@ def create_response_router(
     async def approve(
         proposal_id: int,
         req: ApproveRequest,
-        _role: str = Depends(require_role(Role.ADMIN)),
+        _role: dict = Depends(require_role(Role.ADMIN)),
     ) -> dict[str, Any]:
         """승인 — 사람이 결정했다는 기록만 남긴다. OS 를 건드리지 않는다."""
         if is_protected(req.target):
@@ -119,7 +119,7 @@ def create_response_router(
             approved_hash=candidate_hash(
                 req.target, req.direction, req.ttl_seconds, req.scope),
             base_version=req.base_version,
-            approved_by="dashboard",
+            approved_by=str(_role.get("uid") or _role["sub"]),
             approved_at=datetime.now(timezone.utc),
             target=req.target,
             direction=req.direction,

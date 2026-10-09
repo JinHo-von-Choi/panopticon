@@ -51,13 +51,14 @@ def _run_node(body: str) -> dict:
         utils.index("var HTML_ESCAPES"):utils.index("export function formatTime")
     ].replace("export function esc", "function esc")
 
-    # 렌더 경로에 필요한 모듈 레벨 함수 3개
+    # 실제 렌더러와 피드 상태·위반·안내 하위 렌더러를 함께 실행한다.
     gov = GOV_JS.read_text(encoding="utf-8")
     fn = _extract_render_fn(gov, "renderSupportProfile")
     inner = _extract_render_fn(gov, "renderViolations")
     clean = _extract_render_fn(gov, "renderCleanNotice")
+    sources = _extract_render_fn(gov, "renderFeedSources")
 
-    code = esc_decl + "\n" + inner + "\n" + clean + "\n" + fn + textwrap.dedent(f"""
+    code = esc_decl + "\n" + inner + "\n" + clean + "\n" + sources + "\n" + fn + textwrap.dedent(f"""
         const cases = {body};
         // 실제 렌더러를 통과시킨 결과를 돌려준다
         const rendered = cases.map((c) => {{
@@ -143,7 +144,17 @@ def test_never_updated_feed_is_explicit():
         },
     }
     out = _run_node(f"[{json.dumps(payload)}]")[0]
-    assert "한 번도 갱신 안 됨" in out
+    assert "성공한 갱신 기록 없음" in out
+
+
+@requires_node
+def test_unknown_feed_counts_are_not_shown_as_zero():
+    payload = {"profile": "limited", "violations": [],
+        "feeds": {"status": "unknown", "age_hours": None,
+                  "blocked_ips": None, "blocked_domains": None}}
+    out = _run_node(f"[{json.dumps(payload)}]")[0]
+    assert "확인 불가" in out and "— IP" in out
+    assert "0 IP" not in out
 
 
 @requires_node

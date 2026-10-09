@@ -26,6 +26,15 @@ async def test_blocklist_add_duplicate(blocklist_repo):
 
 
 @pytest.mark.asyncio
+async def test_blocklist_storage_failure_is_not_a_duplicate(db, blocklist_repo):
+    import asyncpg
+    async with db.pool.acquire() as conn:
+        await conn.execute("DROP TABLE custom_blocklist")
+    with pytest.raises(asyncpg.UndefinedTableError):
+        await blocklist_repo.add("ip", "192.0.2.10")
+
+
+@pytest.mark.asyncio
 async def test_blocklist_remove(blocklist_repo):
     await blocklist_repo.add("domain", "evil.com")
     deleted = await blocklist_repo.remove_by_value("domain", "evil.com")

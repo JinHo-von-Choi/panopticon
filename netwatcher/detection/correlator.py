@@ -402,7 +402,7 @@ class AlertCorrelator:
                 break
         return result
 
-    def resolve_incident(self, incident_id: int) -> bool:
+    def resolve_incident(self, incident_id: int, *, persist: bool = True) -> bool:
         """인시던트를 해결 완료로 표시한다.
 
         id 가 None 인(미영속) 인시던트는 조회 대상이 아니다. DB id 로만
@@ -414,7 +414,7 @@ class AlertCorrelator:
             if inc.id is not None and inc.id == incident_id:
                 inc.resolved = True
                 # DB에 해결 상태 영속화
-                if self._incident_repo is not None:
+                if persist and self._incident_repo is not None:
                     import asyncio
                     try:
                         loop = asyncio.get_running_loop()

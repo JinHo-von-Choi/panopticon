@@ -24,7 +24,10 @@ def create_onboarding_router(config, health_checker, observation=None, auth_mana
             except OSError:
                 writable = None
         required = max(0, int(config.get('evidence.max_storage_mb', 500))) * 1024 * 1024 + 128 * 1024 * 1024
-        storage = await asyncio.to_thread(storage_probe, str(config.get('evidence.directory', 'data/pcaps')), required)
+        if config.get('input.mode', 'native') == 'eve':
+            storage = {'status': 'unknown', 'reason': 'database_storage_unverified'}
+        else:
+            storage = await asyncio.to_thread(storage_probe, str(config.get('evidence.directory', 'data/pcaps')), required)
         return build_report(config, health, observation.snapshot() if observation else None,
                             storage=storage, auth_enabled=bool(auth_manager and auth_manager.enabled),
                             config_writable=writable)

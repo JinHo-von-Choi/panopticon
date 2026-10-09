@@ -26,6 +26,9 @@ class EvidenceWriter:
         self.recent = {}
         self.task = None
         self._shutdown_deadline = None
+        self.state_write_failures = 0
+        self._last_state_error = None
+        self._last_state_warning = float("-inf")
 
     def start(self):
         if self.task is None:
@@ -62,8 +65,21 @@ class EvidenceWriter:
             timeout = 2 if self._shutdown_deadline is None else max(0, min(2, self._shutdown_deadline - time.monotonic()))
             async with asyncio.timeout(timeout):
                 await self.repository.update_pcap_state(event_id, state)
-        except Exception:
-            pass  # DB 상태는 pending으로 남는다. 영속화 성공을 꾸며내지 않는다.
+        except Exception as exc:
+            # 사건의 pending 상태는 유지하고 미확정 저장을 운영 상태에 드러낸다.
+            self.state_write_failures += 1
+            self._last_state_error = type(exc).__name__
+            now = time.monotonic()
+            if now - self._last_state_warning >= 60:
+                logger.warning("Evidence state remains unconfirmed: event=%s failures=%d reason=%s",
+                               event_id, self.state_write_failures, self._last_state_error)
+                self._last_state_warning = now
+
+    def status(self):
+        return {"status": "degraded" if self.state_write_failures else "healthy",
+                "pending_jobs": self.pending_jobs, "pending_bytes": self.pending_bytes,
+                "state_write_failures": self.state_write_failures,
+                "last_state_error": self._last_state_error}
 
     async def _loop(self):
         while True:

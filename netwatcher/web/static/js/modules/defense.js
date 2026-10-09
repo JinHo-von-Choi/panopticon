@@ -8,11 +8,15 @@
  * 탐지 매칭용 Blocklist와 실제 차단인 Blocks는 별개다. 두 개념을 섞지 않는다.
  */
 
-import { authFetch } from '../core/api.js';
+import { authFetch, getAuthToken } from '../core/api.js';
+import { loadResponse } from './response.js';
 import { esc, formatTime, showToast } from '../core/utils.js';
 
+import {loadRules, registerRulesListeners} from './rules.js';
+import {featureEnabled} from '../core/capabilities.js';
+export {loadRules} from './rules.js';
+
 let blocks = [];
-let rules  = [];
 
 /* ------------------------------------------------------------------ */
 /* Active Blocks                                                       */
@@ -102,86 +106,54 @@ async function addBlock() {
 /* Signature Rules                                                     */
 /* ------------------------------------------------------------------ */
 
-export async function loadRules() {
-    const body  = document.getElementById("rules-body");
-    const count = document.getElementById("rules-count");
-    if (!body) return;
-
+let defenseGeneration = 0;
+export async function loadDefense() {
+    const attempt = ++defenseGeneration;
+    const token = getAuthToken();
+    const legacy = document.getElementById('defense-legacy');
+    const panel = document.getElementById('response-panel');
+    if (legacy) legacy.hidden = true;
+    const rulePanel = document.getElementById('signature-rules');
+    if (rulePanel) rulePanel.hidden = !featureEnabled('rules');
+    if (featureEnabled('rules')) loadRules();
+    if (!featureEnabled('response')) {
+        if (panel) panel.hidden = true;
+        if (legacy) legacy.hidden = !featureEnabled('direct_blocks');
+        if (featureEnabled('direct_blocks')) loadBlocks();
+        return;
+    }
     try {
-        const resp = await authFetch("/api/rules");
-        if (!resp || !resp.ok) {
-            body.innerHTML = `<tr><td colspan="5" class="empty-state" data-i18n="defense.rules_unavailable">시그니처 엔진이 비활성 상태입니다.</td></tr>`;
-            if (count) count.textContent = "-";
+        const response = await authFetch('/api/response/capabilities');
+        if (!response?.ok) throw Error('Response capabilities unavailable');
+        const capabilities = await response.json();
+        if (attempt !== defenseGeneration || token !== getAuthToken()) return;
+        if (capabilities?.execution_process === 'separate') {
+            await loadResponse();
             return;
         }
-        const data = await resp.json();
-        rules = data.rules || [];
-        if (count) count.textContent = rules.length;
-
-        if (!rules.length) {
-            body.innerHTML = `<tr><td colspan="5" class="empty-state" data-i18n="defense.no_rules">로드된 규칙이 없습니다.</td></tr>`;
-            return;
+    } catch {
+        if (attempt !== defenseGeneration || token !== getAuthToken()) return;
+        if (panel) {
+            panel.hidden = false;
+            const message = document.createElement('p');
+            message.textContent = window.i18next.t('console.response.unavailable');
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'btn';
+            retry.textContent = window.i18next.t('console.response.refresh');
+            retry.addEventListener('click', loadDefense);
+            panel.replaceChildren(message, retry);
         }
-
-        body.innerHTML = rules.map(r => `
-            <tr>
-                <td class="mono"><code>${esc(r.id)}</code></td>
-                <td>${esc(r.name)}</td>
-                <td><span class="severity-badge severity-${esc(r.severity)}">${esc(r.severity)}</span></td>
-                <td>${esc(r.protocol || "any")}</td>
-                <td>
-                    <label class="toolbar-check">
-                        <input type="checkbox" data-rule-toggle="${esc(r.id)}" ${r.enabled ? "checked" : ""} />
-                        <span>${r.enabled ? "enabled" : "disabled"}</span>
-                    </label>
-                </td>
-            </tr>
-        `).join("");
-
-        body.querySelectorAll("[data-rule-toggle]").forEach(el => {
-            el.addEventListener("change", () => toggleRule(el.dataset.ruleToggle, el.checked));
-        });
-    } catch (e) {
-        console.error("Failed to load rules", e);
+        return;
     }
+    if (panel) panel.hidden = true;
+    if (legacy) legacy.hidden = false;
+    if (featureEnabled('direct_blocks')) loadBlocks();
 }
-
-async function toggleRule(ruleId, enabled) {
-    try {
-        const resp = await authFetch(`/api/rules/${encodeURIComponent(ruleId)}/toggle`, {
-            method: "PUT",
-            body: JSON.stringify({ enabled }),
-        });
-        if (!resp || !resp.ok) {
-            showToast("Rules", `${ruleId} 상태 변경 실패`, "CRITICAL");
-        }
-        await loadRules();
-    } catch (e) {
-        console.error("Failed to toggle rule", e);
-    }
-}
-
-async function reloadRules() {
-    try {
-        const resp = await authFetch("/api/rules/reload", { method: "POST" });
-        if (resp && resp.ok) {
-            showToast("Rules", "규칙을 다시 읽었습니다", "INFO");
-            await loadRules();
-        } else {
-            showToast("Rules", "규칙 재적재 실패", "CRITICAL");
-        }
-    } catch (e) {
-        console.error("Failed to reload rules", e);
-    }
-}
-
-export function loadDefense() {
-    loadBlocks();
-    loadRules();
-}
+window.addEventListener('nw-session-ended', () => { defenseGeneration++; });
 
 export function registerDefenseListeners() {
     document.getElementById("btn-add-block")?.addEventListener("click", addBlock);
     document.getElementById("btn-blocks-refresh")?.addEventListener("click", loadBlocks);
-    document.getElementById("btn-rules-reload")?.addEventListener("click", reloadRules);
+    registerRulesListeners();
 }

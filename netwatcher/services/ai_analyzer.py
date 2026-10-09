@@ -2,7 +2,7 @@
 
 주기적으로 CRITICAL/WARNING 이벤트를 배치 분석하여:
 - CONFIRMED_THREAT: 알림 재전송 (rate limit 우회)
-- FALSE_POSITIVE:   엔진 임계값 자동 상향 + 핫리로드
+- FALSE_POSITIVE:   검토할 엔진 임계값 상향 제안
 - UNCERTAIN:        로그 기록만
 
 지원 프로바이더 (config ai_analyzer.provider):
@@ -22,6 +22,8 @@ import asyncio
 import json
 import logging
 import re
+import copy
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -175,6 +177,8 @@ class AIAnalyzerService:
         self._consecutive_fp: dict[str, int] = {}
         self._consecutive_mt: dict[str, int] = {}
         self._task: asyncio.Task | None       = None
+        self._proposal_tasks: set[asyncio.Task] = set()
+        self._stopping = False
 
     # ------------------------------------------------------------------ #
     # 임계값 자동 조정                                                       #
@@ -188,7 +192,8 @@ class AIAnalyzerService:
             )
             return None
         try:
-            return self._yaml_editor.get_engine_config(engine) or {}
+            config = self._yaml_editor.get_engine_config(engine)
+            return copy.deepcopy(config) if isinstance(config, dict) else None
         except Exception:
             logger.exception("[ai_analyzer] 엔진 설정 조회 실패: %s", engine)
             return None
@@ -214,6 +219,7 @@ class AIAnalyzerService:
 
     def _record_proposal(
         self, engine: str, capped: dict[str, float], direction: str, reason: str,
+        before: dict | None = None,
     ) -> None:
         """AI 제안을 이벤트 로그로 남긴다. 런타임·YAML에는 쓰지 않는다.
 
@@ -234,12 +240,35 @@ class AIAnalyzerService:
         # 승인 큐가 있으면 사람이 검토할 수 있도록 접수한다 (PR 10).
         # 이벤트 로그만 남기면 제안이 갇힌다 — 반영 방법이 없다.
         if self._proposal_service is not None:
-            asyncio.create_task(self._enqueue_proposal(engine, capped, direction, reason))
+            self._spawn(self._enqueue_proposal(engine, copy.deepcopy(capped), direction, reason, before))
 
-        asyncio.create_task(self._event_repo.insert(**payload))
+        self._spawn(self._event_repo.insert(**payload))
+
+    def _spawn(self, coroutine):
+        if self._stopping:
+            coroutine.close()
+            return
+        task = asyncio.create_task(coroutine)
+        self._proposal_tasks.add(task)
+        def completed(done):
+            self._proposal_tasks.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                logger.error("AI 제안 기록 실패 (%s)", type(done.exception()).__name__)
+        task.add_done_callback(completed)
+
+    def _integer_adjustments(self, engine, capped, direction):
+        from netwatcher.detection.schema_utils import normalize_schema
+        schema = self._registry.get_engine_schema(engine)
+        fields = normalize_schema(schema) if isinstance(schema, dict) else {}
+        result = dict(capped)
+        for key, value in capped.items():
+            if fields.get(key, {}).get("type") is int and type(value) in (int, float) and math.isfinite(value):
+                result[key] = math.floor(value) if direction == "상향" else math.ceil(value)
+        return result
 
     async def _enqueue_proposal(
         self, engine: str, capped: dict[str, float], direction: str, reason: str,
+        before: dict | None = None,
     ) -> None:
         """AI 제안을 승인 큐에 넣는다. 실패해도 AI 분석 자체는 계속된다."""
         from netwatcher.detection.proposals import ProposalError, SOURCE_AI
@@ -250,6 +279,7 @@ class AIAnalyzerService:
                 params=dict(capped),
                 reason=reason,
                 source=SOURCE_AI,
+                expected_config=before,
             )
             logger.info(
                 "[ai_analyzer] 제안 접수됨 (id=%s, engine=%s, %s)",
@@ -297,8 +327,9 @@ class AIAnalyzerService:
 
         self._consecutive_fp[key] = 0
         self._record_proposal(
-            engine, capped, "상향",
+            engine, self._integer_adjustments(engine, capped, "상향"), "상향",
             f"연속 오탐 {self._fp_threshold}회 — 임계값 상향 제안 (적용은 승인 필요)",
+            current_cfg,
         )
 
     def _try_lower_threshold(
@@ -336,8 +367,9 @@ class AIAnalyzerService:
 
         self._consecutive_mt[key] = 0
         self._record_proposal(
-            engine, capped, "하향",
+            engine, self._integer_adjustments(engine, capped, "하향"), "하향",
             f"연속 미탐 {self._mt_threshold}회 — 민감도 하향 제안 (탐지 약화이므로 승인 필수)",
+            current_cfg,
         )
 
     # ------------------------------------------------------------------ #
@@ -605,15 +637,29 @@ class AIAnalyzerService:
 
     async def start(self) -> None:
         """백그라운드 분석 루프를 시작한다."""
+        if self._task is not None and not self._task.done():
+            return
+        self._stopping = False
         self._task = asyncio.create_task(self._analysis_loop())
         logger.info("AIAnalyzerService started")
 
     async def stop(self) -> None:
         """백그라운드 루프를 취소하고 정리한다."""
+        self._stopping = True
         if self._task:
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._proposal_tasks:
+            tasks = list(self._proposal_tasks)
+            try:
+                async with asyncio.timeout(5):
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except TimeoutError:
+                logger.warning("AI 제안 종료 대기 시간 초과")
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("AIAnalyzerService stopped")

@@ -1,29 +1,16 @@
-"""소권한 실행기 (계획서 2장, PR 13).
+"""조치 백엔드의 적용·조회·해제 계약.
 
-    "UI/정책평가와 작은 권한 실행기를 분리한다. 웹에는 방화벽 권한이 없고
-     실행기는 허용된 대상·방향·TTL 만 받는다."
-
-이 모듈이 **하지 않는 것** 이 이 장치의 전부다.
-
-- 임의 명령을 받지 않는다. 대상·방향·TTL 만 받는다.
-- 영구 적용을 받지 않는다.
-- 확인하지 못하면 성공이라고 하지 않는다.
-
-그리고 지금 이 백엔드는 **비어 있다.** 계획서:
-
-    "현재 nftables 옵션은 미구현이며 재사용 가능한 완성 backend 로 간주하지
-     않는다. 기존 iptables 자동 차단은 복구 검증 전 계속 비활성화한다."
-    "검증된 만료 백엔드·권한 분리·적용 경로 증명이 하나라도 없으면
-     shadow/제안만 출시한다."
-
-그래서 `ShadowExecutor` 만 존재하고, 실제 OS 를 건드리는 백엔드는 없다.
-`nftables` 을 "구현됨" 처럼 등록하는 것이 이 계획서에서 금지하는 바로 그것이다.
+대상·방향·TTL과 고정된 규칙 태그를 전달하며 임의 셸 명령은 받지 않는다.
+ShadowExecutor는 OS를 변경하지 않는다. nftables 구현은 별도 만료 검증이
+필요하며 기본 생성 시 적용을 허용하지 않는다. 실행 결과를 확인하지 못하면
+미확정 상태를 반환한다.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from netwatcher.response.lifecycle import (
@@ -59,6 +46,13 @@ class ExecutionRequest:
 
     def content_hash(self) -> str:
         return candidate_hash(self.target, self.direction, self.ttl_seconds, self.scope)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ExpiringExecutionRequest(ExecutionRequest):
+    """실행기가 DB에서 확정한 만료 시각을 붙이는 내부 요청."""
+
+    expires_at: datetime | None
 
 
 @dataclass

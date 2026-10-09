@@ -17,15 +17,8 @@ from netwatcher.web.server import create_app
 
 @pytest.fixture
 def feed_manager(config):
-    fm = FeedManager.__new__(FeedManager)
-    fm._config = config
+    fm = FeedManager(config)
     fm._sources = []
-    fm._blocked_ips = set()
-    fm._blocked_domains = set()
-    fm._custom_ips = set()
-    fm._custom_domains = set()
-    fm._ip_to_feed = {}
-    fm._domain_to_feed = {}
     return fm
 
 

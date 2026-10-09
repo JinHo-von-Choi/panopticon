@@ -18,6 +18,8 @@ def _make_app(ai_analyzer) -> FastAPI:
 class TestAiAnalyzerRoute:
     def test_status_returns_enabled_true(self):
         svc = MagicMock()
+        svc._task = None
+        svc._stopping = False
         svc._provider = "copilot"
         svc._interval_seconds = 900
         svc._lookback_minutes = 30
@@ -38,6 +40,8 @@ class TestAiAnalyzerRoute:
     def test_status_interval_minutes_computed_correctly(self):
         """interval_seconds=1800 이면 interval_minutes=30 이어야 한다."""
         svc = MagicMock()
+        svc._task = None
+        svc._stopping = False
         svc._provider = "claude"
         svc._interval_seconds = 1800
         svc._lookback_minutes = 60

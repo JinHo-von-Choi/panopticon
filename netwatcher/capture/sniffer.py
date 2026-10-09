@@ -92,7 +92,13 @@ class PacketSniffer:
     @property
     def is_running(self) -> bool:
         """스니퍼가 현재 실행 중인지 여부를 반환한다."""
-        return self._sniffer is not None and self._sniffer.running
+        return bool(
+            self._sniffer is not None
+            and self._sniffer.running
+            and self._sniffer.exception is None
+            and self._sniffer.thread is not None
+            and self._sniffer.thread.is_alive()
+        )
 
     def _on_packet(self, pkt: Packet) -> None:
         """스니퍼 스레드에서 호출됨; 크기 제한 버퍼를 통해 asyncio 루프로 브릿지한다."""
@@ -219,10 +225,17 @@ class PacketSniffer:
         """스니퍼를 중지한다."""
         self.flush_observation()
         if self._sniffer:
-            self._sniffer.stop(join=False)
-            self._sniffer.join(timeout=max(0, timeout))
-            if self._sniffer.thread.is_alive():
-                logger.warning("Capture thread shutdown unconfirmed")
+            thread = self._sniffer.thread
+            if thread is not None and thread.is_alive():
+                try:
+                    self._sniffer.stop(join=False)
+                finally:
+                    thread.join(timeout=max(0, timeout))
+                if thread.is_alive():
+                    logger.warning("Capture thread shutdown unconfirmed")
+                    return
+            elif self._sniffer.exception is not None:
+                logger.warning("Capture backend failed (%s)", type(self._sniffer.exception).__name__)
             if self._dropped_count > 0:
                 logger.warning(
                     "Sniffer stopped. Total dropped packets: %d", self._dropped_count

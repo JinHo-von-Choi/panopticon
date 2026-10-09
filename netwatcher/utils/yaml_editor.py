@@ -45,8 +45,15 @@ class YamlConfigEditor:
         Returns:
             엔진 설정 dict 복사본. 엔진이 존재하지 않으면 None.
         """
-        data = self._load()
-        engines = data.get("netwatcher", {}).get("engines", {})
+        return self._get_engine_config(engine_name, flow=False)
+
+    def get_flow_engine_config(self, engine_name: str) -> dict | None:
+        return self._get_engine_config(engine_name, flow=True)
+
+    def _get_engine_config(self, engine_name: str, *, flow: bool) -> dict | None:
+        data = self._load().get("netwatcher", {})
+        section = data.get("netflow", {}) if flow else data
+        engines = section.get("engines", {})
         engine_section = engines.get(engine_name)
         if engine_section is None:
             return None
@@ -61,11 +68,29 @@ class YamlConfigEditor:
                 or not os.access(parent, os.W_OK)):
             raise ConfigurationReadOnlyError("Configuration is read-only")
 
+    def get_whitelist_config(self) -> dict:
+        """탐지 예외 설정의 독립 복사본을 반환한다."""
+        import copy
+        with self._lock:
+            section = self._load().get("netwatcher", {}).get("whitelist", {})
+            if not isinstance(section, dict):
+                raise ValueError("Invalid whitelist configuration")
+            return copy.deepcopy(dict(section))
+
     def update_engine_config(self, engine_name: str, updates: dict[str, Any]) -> None:
+        self._update_engine_config(engine_name, updates, flow=False)
+
+    def update_flow_engine_config(self, engine_name: str, updates: dict[str, Any]) -> None:
+        self._update_engine_config(engine_name, updates, flow=True)
+
+    def _update_engine_config(self, engine_name: str, updates: dict[str, Any], *, flow: bool) -> None:
         with self._lock:
             self.ensure_writable()
             data = self._load()
-            engine = data.get("netwatcher", {}).get("engines", {}).get(engine_name)
+            section = data.get("netwatcher", {})
+            if flow:
+                section = section.get("netflow", {})
+            engine = section.get("engines", {}).get(engine_name)
             if engine is None:
                 raise KeyError(f"Engine '{engine_name}' not found in config")
             engine.update(updates)

@@ -98,6 +98,26 @@ async def test_ws_broadcast(config, event_repo):
 
 
 @pytest.mark.asyncio
+async def test_full_ws_subscription_reports_gap_and_remains_subscribed(config, event_repo):
+    import json
+    dispatcher = AlertDispatcher(config=config, event_repo=event_repo, correlator=None)
+    await dispatcher.start()
+    queue = dispatcher.subscribe_ws()
+    try:
+        for _ in range(queue.maxsize):
+            queue.put_nowait('{"type":"alert"}')
+        dispatcher.enqueue(_make_alert(title="Queue overflow alert"))
+        async with asyncio.timeout(3):
+            while queue.qsize() == queue.maxsize:
+                await asyncio.sleep(.01)
+        assert json.loads(await queue.get()) == {"type": "stream_gap", "reason": "subscriber_overflow"}
+        assert queue in dispatcher._ws_subscribers
+    finally:
+        dispatcher.unsubscribe_ws(queue)
+        await dispatcher.stop()
+
+
+@pytest.mark.asyncio
 async def test_queue_full_drops():
     """When queue is full, new alerts should be dropped."""
     config = MagicMock(spec=Config)

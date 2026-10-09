@@ -1,21 +1,38 @@
 services:
   netwatcher:
-    build: .
-    container_name: netwatcher
+    build:
+      context: .
+      target: eve
     stop_grace_period: 15s
     restart: unless-stopped
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "127.0.0.1:38585:38585"
+    group_add:
+      - "${PANOPTICON_EVE_GID:-10001}"
     volumes:
-      - ./config:/app/config:ro
+      - ${PANOPTICON_CONFIG_DIR:-./config}:/app/config:ro
       - nw-data:/app/data
+      - type: bind
+        source: ${PANOPTICON_EVE_DIR:-/var/log/suricata}
+        target: /var/log/suricata
+        read_only: true
+        bind:
+          create_host_path: false
       # TLS 인증서 (web.tls.enabled: true 시 마운트)
       # - /etc/ssl/certs/netwatcher.pem:/app/certs/cert.pem:ro
       # - /etc/ssl/private/netwatcher.key:/app/certs/key.pem:ro
     env_file:
-      - .env
+      - ${PANOPTICON_ENV_FILE:-.env}
+    environment:
+      NETWATCHER_WEB_HOST: "0.0.0.0"
+      NETWATCHER_DB_HOST: "${NETWATCHER_DB_HOST:-db}"
 
     depends_on:
       db:
@@ -24,7 +41,6 @@ services:
 
   db:
     image: postgres:16-alpine
-    container_name: netwatcher-db
     restart: unless-stopped
     profiles:
       - db
@@ -35,7 +51,7 @@ services:
     volumes:
       - nw-pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${PANOPTICON_DB_PUBLISH_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${NETWATCHER_DB_USER:-netwatcher}"]
       interval: 5s
@@ -43,17 +59,23 @@ services:
       retries: 5
 
   db-migrate:
-    build: .
-    container_name: netwatcher-db-migrate
+    build:
+      context: .
+      target: eve
     profiles:
       - migrate
-    network_mode: host
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
-      - ./config:/app/config:ro
+      - ${PANOPTICON_CONFIG_DIR:-./config}:/app/config:ro
       - ./alembic:/app/alembic:ro
       - ./alembic.ini:/app/alembic.ini:ro
     env_file:
-      - .env
+      - ${PANOPTICON_ENV_FILE:-.env}
+    environment:
+      NETWATCHER_DB_HOST: "${NETWATCHER_DB_HOST:-db}"
     entrypoint: ["python", "-m", "alembic", "upgrade", "head"]
     depends_on:
       db:

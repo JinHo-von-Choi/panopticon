@@ -44,12 +44,12 @@ from netwatcher.detection.registry import EngineRegistry
 from netwatcher.observability.observation import ObservationService
 from netwatcher.storage.repositories import ConfigProposalRepository, EventRepository
 from netwatcher.utils.packet_info import extract_packet_info
-from netwatcher.web.auth import AuthManager
 from netwatcher.web.routes.events import _with_evidence
 from netwatcher.web.routes.proposals import create_proposals_router
 from netwatcher.web.rbac import Role
 
 import httpx
+from tests.auth_helpers import configured_auth
 from fastapi import FastAPI
 
 SECRET = "canary-secret"
@@ -209,10 +209,7 @@ async def test_proposal_reaches_db_and_is_approved(config, db, event_repo):
     # ASGITransport 로 실제 HTTP 경로를 통과시킨다.
     app = FastAPI()
     app.include_router(create_proposals_router(service), prefix="/api")
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = SECRET
-    manager._expire_hours = 1
+    manager = configured_auth(SECRET)
     app.state.auth_manager = manager
 
     now = datetime.now(timezone.utc)
@@ -381,10 +378,7 @@ async def test_response_lifecycle_never_claims_enforcement(config, db):
         create_response_router(ResponseActionRepository(db), service),
         prefix="/api",
     )
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = SECRET
-    manager._expire_hours = 1
+    manager = configured_auth(SECRET)
     app.state.auth_manager = manager
 
     now = datetime.now(timezone.utc)

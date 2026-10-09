@@ -191,7 +191,8 @@ class SupportContract:
         return {
             "profile": self.profile,
             "supported_profiles": list(SUPPORTED_PROFILES),
-            "enforcement_backends": list(IMPLEMENTED_ENFORCEMENT_BACKENDS),
+            "enforcement_backends": [] if self.get("input.mode", "native") == "eve" else list(IMPLEMENTED_ENFORCEMENT_BACKENDS),
+            "input_mode": self.get("input.mode", "native"),
             "violations": [v.as_dict() for v in self.violations()],
         }
 
@@ -306,6 +307,10 @@ class SupportContract:
     def _check_auth(self) -> list[Violation]:
         """인증 설정 자체의 안전성."""
         if not self._flag("auth.enabled"):
+            if _as_bool(self.get("auth.multi_user", False)):
+                return [Violation(code="SUP-032", path="auth.multi_user",
+                    message="관리 계정에는 인증 활성화가 필요하다",
+                    remediation="auth.enabled=true 설정")]
             return []
         out: list[Violation] = []
 
@@ -332,13 +337,6 @@ class SupportContract:
                 remediation="양수 시간을 지정",
             ))
 
-        if _as_bool(self.get("auth.multi_user", False)):
-            out.append(Violation(
-                code="SUP-032",
-                path="auth.multi_user",
-                message="multi_user 는 단일 사용자 JWT 만 검증된 상태다",
-                remediation="multi_user=false 유지 (권한 분리 확장은 별도 지원)",
-            ))
         return out
 
     def _check_database(self) -> list[Violation]:

@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -844,8 +845,62 @@ def gate_tests() -> GateResult:
     summary = tail[0] if tail else ""
     checks = [summary or "no output"]
     if proc.returncode != 0:
-        return GateResult("G0-5", "회귀 스위트", False, summary, checks)
+        # 요약만 남기면 실패한 시험을 찾기 위해 전체 스위트를 다시 돌려야 한다.
+        fd, report_path = tempfile.mkstemp(prefix="panopticon-regression-", suffix=".log")
+        with os.fdopen(fd, "w", encoding="utf-8") as report:
+            report.write(proc.stdout or "")
+            report.write(proc.stderr or "")
+        failures = [line for line in (proc.stdout or "").splitlines() if line.startswith("FAILED ")]
+        checks.append(f"failure-report={report_path}")
+        return GateResult("G0-5", "회귀 스위트", False, "\n".join(failures) or summary, checks)
     return GateResult("G0-5", "회귀 스위트", True, "", checks)
+
+
+def missing_admin_guards(routes) -> list[str]:
+    """등록된 변경 경로의 실제 FastAPI 의존성 그래프를 검사한다."""
+    from netwatcher.web.rbac import Role, is_admin_change
+
+    def guarded(dependant):
+        for dependency in dependant.dependencies:
+            call = dependency.call
+            if (getattr(call, "__module__", None) == "netwatcher.web.rbac"
+                    and getattr(call, "required_roles", None) == (Role.ADMIN,)):
+                return True
+            if guarded(dependency):
+                return True
+        return False
+
+    missing = []
+    for route in routes:
+        for method in getattr(route, "methods", ()):
+            if is_admin_change(route.path, method) and not guarded(route.dependant):
+                missing.append(f"{method} {route.path}")
+    return sorted(missing)
+
+
+def gate_mutation_permissions() -> GateResult:
+    """G0-14: 관리자 변경 경로에 명시적 권한 의존성이 있어야 한다."""
+    from unittest.mock import MagicMock
+    from netwatcher.utils.config import Config
+    from netwatcher.web.server import create_app
+
+    app = create_app(Config({}), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+                     block_manager=MagicMock(), blocklist_repo=MagicMock(),
+                     feed_manager=MagicMock(), whitelist=MagicMock(),
+                     signature_engine=MagicMock(), registry=MagicMock(), yaml_editor=MagicMock(),
+                     incident_repository=MagicMock())
+    missing = missing_admin_guards(app.routes)
+    managed = MagicMock()
+    managed.enabled = True
+    managed.multi_user = True
+    managed.users = MagicMock()
+    remote_app = create_app(Config({"input": {"mode": "native"}}), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+                            auth_manager=managed, audit_logger=MagicMock(), audit_required=True,
+                            sensor_control=MagicMock())
+    missing.extend(missing_admin_guards(remote_app.routes))
+    return GateResult("G0-14", "변경 라우트 권한", not missing,
+                      "관리자 권한 누락: " + ", ".join(missing) if missing else "",
+                      [f"missing={len(missing)}", "engine_profiles=local,remote"])
 
 
 GATES: tuple[Callable[..., GateResult], ...] = (
@@ -861,6 +916,7 @@ GATES: tuple[Callable[..., GateResult], ...] = (
     gate_replay_isolation,
     gate_enforcement_honesty,
     gate_schema_parity,
+    gate_mutation_permissions,
     gate_tests,
 )
 
@@ -878,6 +934,7 @@ GATE_BY_ID = {
     "G0-11": gate_replay_isolation,
     "G0-12": gate_enforcement_honesty,
     "G0-13": gate_schema_parity,
+    "G0-14": gate_mutation_permissions,
     "G0-5": gate_tests,
 }
 

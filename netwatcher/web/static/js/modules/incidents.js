@@ -5,7 +5,8 @@
  * 우측에 킬체인 진행, 관련 엔진, 출발지 IP, 조치 버튼이 나타난다.
  */
 
-import { authFetch } from '../core/api.js';
+import { authFetch, canConfigure, getAuthToken } from '../core/api.js';
+import { featureEnabled } from '../core/capabilities.js';
 import { esc, formatTime, showToast } from '../core/utils.js';
 
 /** 백엔드 attack_mapping.KILL_CHAIN_ORDER와 동일한 순서를 유지한다. */
@@ -46,28 +47,64 @@ const STAGE_LABEL = {
 let incidents      = [];
 let selectedId     = null;
 let includeResolved = false;
+let busy = false;
+let needsRefresh = false;
+let sessionEpoch = 0;
+let loadAttempt = 0;
+const tr = key => window.i18next.t('incidents.control.' + key);
+const label = (key, options) => window.i18next.t('incidents.' + key, options);
+
+function notice(key) {
+    const node = document.getElementById('incident-control-status');
+    if (node) node.textContent = key ? tr(key) : '';
+}
+
+function render() {
+    const refresh = document.getElementById('btn-incidents-refresh');
+    if (refresh) refresh.disabled = busy;
+    const filter = document.getElementById('incidents-show-resolved');
+    if (filter) filter.disabled = busy;
+    renderList();
+    renderDetail();
+}
 
 export async function loadIncidents() {
+    if (busy) return false;
+    const epoch = sessionEpoch;
+    const token = getAuthToken();
+    const attempt = ++loadAttempt;
+    const current = () => epoch === sessionEpoch && token === getAuthToken() && attempt === loadAttempt;
     const params = new URLSearchParams();
     params.set("limit", "100");
     params.set("include_resolved", includeResolved ? "true" : "false");
 
     try {
         const resp = await authFetch("/api/incidents?" + params.toString());
-        if (!resp || !resp.ok) return;
+        if (!current()) return false;
+        if (!resp || !resp.ok) throw new Error('Incident list unavailable');
         const data = await resp.json();
-        incidents = data.incidents || [];
+        if (!current()) return false;
+        if (!Array.isArray(data.incidents) || data.incidents.length > 100) throw new Error('Invalid incident list');
+        incidents = data.incidents;
+        needsRefresh = false;
+        notice(canConfigure() ? '' : 'readonly');
 
-        renderList();
         if (selectedId !== null && !incidents.some(i => i.id === selectedId)) {
             selectedId = null;
         }
         if (selectedId === null && incidents.length) {
             selectedId = incidents[0].id;
         }
-        renderDetail();
+        render();
+        return true;
     } catch (e) {
-        console.error("Failed to load incidents", e);
+        if (!current()) return false;
+        incidents = [];
+        selectedId = null;
+        needsRefresh = true;
+        notice('load_failed');
+        render();
+        return false;
     }
 }
 
@@ -78,7 +115,11 @@ function renderList() {
     if (!list) return;
 
     if (!incidents.length) {
-        list.innerHTML = `<div class="empty-state" data-i18n="incidents.empty">상관된 인시던트가 없습니다. 개별 이벤트는 Events 탭에서 확인하세요.</div>`;
+        if (needsRefresh) {
+            list.textContent = tr('load_failed');
+            return;
+        }
+        list.innerHTML = `<div class="empty-state">${esc(label('empty'))}</div>`;
         return;
     }
 
@@ -87,12 +128,12 @@ function renderList() {
                 data-incident-id="${inc.id}">
             <div class="incident-item-head">
                 <span class="severity-badge severity-${esc(inc.severity)}">${esc(inc.severity)}</span>
-                ${inc.resolved ? '<span class="incident-resolved-tag">resolved</span>' : ""}
+                ${inc.resolved ? `<span class="incident-resolved-tag">${esc(label('already_resolved'))}</span>` : ""}
             </div>
             <div class="incident-item-title">${esc(inc.title)}</div>
             <div class="incident-item-meta">
-                ${(inc.kill_chain_stages || []).length} stages ·
-                ${(inc.source_ips || []).length} src ·
+                ${esc(label('stage_count', {count:(inc.kill_chain_stages || []).length}))} ·
+                ${esc(label('source_count', {count:(inc.source_ips || []).length}))} ·
                 ${esc(formatTime(inc.updated_at || inc.created_at))}
             </div>
         </button>
@@ -122,7 +163,7 @@ function renderKillChain(stages) {
     return `<div class="killchain">` + visible.map(stage => `
         <div class="killchain-step ${reached.has(stage) ? "reached" : ""}">
             <span class="killchain-dot"></span>
-            <span class="killchain-label">${esc(STAGE_LABEL[stage] || stage)}</span>
+            <span class="killchain-label">${esc(label('stages.' + stage, {defaultValue:STAGE_LABEL[stage] || stage}))}</span>
         </div>
     `).join("") + `</div>`;
 }
@@ -133,14 +174,14 @@ function renderDetail() {
 
     const inc = incidents.find(i => i.id === selectedId);
     if (!inc) {
-        panel.innerHTML = `<div class="empty-state" data-i18n="incidents.select">왼쪽에서 인시던트를 선택하세요.</div>`;
+        panel.innerHTML = `<div class="empty-state">${esc(label('select'))}</div>`;
         return;
     }
 
     const ips = (inc.source_ips || []).map(ip => `
         <span class="ip-chip">
             <code class="hunt-link" data-hunt-ip="${esc(ip)}" title="조사">${esc(ip)}</code>
-            <button class="btn-chip" data-block-ip="${esc(ip)}" data-i18n="incidents.block">Block</button>
+            ${canConfigure() && featureEnabled('direct_blocks') ? `<button class="btn-chip" data-block-ip="${esc(ip)}" data-i18n="incidents.block">차단</button>` : ''}
         </span>
     `).join("") || "<span class='text-dim'>-</span>";
 
@@ -159,27 +200,27 @@ function renderDetail() {
 
         ${inc.description ? `<p class="incident-desc">${esc(inc.description)}</p>` : ""}
 
-        <h4 data-i18n="incidents.kill_chain">Kill Chain</h4>
+        <h4>${esc(label('kill_chain'))}</h4>
         ${renderKillChain(inc.kill_chain_stages)}
 
-        <h4 data-i18n="incidents.source_ips">Source IPs</h4>
+        <h4>${esc(label('source_ips'))}</h4>
         <div class="incident-ips">${ips}</div>
 
-        <h4 data-i18n="incidents.engines">Engines</h4>
+        <h4>${esc(label('engines'))}</h4>
         <div class="incident-engines">${engines}</div>
 
-        <h4 data-i18n="incidents.related_alerts">Related Alerts</h4>
+        <h4>${esc(label('related_alerts'))}</h4>
         <div class="incident-alerts">
-            ${(inc.alert_ids || []).length}건
+            ${esc(label('alert_count', {count:(inc.alert_ids || []).length}))}
             ${(inc.alert_ids || []).length
-                ? `<button class="btn-detail" id="incident-view-events">Events에서 보기</button>`
+                ? `<button class="btn-detail" id="incident-view-events">${esc(label('view_events'))}</button>`
                 : ""}
         </div>
 
         <div class="incident-actions">
             ${inc.resolved
-                ? `<span class="incident-resolved-tag" data-i18n="incidents.already_resolved">해결됨</span>`
-                : `<button class="btn btn-accent" id="incident-resolve" data-i18n="incidents.resolve">Resolve</button>`}
+                ? `<span class="incident-resolved-tag">${esc(label('already_resolved'))}</span>`
+                : `<button class="btn btn-accent" id="incident-resolve" data-i18n="incidents.resolve" ${!canConfigure() || busy || needsRefresh ? 'disabled' : ''}>${esc(window.i18next.t('incidents.resolve'))}</button>`}
         </div>
     `;
 
@@ -193,16 +234,35 @@ function renderDetail() {
 }
 
 async function resolveIncident(id) {
+    if (!canConfigure() || busy || needsRefresh) return;
+    const epoch = sessionEpoch;
+    const token = getAuthToken();
+    const current = () => epoch === sessionEpoch && token === getAuthToken();
+    busy = true;
+    notice('pending');
+    render();
     try {
         const resp = await authFetch(`/api/incidents/${id}/resolve`, { method: "POST" });
+        if (!current()) return;
         if (!resp || !resp.ok) {
-            showToast("Incident", "인시던트 해결에 실패했습니다", "CRITICAL");
+            needsRefresh = true;
+            notice(!resp || resp.status >= 500 ? 'unknown' : 'rejected');
             return;
         }
-        showToast("Incident", "인시던트를 해결 처리했습니다", "INFO");
-        await loadIncidents();
+        const result = await resp.json();
+        if (!current()) return;
+        if (result.status !== 'ok') throw new Error('Unconfirmed incident result');
+        busy = false;
+        if (await loadIncidents() && current()) showToast(tr('title'), tr('saved'), 'INFO');
     } catch (e) {
-        console.error("Failed to resolve incident", e);
+        if (!current()) return;
+        needsRefresh = true;
+        notice('unknown');
+    } finally {
+        if (current()) {
+            busy = false;
+            render();
+        }
     }
 }
 
@@ -235,3 +295,14 @@ export function registerIncidentListeners() {
     });
     document.getElementById("btn-incidents-refresh")?.addEventListener("click", () => loadIncidents());
 }
+
+window.addEventListener('panopticon:session-ended', () => {
+    sessionEpoch++;
+    loadAttempt++;
+    incidents = [];
+    selectedId = null;
+    busy = false;
+    needsRefresh = true;
+    notice('');
+    render();
+});

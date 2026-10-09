@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import heapq
+import ipaddress
 import logging
 from pathlib import Path
 
 import aiohttp
+
+from netwatcher.utils.public_http import public_client_session
 
 from netwatcher.threatintel.sources import (
     FeedSource,
@@ -90,6 +95,7 @@ class _FeedAccumulator:
         self.domain_to_feed: dict[str, str] = {}
         # 피드별 결과: "downloaded" | "cached" | "failed"
         self.outcomes: dict[str, str] = {}
+        self.validated_cached: set[str] = set()
 
     def record(self, name: str, outcome: str) -> None:
         self.outcomes[name] = outcome
@@ -116,6 +122,7 @@ class FeedManager:
 
         # 마지막 성공적 업데이트 타임스탬프 (epoch 초)
         self.last_update_epoch: float = 0.0
+        self._confirmed_epochs: dict[str, float] = {}
 
         # JA3 차단 목록 (SSLBL 피드에서 채워짐)
         self._blocked_ja3: set[str] = set()
@@ -124,10 +131,16 @@ class FeedManager:
         # 커스텀 항목 (사용자 관리, 피드 업데이트 간 보존)
         self._custom_ips: set[str] = set()
         self._custom_domains: set[str] = set()
+        self._custom_networks: dict[int, dict[int, dict[int, set[str]]]] = {4: {}, 6: {}}
+        self._custom_domain_names: dict[str, set[str]] = {}
 
         # 각 지표가 어느 피드에서 왔는지 추적
         self._ip_to_feed: dict[str, str] = {}
         self._domain_to_feed: dict[str, str] = {}
+        self._overridden_ip_sources: dict[str, str] = {}
+        self._overridden_domain_sources: dict[str, str] = {}
+        self._update_lock = asyncio.Lock()
+        self._runtime_update_hook = None
 
         # 마지막 갱신 시도/결과 (정직한 신선도 보고용, PR 07)
         self._last_summary: FeedUpdateSummary | None = None
@@ -152,12 +165,32 @@ class FeedManager:
     def match_ip(self, ip: str) -> dict[str, str] | None:
         """IP가 차단 목록에 있는지 확인하고 피드 정보를 반환한다."""
         feed = self._ip_to_feed.get(ip)
+        if feed == "Custom":
+            return {"source": feed, "category": "malware"}
+        if any(self._custom_networks.values()):
+            try:
+                address = ipaddress.ip_address(ip)
+            except ValueError:
+                logger.debug("Invalid IP supplied for threat-feed matching", exc_info=True)
+                return None
+            number = int(address)
+            for prefix, networks in tuple(self._custom_networks[address.version].items()):
+                shift = address.max_prefixlen - prefix
+                if (number >> shift) << shift in networks:
+                    return {"source": "Custom", "category": "malware"}
         if feed:
             return {"source": feed, "category": "malware"}
         return None
 
     def match_domain(self, domain: str) -> dict[str, str] | None:
         """도메인이 차단 목록에 있는지 확인하고 피드 정보를 반환한다."""
+        try:
+            domain = self._domain_name(domain)
+        except UnicodeError:
+            logger.debug("Invalid domain supplied for threat-feed matching", exc_info=True)
+            return None
+        if domain in self._custom_domain_names:
+            return {"source": "Custom", "category": "malware"}
         feed = self._domain_to_feed.get(domain)
         if feed:
             return {"source": feed, "category": "malware"}
@@ -165,14 +198,14 @@ class FeedManager:
 
     def load_custom_entries(self, ips: set[str], domains: set[str]) -> None:
         """시작 시 DB에서 커스텀 항목을 로드하고 라이브 집합에 병합한다."""
-        self._custom_ips = set(ips)
-        self._custom_domains = set(domains)
-        self._blocked_ips.update(ips)
-        self._blocked_domains.update(domains)
+        for ip in self._custom_ips - ips:
+            self.remove_custom_ip(ip)
+        for domain in self._custom_domains - domains:
+            self.remove_custom_domain(domain)
         for ip in ips:
-            self._ip_to_feed[ip] = "Custom"
+            self.add_custom_ip(ip)
         for domain in domains:
-            self._domain_to_feed[domain] = "Custom"
+            self.add_custom_domain(domain)
         logger.info(
             "Custom entries loaded: %d IPs, %d domains",
             len(ips), len(domains),
@@ -180,27 +213,82 @@ class FeedManager:
 
     def add_custom_ip(self, ip: str) -> None:
         """라이브 차단 목록에 커스텀 IP를 추가한다."""
+        if "/" in ip:
+            network = ipaddress.ip_network(ip, strict=False)
+            bucket = self._custom_networks[network.version].setdefault(network.prefixlen, {})
+            bucket.setdefault(int(network.network_address), set()).add(ip)
+        source = self._ip_to_feed.get(ip)
+        if source is not None and source != "Custom":
+            self._overridden_ip_sources[ip] = source
         self._custom_ips.add(ip)
         self._blocked_ips.add(ip)
         self._ip_to_feed[ip] = "Custom"
 
     def remove_custom_ip(self, ip: str) -> None:
         """라이브 차단 목록에서 커스텀 IP를 제거한다."""
+        if ip not in self._custom_ips:
+            return
+        if "/" in ip:
+            network = ipaddress.ip_network(ip, strict=False)
+            prefixes = self._custom_networks[network.version]
+            networks = prefixes[network.prefixlen]
+            members = networks[int(network.network_address)]
+            members.discard(ip)
+            if not members:
+                del networks[int(network.network_address)]
+            if not networks:
+                del prefixes[network.prefixlen]
         self._custom_ips.discard(ip)
-        self._blocked_ips.discard(ip)
-        self._ip_to_feed.pop(ip, None)
+        source = self._overridden_ip_sources.pop(ip, None)
+        if source is not None:
+            self._ip_to_feed[ip] = source
+        else:
+            self._blocked_ips.discard(ip)
+            self._ip_to_feed.pop(ip, None)
 
     def add_custom_domain(self, domain: str) -> None:
         """라이브 차단 목록에 커스텀 도메인을 추가한다."""
+        name = self._domain_name(domain)
+        self._custom_domain_names.setdefault(name, set()).add(domain)
+        source = self._domain_to_feed.get(domain)
+        if source is not None and source != "Custom":
+            self._overridden_domain_sources[domain] = source
         self._custom_domains.add(domain)
         self._blocked_domains.add(domain)
         self._domain_to_feed[domain] = "Custom"
 
     def remove_custom_domain(self, domain: str) -> None:
         """라이브 차단 목록에서 커스텀 도메인을 제거한다."""
+        if domain not in self._custom_domains:
+            return
+        name = self._domain_name(domain)
+        members = self._custom_domain_names[name]
+        members.discard(domain)
+        if not members:
+            del self._custom_domain_names[name]
         self._custom_domains.discard(domain)
-        self._blocked_domains.discard(domain)
-        self._domain_to_feed.pop(domain, None)
+        source = self._overridden_domain_sources.pop(domain, None)
+        if source is not None:
+            self._domain_to_feed[domain] = source
+        else:
+            self._blocked_domains.discard(domain)
+            self._domain_to_feed.pop(domain, None)
+
+    @staticmethod
+    def _domain_name(domain: str) -> str:
+        return domain.rstrip(".").encode("idna").decode("ascii").lower()
+
+    def _merge_current_custom_entries(self, acc: _FeedAccumulator) -> None:
+        """갱신 완료 시점의 사용자 항목을 피드 원본과 합친다."""
+        # 겹친 사용자 항목의 원래 출처만 보존한다. 전체 피드 사본은 추가하지 않는다.
+        self._overridden_ip_sources = {ip: acc.ip_to_feed[ip] for ip in self._custom_ips if ip in acc.ip_to_feed}
+        self._overridden_domain_sources = {domain: acc.domain_to_feed[domain] for domain in self._custom_domains if domain in acc.domain_to_feed}
+        acc.ips.update(self._custom_ips)
+        acc.domains.update(self._custom_domains)
+        acc.ip_to_feed.update({ip: "Custom" for ip in self._custom_ips})
+        acc.domain_to_feed.update({domain: "Custom" for domain in self._custom_domains})
+        self._blocked_ips, self._blocked_domains = acc.ips, acc.domains
+        self._ip_to_feed, self._domain_to_feed = acc.ip_to_feed, acc.domain_to_feed
 
     def get_all_entries_paginated(
         self,
@@ -211,32 +299,49 @@ class FeedManager:
         offset: int = 0,
     ) -> tuple[list[dict], int]:
         """모든 차단 목록 항목(피드 + 커스텀)의 페이지네이션된 목록을 반환한다."""
-        entries: list[dict] = []
+        if limit < 0 or offset < 0:
+            raise ValueError("Pagination limit and offset must be nonnegative")
+        needle = search.lower() if search else None
+        total = 0
 
-        if entry_type != "domain":
-            for ip, feed in self._ip_to_feed.items():
-                entries.append({"type": "ip", "value": ip, "source": feed})
+        def matching_entries():
+            nonlocal total
+            for kind, mapping in (("ip", self._ip_to_feed), ("domain", self._domain_to_feed)):
+                if entry_type in {"ip", "domain"} and entry_type != kind:
+                    continue
+                for value, feed in mapping.items():
+                    custom = feed == "Custom"
+                    if source == "custom" and not custom or source == "feed" and custom:
+                        continue
+                    if needle and needle not in value.lower():
+                        continue
+                    total += 1
+                    yield (not custom, kind, value, feed)
 
-        if entry_type != "ip":
-            for domain, feed in self._domain_to_feed.items():
-                entries.append({"type": "domain", "value": domain, "source": feed})
+        # 전체 항목의 사본 대신 요청한 페이지까지의 후보만 보관한다.
+        candidates = matching_entries()
+        if limit == 0:
+            for _ in candidates:
+                pass
+            return [], total
+        page = heapq.nsmallest(offset + limit, candidates)
+        return [{"type": kind, "value": value, "source": feed}
+                for _, kind, value, feed in page[offset:]], total
 
-        # 소스별 필터링
-        if source == "custom":
-            entries = [e for e in entries if e["source"] == "Custom"]
-        elif source == "feed":
-            entries = [e for e in entries if e["source"] != "Custom"]
-
-        # 검색어별 필터링
-        if search:
-            s = search.lower()
-            entries = [e for e in entries if s in e["value"].lower()]
-
-        total = len(entries)
-        entries.sort(key=lambda e: (e["source"] != "Custom", e["type"], e["value"]))
-        return entries[offset:offset + limit], total
+    def bind_runtime_update(self, callback) -> None:
+        if not callable(callback):
+            raise ValueError("Feed runtime update callback is required")
+        self._runtime_update_hook = callback
 
     async def update_all(self) -> "FeedUpdateSummary":
+        """동시 갱신을 직렬화하고 마지막 완료 시점의 사용자 항목을 반영한다."""
+        async with self._update_lock:
+            result = await self._update_all()
+            if self._runtime_update_hook is not None:
+                self._runtime_update_hook(self)
+            return result
+
+    async def _update_all(self) -> "FeedUpdateSummary":
         """구성된 모든 피드를 다운로드하고 파싱한다.
 
         실패해도 기존 차단 목록을 버리지 않는다 (PR 07).
@@ -260,18 +365,12 @@ class FeedManager:
         logger.info("Updating %d threat feeds...", len(self._sources))
 
         acc = _FeedAccumulator()
-        acc.ips.update(self._custom_ips)
-        acc.domains.update(self._custom_domains)
-        acc.ip_to_feed.update({ip: "Custom" for ip in self._custom_ips})
-        acc.domain_to_feed.update({d: "Custom" for d in self._custom_domains})
-
-        import asyncio
 
         async def _safe_update(source: FeedSource) -> None:
             try:
                 await self._update_feed(source, acc)
-            except Exception:
-                logger.exception("Failed to update feed: %s", source.name)
+            except Exception as exc:
+                logger.warning("Failed to update feed: %s (%s)", source.name, type(exc).__name__)
                 acc.fail(source.name)
 
         await asyncio.gather(*[_safe_update(s) for s in self._sources])
@@ -299,14 +398,14 @@ class FeedManager:
             return summary
 
         # 원자적 교체: 여기까지는 라이브 집합을 건드리지 않았다
-        self._blocked_ips = acc.ips
-        self._blocked_domains = acc.domains
+        self._merge_current_custom_entries(acc)
         self._blocked_ja3 = acc.ja3
         self._ja3_to_malware = acc.ja3_to_malware
-        self._ip_to_feed = acc.ip_to_feed
-        self._domain_to_feed = acc.domain_to_feed
 
-        self.last_update_epoch = _time.time()
+        if delivered or acc.validated_cached:
+            self.last_update_epoch = _time.time()
+            for name in set(delivered) | acc.validated_cached:
+                self._confirmed_epochs[name] = self.last_update_epoch
         self._save_meta()
 
         summary = FeedUpdateSummary(
@@ -358,13 +457,29 @@ class FeedManager:
         age_hours = None
         if self.last_update_epoch:
             age_hours = (now - self.last_update_epoch) / 3600.0
+            if age_hours < 0:
+                age_hours = None
 
         stale = age_hours is None or age_hours > stale_after_hours
         summary = self._last_summary
+        sources = []
+        confirmed = getattr(self, '_confirmed_epochs', {})
+        for source in self._sources:
+            epoch = confirmed.get(source.name, 0)
+            age = (now - epoch) / 3600.0 if epoch else None
+            if age is not None and age < 0:
+                epoch, age = 0, None
+            sources.append({'name': source.name,
+                'status': 'unknown' if age is None or age < 0 else 'stale' if age > stale_after_hours else 'ok',
+                'last_success_epoch': epoch or None, 'age_hours': round(age, 2) if age is not None else None,
+                'outcome': self._feed_outcomes.get(source.name)})
+        fresh = sum(source['status'] == 'ok' for source in sources)
+        status = ('ok' if fresh == len(sources) else 'degraded' if fresh else 'stale') if sources else ('stale' if stale else 'ok')
         return {
             # 실행 중이어도 데이터가 오래되면 stale 로 보고한다
-            "status": "stale" if stale else "ok",
-            "last_success_epoch": self.last_update_epoch,
+            "status": status,
+            "sources": sources,
+            "last_success_epoch": self.last_update_epoch if age_hours is not None else 0.0,
             "age_hours": round(age_hours, 2) if age_hours is not None else None,
             "stale_after_hours": stale_after_hours,
             "blocked_ips": len(self._blocked_ips),
@@ -378,7 +493,7 @@ class FeedManager:
     def is_stale(self, stale_after_hours: float = 12.0) -> bool:
         """피드 데이터가 오래되었으면 True."""
         health = self.feed_health(stale_after_hours)
-        return health["status"] == "stale"
+        return health["status"] in ('stale', 'degraded')
 
     def health_as_violations(self, stale_after_hours: float = 12.0) -> list:
         """피드 상태가 나쁘면 지원 계약 위반 목록으로 바꾼다 (PR 07).
@@ -390,11 +505,14 @@ class FeedManager:
         from netwatcher.support import Violation
 
         health = self.feed_health(stale_after_hours)
-        if health["status"] != "stale":
+        if health["status"] not in ('stale', 'degraded'):
             return []
 
         age = health["age_hours"]
-        if age is None:
+        if health['status'] == 'degraded':
+            message = '일부 위협 피드의 갱신 상태를 확인해야 합니다'
+            remediation = '피드별 성공 시각과 캐시·실패 결과를 확인합니다'
+        elif age is None:
             message = "위협 피드가 한 번도 성공적으로 갱신된 적이 없다"
             remediation = "threat_intel 엔진을 끄거나, 네트워크·피드 URL 을 점검한다"
         else:
@@ -432,10 +550,7 @@ class FeedManager:
         # SSRF 방지: 내부/사설 URL 거부
         safe_url = validate_outbound_url(source.url)
         if safe_url is None:
-            logger.error(
-                "피드 URL이 내부 주소를 대상으로 하여 차단됨: %s (%s)",
-                source.name, source.url,
-            )
+            logger.error("피드 URL이 내부 주소를 대상으로 하여 차단됨: %s", source.name)
             self._load_from_cache(source, cache_file, acc)
             return
 
@@ -449,7 +564,7 @@ class FeedManager:
                 headers["If-Modified-Since"] = meta["last_modified"]
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with public_client_session() as session:
                 async with session.get(
                     safe_url,
                     headers=headers,
@@ -458,6 +573,8 @@ class FeedManager:
                     if resp.status == 304:
                         logger.info("Feed %s: not modified (304), using cache", source.name)
                         self._load_from_cache(source, cache_file, acc)
+                        if headers and acc.outcomes.get(source.name) == 'cached':
+                            acc.validated_cached.add(source.name)
                         return
 
                     if resp.status != 200:
@@ -480,8 +597,8 @@ class FeedManager:
 
             cache_file.write_text(content)
 
-        except Exception:
-            logger.warning("Failed to download feed %s, using cache", source.name)
+        except (aiohttp.ClientError, OSError, TimeoutError, UnicodeError) as exc:
+            logger.warning("Failed to download feed %s (%s), using cache", source.name, type(exc).__name__)
             self._load_from_cache(source, cache_file, acc)
             return
 

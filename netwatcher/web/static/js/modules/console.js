@@ -23,11 +23,16 @@ export async function loadConsoleState() {
         box.dataset.state = state;
         label.textContent = t(state);
         const components = data.components || {};
-        const checks = [['database', 'db_unavailable'], ['sniffer', 'sensor_unavailable'],
-                        ['engines', 'engines_unavailable'], ['alert_queue', 'queue_unavailable']];
+        const eveMode = Object.hasOwn(components, 'eve');
+        const eyebrow = box.querySelector('.console-eyebrow');
+        eyebrow.dataset.i18n = eveMode ? 'console.eve_readiness' : 'console.readiness';
+        eyebrow.textContent = t(eveMode ? 'eve_readiness' : 'readiness');
+        const checks = eveMode ? [['database', 'db_unavailable'], ['eve', 'eve_unavailable']] :
+            [['database', 'db_unavailable'], ['sniffer', 'sensor_unavailable'],
+             ['engines', 'engines_unavailable'], ['alert_queue', 'queue_unavailable']];
         if (components.stats_flush) checks.push(['stats_flush', 'stats_unavailable']);
         const failed = checks.find(([name]) => components[name]?.status !== 'healthy');
-        reason.textContent = data.ready ? t('ready_reason') : failed ? t(failed[1]) :
+        reason.textContent = data.ready ? t(eveMode ? 'eve_ready_reason' : 'ready_reason') : failed ? t(failed[1]) :
             components.observation?.reasons?.[0] || t('observation_unavailable');
     } catch {
         box.dataset.state = 'unknown';

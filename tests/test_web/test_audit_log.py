@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+import asyncpg
 
 from netwatcher.storage.schemas import ALL_SCHEMAS
 from netwatcher.web.audit_log import AuditLogger
@@ -102,17 +103,35 @@ class TestAuditLogger:
 
 
 class TestAuditLoggerWithoutTable:
-    """audit_log 테이블이 없을 때 graceful 처리."""
+    """실제 테이블 부재와 빈 기록을 구분한다."""
 
     @pytest.mark.asyncio
     async def test_log_without_table(self, db):
-        """테이블 미존재 시 예외 없이 무시."""
+        """감사 저장 실패는 False로 호출자에게 전달한다."""
+        await db.pool.execute("DROP TABLE audit_log")
         logger = AuditLogger(db.pool)
-        await logger.log(user="admin", action="test", resource="/r")
+        assert await logger.log(user="admin", action="test", resource="/r") is False
 
     @pytest.mark.asyncio
     async def test_query_without_table(self, db):
-        """테이블 미존재 시 빈 리스트 반환."""
+        """감사 조회 실패를 빈 기록으로 숨기지 않는다."""
+        await db.pool.execute("DROP TABLE audit_log")
         logger = AuditLogger(db.pool)
-        results = await logger.query()
-        assert results == []
+        with pytest.raises(asyncpg.UndefinedTableError):
+            await logger.query()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_audit_details_are_not_replaced_with_empty_object(db, audit_logger):
+    await db.pool.execute("INSERT INTO audit_log(user_id,action,resource,details) VALUES($1,$2,$3,$4)",
+                          "admin", "test", "/test", ["invalid details"])
+    with pytest.raises(ValueError):
+        await audit_logger.query()
+
+
+@pytest.mark.asyncio
+async def test_encoded_audit_object_is_read_without_losing_fields(db, audit_logger):
+    import json
+    await db.pool.execute("INSERT INTO audit_log(user_id,action,resource,details) VALUES($1,$2,$3,$4)",
+                          "admin", "test", "/test", json.dumps({"legacy_field": "retained"}))
+    assert (await audit_logger.query())[0]["details"] == {"legacy_field": "retained"}

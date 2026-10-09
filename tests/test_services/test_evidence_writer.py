@@ -69,6 +69,27 @@ async def test_disk_failure_is_not_reported_as_persisted(tmp_path):
     assert repo.update_pcap_state.call_args.args[1]["state"] == "failed"
 
 
+@pytest.mark.asyncio
+async def test_state_failure_is_visible_and_logs_are_bounded(tmp_path, caplog):
+    from netwatcher.observability.health import HealthChecker
+    from types import SimpleNamespace
+
+    repo = AsyncMock()
+    repo.update_pcap_state.side_effect = ConnectionError("do-not-log-database-secret")
+    service = EvidenceWriter(PCAPWriter(str(tmp_path)), repo)
+    with caplog.at_level("WARNING"):
+        for event_id in range(100):
+            await service._store_state(event_id, {"state": "persisted"})
+    assert service.status()["state_write_failures"] == 100
+    assert service.status()["last_state_error"] == "ConnectionError"
+    assert sum("Evidence state remains unconfirmed" in record.message for record in caplog.records) == 1
+    assert "do-not-log-database-secret" not in caplog.text
+    health = HealthChecker(dispatcher=SimpleNamespace(_evidence_writer=service))
+    result = await health.check_all()
+    assert result["components"]["evidence"]["status"] == "degraded"
+    assert result["components"]["evidence"]["state_write_failures"] == 100
+
+
 def test_critical_jobs_use_reserved_capacity_and_run_first(tmp_path):
     writer = PCAPWriter(str(tmp_path))
     writer.add_packet(IP(src="192.0.2.1", dst="192.0.2.2") / TCP())

@@ -55,9 +55,17 @@ def _manager(tmp_path: Path, sources=None) -> FeedManager:
     mgr._ja3_to_malware = {}
     mgr._custom_ips = set()
     mgr._custom_domains = set()
+    mgr._custom_networks = {4: {}, 6: {}}
+    mgr._custom_domain_names = {}
     mgr._ip_to_feed = {}
     mgr._domain_to_feed = {}
+    mgr._overridden_ip_sources = {}
+    mgr._overridden_domain_sources = {}
+    import asyncio
+    mgr._update_lock = asyncio.Lock()
+    mgr._runtime_update_hook = None
     mgr.last_update_epoch = 0.0
+    mgr._confirmed_epochs = {}
     mgr._last_summary = None
     mgr._last_attempt_epoch = 0.0
     mgr._feed_outcomes = {}
@@ -71,6 +79,7 @@ def _seed_state(mgr: FeedManager, ips: set[str], epoch: float) -> None:
     for ip in ips:
         mgr._ip_to_feed[ip] = "TestIPFeed"
     mgr.last_update_epoch = epoch
+    mgr._confirmed_epochs = {source.name: epoch for source in mgr._sources}
 
 
 # ------------------------------------------------------------------
@@ -221,11 +230,23 @@ async def test_update_all_returns_summary(tmp_path, monkeypatch):
 
 def test_fresh_feed_reports_ok(tmp_path):
     mgr = _manager(tmp_path)
-    _seed_state(mgr, {"1.1.1.1"}, epoch=9999999999.0)  # 미래 시각 = 최신
+    import time
+    _seed_state(mgr, {"1.1.1.1"}, epoch=time.time())
     health = mgr.feed_health()
     assert health["status"] == "ok"
     assert health["blocked_ips"] == 1
     assert mgr.is_stale() is False
+
+
+def test_future_confirmation_does_not_report_fresh(tmp_path):
+    import time
+    mgr = _manager(tmp_path)
+    _seed_state(mgr, {'1.1.1.1'}, epoch=time.time()+3600)
+    health=mgr.feed_health()
+    assert health['status']=='stale' and health['last_success_epoch']==0
+    assert health['age_hours'] is None
+    assert health['sources'][0]['status']=='unknown'
+    assert health['sources'][0]['last_success_epoch'] is None
 
 
 def test_never_updated_feed_is_stale(tmp_path):
@@ -253,7 +274,8 @@ def test_stale_feed_becomes_violation(tmp_path):
 
 def test_fresh_feed_produces_no_violation(tmp_path):
     mgr = _manager(tmp_path)
-    _seed_state(mgr, {"1.1.1.1"}, epoch=9999999999.0)
+    import time
+    _seed_state(mgr, {"1.1.1.1"}, epoch=time.time())
     assert mgr.health_as_violations() == []
 
 

@@ -114,3 +114,15 @@ def test_expiry_is_explicit():
     now=datetime.now(timezone.utc)
     context=asset_context({'ip_address':IP,'ip_mapping_version':0,'context_profile':{'role':'nas','ip':IP,'mapping_version':0,'expires_at':(now-timedelta(seconds=1)).isoformat()}},now=now)
     assert context['status']=='unknown' and context['reason']=='expired'
+
+
+@pytest.mark.asyncio
+async def test_ip_only_event_does_not_inherit_confirmed_ownership(device_repo):
+    await device_repo.upsert(MAC, IP)
+    async with AsyncClient(transport=ASGITransport(app=app_for(device_repo)), base_url='http://test') as client:
+        assert (await client.put(f'/api/devices/{MAC}/context', json=request())).status_code == 200
+    assert (await device_repo.context_for_source(IP, MAC))['status'] == 'confirmed'
+    context = await device_repo.context_for_source(IP, None)
+    assert context['status'] == 'unknown'
+    assert context['reason'] == 'source_mac_missing'
+    assert 'role' not in context

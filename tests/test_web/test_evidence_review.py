@@ -27,7 +27,7 @@ async def test_evidence_pin_requires_admin_and_file_availability(db, tmp_path):
         response = await client.post(endpoint, json=body, headers=_h(Role.ADMIN))
         assert response.status_code == 200
         assert response.json()['pin_state'] == 'pinned'
-        detail = (await client.get(f'/api/events/{event_id}')).json()['event']
+        detail = (await client.get(f'/api/events/{event_id}', headers=_h(Role.VIEWER))).json()['event']
         assert detail['pcap_availability']['state'] == 'available'
         file = await client.get(f'/api/events/{event_id}/evidence/file', headers=_h(Role.VIEWER))
         assert file.status_code == 200

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from netwatcher.utils.yaml_editor import ConfigurationReadOnlyError
 from pydantic import BaseModel
 
 from netwatcher.detection.validation import validate_engine_config
 from netwatcher.web.rbac import Role, require_role
+from netwatcher.web.change_audit import ChangeAudit, state_summary
 
 if TYPE_CHECKING:
     from netwatcher.detection.registry import EngineRegistry
@@ -26,6 +27,11 @@ class UpdateConfigRequest(BaseModel):
 
 def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEditor", flow_processor=None) -> APIRouter:
     router = APIRouter(prefix="/engines", tags=["engines"])
+    changes = ChangeAudit()
+
+    def snapshot(**args):
+        return {"engine": args["name"],
+                "configuration": state_summary(yaml_editor.get_engine_config(args["name"]))}
 
     @router.get("")
     async def list_engines():
@@ -33,9 +39,11 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
         return {"engines": engines}
 
     @router.patch("/{name}/toggle")
+    @changes.guard(snapshot)
     async def toggle_engine(
         name: str,
         body: ToggleEngineRequest,
+        request: Request,
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
         try:
@@ -59,8 +67,9 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
             raise
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            logger.exception("Engine toggle failed (%s)", name)
+            raise HTTPException(status_code=500, detail="Engine change failed")
 
     @router.get("/{name}")
     async def get_engine(name: str):
@@ -70,9 +79,11 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
         return {"engine": info}
 
     @router.put("/{name}/config")
+    @changes.guard(snapshot)
     async def update_config(
         name: str,
         body: dict[str, Any],
+        request: Request,
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
         """설정을 검증 후 반영하고, 성공한 경우에만 YAML에 기록한다.
@@ -138,8 +149,9 @@ def create_engines_router(registry: "EngineRegistry", yaml_editor: "YamlConfigEd
             return JSONResponse({"error": "Configuration could not be persisted"}, status_code=503)
         except KeyError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
+        except Exception:
+            logger.exception("Engine configuration update failed (%s)", name)
+            return JSONResponse({"error": "Engine configuration update failed"}, status_code=500)
 
         response: dict[str, Any] = {
             "status": "ok",

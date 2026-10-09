@@ -2,43 +2,68 @@
  * NetWatcher AI Analyzer Module
  */
 
-import { authFetch } from '../core/api.js';
+import { authFetch, getAuthToken } from '../core/api.js';
 import { esc, formatTime, renderPagination } from '../core/utils.js';
 
-const LOGS_PER_PAGE = 25;
-let   logsPage      = 0;
-let   logsTotal     = 0;
-let   verdictFilter = "";
+let logsPerPage = 50, logsPage = 0, logsTotal = 0, verdictFilter = "";
+let epoch = 0, statusSequence = 0, logsSequence = 0, initialized = false;
+let statusData = null, statusState = 'loading', logsState = 'empty', logRows = [];
+const t = key => window.i18next.t('console.ai_status.' + key);
+const session = () => {const currentEpoch = epoch, token = getAuthToken();return () => currentEpoch === epoch && token === getAuthToken();};
 
-export async function initAiAnalyzerTab() {
-    /** /api/ai-analyzer/status 확인 → 활성화 시 탭 표시 */
-    try {
-        const resp = await authFetch("/api/ai-analyzer/status");
-        if (!resp || !resp.ok) return;
-        const data = await resp.json();
-        if (data && data.enabled) {
-            const tabBtn = document.getElementById("tab-btn-ai-analyzer");
-            if (tabBtn) tabBtn.style.display = "";
-        }
-    } catch (e) {
-        // 404 또는 비활성화 → 탭 숨김 유지
+function validStatus(data) {
+    const keys = ['enabled','running','state','provider','interval_minutes','lookback_minutes','fp_threshold','max_pct','consecutive_fp'];
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length !== keys.length
+            || keys.some(key => !Object.hasOwn(data,key)) || typeof data.enabled !== 'boolean' || typeof data.running !== 'boolean') return false;
+    const numbers = ['interval_minutes','lookback_minutes','fp_threshold','max_pct'];
+    if (data.state === 'unconfigured') return data.enabled === false && data.running === false
+        && numbers.every(key => data[key] === null) && data.provider === null
+        && data.consecutive_fp && typeof data.consecutive_fp === 'object' && !Array.isArray(data.consecutive_fp) && Object.keys(data.consecutive_fp).length === 0;
+    return data.enabled && ['running','stopped'].includes(data.state) && data.running === (data.state === 'running')
+        && ['copilot','claude','codex','gemini','agent'].includes(data.provider)
+        && numbers.every(key => Number.isSafeInteger(data[key]) && data[key] > 0 && data[key] <= 2147483647)
+        && data.consecutive_fp && !Array.isArray(data.consecutive_fp) && typeof data.consecutive_fp === 'object'
+        && Object.keys(data.consecutive_fp).length <= 64
+        && Object.entries(data.consecutive_fp).every(([key,value]) => /^[a-z][a-z0-9_]{0,63}$/.test(key) && Number.isSafeInteger(value) && value >= 0 && value <= 2147483647);
+}
+
+function renderStatus() {
+    _setText('ai-state', t(statusState));
+    for (const [id,key] of [['ai-provider','provider'],['ai-interval','interval_minutes'],['ai-lookback','lookback_minutes'],['ai-fp-threshold','fp_threshold']]) {
+        _setText(id, statusData?.[key] ?? '—');
     }
 }
 
+export async function initAiAnalyzerTab() {
+    const current = session();
+    await loadAiAnalyzerStatus();
+    if (!current()) return;
+    const tab = document.getElementById('tab-btn-ai-analyzer');
+    if (tab) tab.style.display = '';
+}
+
 export async function loadAiAnalyzerStatus() {
+    const current = session(), sequence = ++statusSequence;
+    statusData = null; statusState = 'loading'; renderStatus();
     try {
-        const resp = await authFetch("/api/ai-analyzer/status");
-        if (!resp || !resp.ok) return;
+        const resp = await authFetch('/api/ai-analyzer/status');
+        if (!resp?.ok) throw new Error('AI status unavailable');
         const data = await resp.json();
-        _setText("ai-provider",     data.provider         ?? "—");
-        _setText("ai-interval",     data.interval_minutes ?? "—");
-        _setText("ai-lookback",     data.lookback_minutes ?? "—");
-        _setText("ai-fp-threshold", data.fp_threshold     ?? "—");
-    } catch (e) { /* 무시 */ }
+        if (!current() || sequence !== statusSequence) return;
+        if (!validStatus(data)) throw new Error('Invalid AI status');
+        statusData = data; statusState = data.state;
+    } catch {
+        if (!current() || sequence !== statusSequence) return;
+        statusData = null; statusState = 'unknown';
+    }
+    if (current() && sequence === statusSequence) renderStatus();
 }
 
 export async function loadAiLogs(page) {
-    logsPage = page || 0;
+    const current = session(), sequence = ++logsSequence;
+    logsPage = Number.isSafeInteger(page) && page >= 0 ? page : 0;
+    logsState = "loading"; logRows = []; renderAiLogs([]);
+    document.getElementById("ai-logs-pagination")?.replaceChildren();
 
     let engineFilter, searchTerm;
     if (verdictFilter === "adjustment") {
@@ -55,8 +80,8 @@ export async function loadAiLogs(page) {
     }
 
     const params = new URLSearchParams({
-        limit:  LOGS_PER_PAGE,
-        offset: logsPage * LOGS_PER_PAGE,
+        limit:  logsPerPage,
+        offset: logsPage * logsPerPage,
         engine: engineFilter,
     });
     if (searchTerm) params.set("q", searchTerm);
@@ -65,17 +90,22 @@ export async function loadAiLogs(page) {
         const resp = await authFetch("/api/events?" + params.toString());
         if (!resp || !resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
-        logsTotal = data.total || 0;
-        renderAiLogs(data.events || []);
+        if (!current() || sequence !== logsSequence) return;
+        if (!Number.isSafeInteger(data.total) || data.total < 0 || !Array.isArray(data.events)
+                || data.events.length > logsPerPage || data.events.some(event => !event || typeof event !== 'object' || Array.isArray(event))) {
+            throw new Error('Invalid AI logs');
+        }
+        logsTotal = data.total; logRows = data.events; logsState = logRows.length ? 'loaded' : 'empty';
+        renderAiLogs(logRows);
         renderPagination(
             document.getElementById("ai-logs-pagination"),
-            logsPage, logsTotal, LOGS_PER_PAGE,
+            logsPage, logsTotal, logsPerPage,
             (p) => loadAiLogs(p)
         );
-    } catch (e) {
-        const tbody = document.getElementById("ai-logs-body");
-        if (tbody) tbody.innerHTML =
-            '<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">로그를 불러올 수 없습니다.</td></tr>';
+    } catch {
+        if (!current() || sequence !== logsSequence) return;
+        logsTotal = 0; logRows = []; logsState = 'logs_unknown'; renderAiLogs([]);
+        document.getElementById('ai-logs-pagination')?.replaceChildren();
     }
 }
 
@@ -85,7 +115,7 @@ function renderAiLogs(events) {
 
     if (!events.length) {
         tbody.innerHTML =
-            '<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">No AI analyzer logs yet.</td></tr>';
+            `<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">${esc(t(logsState))}</td></tr>`;
         return;
     }
 
@@ -121,6 +151,9 @@ function renderAiLogs(events) {
 }
 
 export function registerAiAnalyzerListeners() {
+    if (initialized) return;
+    initialized = true;
+    window.i18next.on("languageChanged", () => {renderStatus(); renderAiLogs(logRows);});
     const filterEl = document.getElementById("ai-filter-verdict");
     if (filterEl) {
         filterEl.addEventListener("change", () => {
@@ -129,7 +162,8 @@ export function registerAiAnalyzerListeners() {
         });
     }
 
-    document.getElementById("ai-filter-pagesize")?.addEventListener("change", () => {
+    document.getElementById("ai-filter-pagesize")?.addEventListener("change", event => {
+        logsPerPage = Number(event.target.value) === 100 ? 100 : 50;
         loadAiLogs(0);
     });
 
@@ -143,3 +177,17 @@ function _setText(id, val) {
     const el = document.getElementById(id);
     if (el) el.textContent = val;
 }
+
+window.addEventListener('nw-session-ended', () => {
+    epoch++; statusSequence++; logsSequence++;
+    statusData = null; statusState = 'signed_out'; logsState = 'empty'; logRows = [];
+    logsTotal = 0; logsPage = 0; verdictFilter = ''; logsPerPage = 50;
+    const tab = document.getElementById('tab-btn-ai-analyzer');
+    if (tab) tab.style.display = 'none';
+    const filter = document.getElementById('ai-filter-verdict');
+    if (filter) filter.value = '';
+    const pageSize = document.getElementById('ai-filter-pagesize');
+    if (pageSize) pageSize.value = '50';
+    document.getElementById('ai-logs-pagination')?.replaceChildren();
+    renderStatus(); renderAiLogs([]);
+});

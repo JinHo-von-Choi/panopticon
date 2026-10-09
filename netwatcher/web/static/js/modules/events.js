@@ -2,10 +2,17 @@
  * NetWatcher Events Module (Production Grade - No Omissions)
  */
 
-import { authFetch, canConfigure } from '../core/api.js';
+import { authFetch, canConfigure, getCurrentUserId } from '../core/api.js';
 import { esc, escAttr, formatTime, formatHexDump, showToast, renderPagination } from '../core/utils.js';
 import { openEventDrawer } from '../core/detail-drawer.js';
-import { whitelistData, toggleWhitelist } from './devices.js';
+import { whitelistData, toggleWhitelist, fetchWhitelist } from './devices.js';
+import { canChangeWhitelist } from '../core/whitelist-state.js';
+import { featureEnabled } from '../core/capabilities.js';
+import { loadBusinessReview } from './business-review.js';
+import { loadCaseWorkflow } from './case-workflow.js';
+import { loadWorkSchedules } from './work-schedules.js';
+import { loadEventGroup, initGroupList, initPreviousEvents } from './event-groups.js';
+import { mountEvidence, resetEvidence } from './evidence.js';
 
 var eventsPage = 0;
 var eventsTotal = 0;
@@ -22,9 +29,9 @@ function renderLivePending() {
 export function receiveLiveEvent(event) {
     const body = document.getElementById('events-body');
     if (!body) return;
-    const filtered = ['filter-severity', 'filter-engine', 'filter-search', 'filter-since', 'filter-until']
+    const filtered = ['filter-severity', 'filter-engine', 'filter-search', 'filter-since', 'filter-until', 'filter-case-owner', 'filter-case-status']
         .some(id => document.getElementById(id).value.trim());
-    if (eventsPage !== 0 || filtered || !document.getElementById('modal-overlay').classList.contains('hidden')) {
+    if (eventsPage !== 0 || filtered || document.getElementById('filter-case-unassigned')?.checked || document.getElementById('filter-case-mine')?.checked || !document.getElementById('modal-overlay').classList.contains('hidden')) {
         livePending += 1;
         renderLivePending();
         return;
@@ -39,6 +46,7 @@ export function receiveLiveEvent(event) {
 
 
 export async function loadEvents(page = eventsPage) {
+    if (featureEnabled('event_groups')) initGroupList();
     const request = ++listRequest;
     eventsPage = page;
     var sev    = document.getElementById("filter-severity").value;
@@ -57,6 +65,14 @@ export async function loadEvents(page = eventsPage) {
     if (since)  params.set("since", since + "T00:00:00.000000Z");
     if (until)  params.set("until", until + "T23:59:59.999999Z");
 
+    if (featureEnabled('case_workflows')) {
+        const status = document.getElementById('filter-case-status').value;
+        const unassigned = document.getElementById('filter-case-unassigned').checked;
+        const owner = document.getElementById('filter-case-owner').value.trim();
+        if (status) params.set('case_status', status);
+        if (document.getElementById('filter-case-mine').checked && getCurrentUserId()) params.set('case_owner_id', getCurrentUserId());
+        else if (unassigned || owner) params.set('case_owner', unassigned ? '' : owner);
+    }
     try {
         var resp = await authFetch("/api/events?" + params.toString());
         if (!resp || !resp.ok) return;
@@ -90,6 +106,16 @@ export async function exportEvents(format) {
     if (since) params.set("since", since + "T00:00:00.000000Z");
     if (until) params.set("until", until + "T23:59:59.999999Z");
 
+    const search = document.getElementById('filter-search').value.trim();
+    if (search) params.set('q', search);
+    if (featureEnabled('case_workflows')) {
+        const status = document.getElementById('filter-case-status').value;
+        const unassigned = document.getElementById('filter-case-unassigned').checked;
+        const owner = document.getElementById('filter-case-owner').value.trim();
+        if (status) params.set('case_status', status);
+        if (document.getElementById('filter-case-mine').checked && getCurrentUserId()) params.set('case_owner_id', getCurrentUserId());
+        else if (unassigned || owner) params.set('case_owner', unassigned ? '' : owner);
+    }
     try {
         const resp = await authFetch("/api/events/export?" + params.toString());
         if (!resp.ok) { alert("Export failed: Unauthorized"); return; }
@@ -127,6 +153,7 @@ export function renderEventRow(ev) {
         <td>${esc(title)}</td>
         <td>${esc(ev.source_ip || ev.source_mac || "-")}</td>
         <td>${esc(ev.dest_ip || ev.dest_mac || "-")}</td>
+        <td ${featureEnabled('case_workflows') ? '' : 'hidden'}>${esc(ev.case_owner || window.i18next.t('console.case_workflow.unassigned'))} · ${esc(window.i18next.t('console.case_workflow.statuses.' + (ev.case_status || 'open')))}</td>
         <td><button class="btn-detail" data-event-id="${escAttr(evId)}">Detail</button></td>
     `;
     tr.querySelector("[data-event-id]").addEventListener("click", function (e) {
@@ -138,11 +165,17 @@ export function renderEventRow(ev) {
 
 let detailRequest = 0;
 let selectedEvent = null;
+window.addEventListener('nw-session-ended', () => {
+    detailRequest++; selectedEvent = null;
+    document.getElementById('modal-body')?.replaceChildren();
+    document.getElementById('modal-overlay')?.classList.add('hidden');
+});
 const t = (key, options = {}) => window.i18next.t("console.event_context." + key, options);
 
 window.showEventDetail = async function(eventId) {
     if (!eventId) return;
     const request = ++detailRequest;
+    resetEvidence();
     selectedEvent = null;
     var modalBody = document.getElementById("modal-body");
     document.getElementById("modal-title").textContent = t("title");
@@ -150,6 +183,7 @@ window.showEventDetail = async function(eventId) {
     openEventDrawer();
 
     try {
+        await fetchWhitelist();
         var resp = await authFetch("/api/events/" + eventId);
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         var data = await resp.json();
@@ -209,6 +243,7 @@ function renderContext(ev) {
     const meta = ev.metadata || {};
     const aggregation = meta.aggregation || {};
     const count = Number.isInteger(aggregation.count) && aggregation.count > 0 ? aggregation.count : 1;
+    const external = meta.external_eve;
     const pcap = meta.pcap || {};
     const state = ['pending', 'persisted', 'omitted', 'failed', 'volatile'].includes(pcap.state) ? pcap.state : 'unknown';
     let html = `<section class="event-context"><div class="console-eyebrow">${esc(t('signal'))} / #${esc(ev.id)}</div>
@@ -223,6 +258,9 @@ function renderContext(ev) {
             `${meta.business_context.role} / v${meta.business_context.context_version} / ${meta.business_context.original_severity} → INFO`);
     }
     html += row(t('role'), ev.asset_context?.status === 'confirmed' ? window.i18next.t('console.asset_context.roles.' + ev.asset_context.role) : t('role_unknown'));
+    if (ev.asset_context?.reason) {
+        html += row(t('reason'), window.i18next.t('console.asset_context.reasons.' + ev.asset_context.reason));
+    }
     if (ev.asset_context?.scope === 'current_inventory') {
         html += row(window.i18next.t('console.asset_context.title'), window.i18next.t('console.asset_context.scope'));
     }
@@ -236,21 +274,35 @@ function renderContext(ev) {
         html += row(t('samples'), Number.isInteger(baseline.accepted_samples) ? baseline.accepted_samples : t('unmeasured'));
         html += `</div><p class="text-dim">${esc(t('statistical_baseline'))}</p></section>`;
     }
-    html += `<section class="detail-section"><h3>${esc(t('pcap'))}</h3><div class="detail-grid">`;
-    html += htmlRow(t('state'), `<span class="evidence-layer" data-pcap-state="${state}">${esc(t('pcap_states.' + state))}</span>`);
-    html += row(t('reason'), pcap.reason);
-    if (state === 'persisted') {
-        html += row(t('file'), String(pcap.path || '').split('/').at(-1));
-        html += row('SHA256', pcap.sha256);
-    }
-    if (ev.pcap_availability) {
-        html += row(t('file'), ev.pcap_availability.state);
-        html += row('Review pin', ev.pcap_availability.pin_state);
-        if (ev.pcap_availability.state === 'available' && canConfigure()) {
-            html += `<button type="button" class="btn" id="event-evidence-pin">${esc(window.i18next.t('console.evidence_pin.action'))}</button>`;
+    if (external && typeof external === 'object' && !Array.isArray(external)) {
+        const detail = external.details || {};
+        html += `<section class="detail-section" id="event-eve-evidence"><h3>${esc(t('eve.title'))}</h3><div class="detail-grid">`;
+        html += row(t('eve.input'), `${external.sensor_id || '-'} / ${external.source_id || '-'}`);
+        html += row(t('eve.rule'), detail.signature_id);
+        html += row(t('eve.original_severity'), detail.severity);
+        html += row(t('eve.flow'), external.flow_id);
+        html += row(t('eve.observed'), formatTime(external.observed_at));
+        html += row(t('eve.offset'), external.original_ref?.offset);
+        html += row('SHA256', external.original_ref?.sha256);
+        html += `</div><p class="text-dim">${esc(t('eve.note'))}</p></section>`;
+    } else {
+        html += `<section class="detail-section"><h3>${esc(t('pcap'))}</h3><div class="detail-grid">`;
+        html += htmlRow(t('state'), `<span class="evidence-layer" data-pcap-state="${state}">${esc(t('pcap_states.' + state))}</span>`);
+        html += row(t('reason'), pcap.reason);
+        if (state === 'persisted') {
+            html += row(t('file'), String(pcap.path || '').split('/').at(-1));
+            html += row('SHA256', pcap.sha256);
         }
+        if (ev.pcap_availability && !featureEnabled('evidence_control_remote')) {
+            html += row(t('file'), ev.pcap_availability.state);
+            html += row('Review pin', ev.pcap_availability.pin_state);
+            if (ev.pcap_availability.state === 'available' && canConfigure() && !featureEnabled('evidence_control_remote')) {
+                html += `<button type="button" class="btn" id="event-evidence-pin">${esc(window.i18next.t('console.evidence_pin.action'))}</button>`;
+            }
+        }
+        if (featureEnabled('evidence_control_remote')) html += '<div id="remote-evidence-control" class="evidence-controls"></div>';
+        html += `</div><p class="text-dim">${esc(t('pcap_note'))}</p></section>`;
     }
-    html += `</div><p class="text-dim">${esc(t('pcap_note'))}</p></section>`;
     html += `<section class="detail-section"><h3>${esc(t('observation'))}</h3>
         <div id="event-observation" class="event-observation">${esc(t('observation_unknown'))}</div>
         <p class="text-dim">${esc(t('observation_note'))}</p></section>`;
@@ -337,7 +389,12 @@ function renderEventDetail(ev) {
     modalTitle.textContent = `[${ev.severity}] ${title}`;
     document.getElementById("modal-close-btn").setAttribute("aria-label", t("close"));
 
-    let html = renderContext(ev) + '<div class="detail-section"><h3>Overview</h3><div class="detail-grid">';
+    let html = renderContext(ev);
+    if (featureEnabled('event_groups')) html += '<section class="detail-section" id="event-group"></section><section class="detail-section" id="event-previous"></section>';
+    if (featureEnabled('work_schedules')) html += '<section class="detail-section" id="event-work-schedules"></section>';
+    if (featureEnabled('case_workflows')) html += '<section class="detail-section" id="event-case-workflow"></section>';
+    if (featureEnabled('business_reviews')) html += '<section class="detail-section" id="event-business-review"></section>';
+    html += '<div class="detail-section"><h3>Overview</h3><div class="detail-grid">';
     html += row("Event ID", ev.id);
     html += row("Timestamp", formatTime(ev.timestamp));
     html += row("Engine", ev.engine);
@@ -395,15 +452,24 @@ function renderEventDetail(ev) {
     }
 
     // Whitelist Actions
-    if (ev.source_ip && canConfigure()) {
+    if (ev.source_ip && canConfigure() && featureEnabled('whitelist')) {
         var isWhitelisted = (whitelistData.ips || []).includes(ev.source_ip);
         var btnText = isWhitelisted ? window.i18next.t("whitelist.remove_ip") : window.i18next.t("whitelist.add_ip");
         html += `<details class="detail-section event-technical"><summary>${esc(t("global_exception"))}</summary><p class="scope-note">${esc(t("global_exception_note"))}</p><div style="display:flex;gap:10px;margin-top:8px">`;
-        html += `<button class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-event-ip="${escAttr(ev.source_ip)}">
+        html += `<button class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-event-ip="${escAttr(ev.source_ip)}" data-whitelist-change ${canChangeWhitelist() ? '' : 'disabled'}>
                  ${esc(btnText)} (${esc(ev.source_ip)})</button></div></details>`;
     }
 
     modalBody.innerHTML = html;
+    if (featureEnabled('evidence_control_remote')) mountEvidence(ev.id, ev.pcap_availability, value => {ev.pcap_availability = value;});
+    if (featureEnabled('event_groups')) {
+        loadEventGroup(ev, modalBody.querySelector('#event-group'));
+        initPreviousEvents(ev, modalBody.querySelector('#event-previous'));
+    }
+    const businessPanel = modalBody.querySelector('#event-business-review');
+    if (featureEnabled('work_schedules')) loadWorkSchedules(ev, modalBody.querySelector('#event-work-schedules'), 0, () => loadBusinessReview(ev, businessPanel));
+    if (featureEnabled('case_workflows')) loadCaseWorkflow(ev, modalBody.querySelector('#event-case-workflow'));
+    if (featureEnabled('business_reviews')) loadBusinessReview(ev, modalBody.querySelector('#event-business-review'));
 
     var wlBtn = modalBody.querySelector("[data-wl-event-ip]");
     if (wlBtn) {
@@ -466,3 +532,22 @@ window.handleEventWhitelistToggle = async function(type, value) {
     window.closeModal();
     showToast("Whitelist Updated", `${value} toggled`, "info");
 };
+
+export async function exportWeeklyReport() {
+    const button = document.getElementById('btn-weekly-report');
+    button.disabled = true;
+    try {
+        const response = await authFetch('/api/reports/weekly?format=csv');
+        if (!response?.ok) {
+            showToast(window.i18next.t('console.case_queue.' + (response?.status === 413 ? 'capacity' : 'unavailable')), 'error');
+            return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'panopticon-weekly.csv';
+        document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    } catch { showToast(window.i18next.t('console.case_queue.unavailable'), 'error'); }
+    finally { button.disabled = false; }
+}

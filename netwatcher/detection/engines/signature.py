@@ -64,33 +64,62 @@ class SignatureEngine(DetectionEngine):
         if self._rules_dir:
             self._load_rules()
 
-    def _load_rules(self) -> None:
-        """rules_dir 내 모든 YAML 및 .rules 파일에서 규칙을 로드한다."""
+    def load_rule_candidates(self, *, strict: bool = False) -> list[SignatureRule]:
+        """현재 탐지 상태를 바꾸지 않고 규칙 파일을 읽는다."""
+        if not self._rules_dir:
+            raise ValueError("Rules directory is not configured")
         rules_dir = Path(self._rules_dir)
         if not rules_dir.is_dir():
+            if strict:
+                raise ValueError("Rules directory is unavailable")
             logger.warning("Rules directory does not exist: %s", rules_dir)
-            return
+            return []
         loaded: list[SignatureRule] = []
 
         for yaml_file in sorted(rules_dir.glob("*.yaml")):
             try:
                 data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
                 if not data or "rules" not in data:
+                    if strict:
+                        raise ValueError("Rule document needs a rules list")
                     continue
+                if strict and (not isinstance(data, dict) or not isinstance(data["rules"], list)):
+                    raise ValueError("Invalid rule document")
                 for rule_data in data["rules"]:
                     loaded.append(SignatureRule.from_dict(rule_data))
             except Exception:
+                if strict:
+                    raise
                 logger.exception("Failed to load rules from %s", yaml_file)
 
         for rules_file in sorted(rules_dir.glob("*.rules")):
             try:
-                suricata_rules = load_suricata_rules(rules_file, self._suricata_variables)
+                suricata_rules = load_suricata_rules(rules_file, self._suricata_variables, strict=strict)
                 loaded.extend(suricata_rules)
             except Exception:
+                if strict:
+                    raise
                 logger.exception("Failed to load Suricata rules from %s", rules_file)
 
+        if strict and len({rule.id for rule in loaded}) != len(loaded):
+            raise ValueError("Duplicate rule identifiers")
+        return loaded
+
+    def install_rules(self, rules: list[SignatureRule], *, reset_matcher: bool = True) -> None:
+        """완성된 규칙 목록을 탐지 경로에 반영한다."""
+        by_id = {rule.id: rule for rule in rules}
+        if len(by_id) != len(rules):
+            raise ValueError("Duplicate rule identifiers")
+        self._rules = rules
+        self._rules_by_id = by_id
+        if reset_matcher:
+            self._matcher = RuleMatcher()
+
+    def _load_rules(self) -> None:
+        loaded = self.load_rule_candidates()
         self._rules = loaded
-        self._rules_by_id = {r.id: r for r in loaded}
+        self._rules_by_id = {rule.id: rule for rule in loaded}
+        rules_dir = self._rules_dir
         logger.info("Loaded %d signature rules from %s", len(loaded), rules_dir)
 
     @property
@@ -106,7 +135,7 @@ class SignatureEngine(DetectionEngine):
     def reload_rules(self) -> None:
         """규칙 디렉토리를 재스캔하여 규칙을 다시 로드한다."""
         if self._rules_dir:
-            self._load_rules()
+            self.install_rules(self.load_rule_candidates(strict=True))
 
     def set_yara_scanner(self, scanner: YaraScanner) -> None:
         """YARA 스캐너 인스턴스를 주입한다."""

@@ -69,7 +69,8 @@ class TestModelManager:
         assert result is not None
         model, meta = result
         assert model == {"data": 42}
-        assert meta == {}
+        assert meta['name'] == 'no_meta'
+        assert 'saved_at' in meta
 
     def test_save_creates_directory(self, tmp_path):
         """models_dir이 없으면 자동 생성한다."""

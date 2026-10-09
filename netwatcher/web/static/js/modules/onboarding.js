@@ -13,6 +13,11 @@ function render() {
     if (!report) {
         box.textContent = t('unavailable');summary.textContent = t('unavailable');return;
     }
+    const scope = document.querySelector('[data-onboarding-scope]');
+    if (scope) {
+        scope.dataset.i18n = report.input_mode === 'eve' ? 'console.onboarding.eve_scope' : 'console.onboarding.scope';
+        scope.textContent = t(report.input_mode === 'eve' ? 'eve_scope' : 'scope');
+    }
     const checks = Array.isArray(report.checks) ? report.checks : [];
     const count = checks.filter(check => check.status === 'attention').length;
     summary.textContent = t('summary', {count, unknown: checks.filter(check => check.status === 'unknown').length});
@@ -23,7 +28,7 @@ function render() {
         if (check.name === 'storage' && Number.isFinite(facts.free_bytes)) {
             fact = t('disk_facts', {free: formatBytes(facts.free_bytes), required: formatBytes(facts.required_bytes)});
         } else if (check.name === 'memory' && Number.isFinite(facts.main_process_peak_rss_bytes)) {
-            fact = t('memory_facts', {rss: formatBytes(facts.main_process_peak_rss_bytes)});
+            fact = t(report.input_mode === 'eve' ? 'eve_memory_facts' : 'memory_facts', {rss: formatBytes(facts.main_process_peak_rss_bytes)});
         } else if (check.name === 'coverage') {
             fact = t('observation', {state: facts.observation_state || 'unknown'});
         } else if (check.name === 'capture') {

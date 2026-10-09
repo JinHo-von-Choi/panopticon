@@ -158,6 +158,11 @@ class HealthChecker:
         }
 
         if self._dispatcher is not None:
+            evidence_writer = getattr(self._dispatcher, "_evidence_writer", None)
+            if evidence_writer is not None:
+                evidence_status = evidence_writer.status()
+                if isinstance(evidence_status, dict):
+                    components["evidence"] = evidence_status
             channel_status = getattr(self._dispatcher, "channel_status", None)
             if isinstance(channel_status, dict):
                 components["notifications"] = {"status": "healthy", "channels": channel_status}

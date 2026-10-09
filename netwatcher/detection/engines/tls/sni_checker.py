@@ -61,12 +61,12 @@ class SNIChecker:
         parts = sni.lower().split(".")
         for i in range(len(parts)):
             check_domain = ".".join(parts[i:])
-            if check_domain in self._engine._blocked_domains:
-                feed_name = None
-                if self._engine._feed_manager:
-                    feed_name = self._engine._feed_manager.get_feed_for_domain(
-                        check_domain
-                    )
+            manager = self._engine._feed_manager
+            matcher = getattr(manager, "match_domain", None)
+            match = matcher(check_domain) if callable(matcher) else None
+            blocked = getattr(manager, "_blocked_domains", self._engine._blocked_domains)
+            if match or (not callable(matcher) and check_domain in blocked):
+                feed_name = match["source"] if match else None
                 return Alert(
                     engine=self._engine.name,
                     severity=Severity.CRITICAL,

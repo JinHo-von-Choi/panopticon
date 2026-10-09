@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -110,6 +111,8 @@ class PartitionManager:
         for part in partitions:
             # 파티션 이름에서 연월을 파싱: events_YYYY_MM
             name = part["name"]
+            if not re.fullmatch(r"events_[0-9]{4}_[0-9]{2}", name):
+                continue
             try:
                 parts = name.replace("events_", "").split("_")
                 year  = int(parts[0])
@@ -118,9 +121,15 @@ class PartitionManager:
                 continue
 
             # 해당 파티션의 마지막 날 = 다음 달 1일 - 1일
-            part_end = _add_months(datetime(year, month, 1, tzinfo=timezone.utc), 1)
+            try:
+                part_end = _add_months(datetime(year, month, 1, tzinfo=timezone.utc), 1)
+            except ValueError:
+                continue
             if part_end <= cutoff:
-                await self._pool.execute(f"DROP TABLE IF EXISTS {name}")
+                async with self._pool.acquire() as conn, conn.transaction():
+                    for table in ("business_reviews", "case_workflows", "event_work_links", "event_ingest"):
+                        await conn.execute(f"DELETE FROM {table} WHERE event_id IN (SELECT id FROM {name})")
+                    await conn.execute(f"DROP TABLE IF EXISTS {name}")
                 dropped.append(name)
                 logger.info("만료 파티션 삭제: %s", name)
 

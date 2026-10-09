@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+from uuid import uuid4
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -30,11 +31,30 @@ class Role(str, Enum):
 
 ROLE_PERMISSIONS: dict[Role, set[str]] = {
     Role.ADMIN:   {"*"},
-    Role.ANALYST: {"read", "acknowledge", "block", "unblock", "export"},
+    Role.ANALYST: {"read", "acknowledge", "export"},
     Role.VIEWER:  {"read", "export"},
 }
 
 ROLE_LEVEL = {Role.VIEWER: 0, Role.ANALYST: 1, Role.ADMIN: 2}
+
+ADMIN_CHANGE_PREFIXES = (
+    "/api/blocks", "/api/blocklist", "/api/whitelist", "/api/rules",
+    "/api/devices", "/api/engines", "/api/users",
+    "/api/incidents",
+    "/api/response-actions", "/api/change-proposals",
+)
+MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def is_admin_change(path: str, method: str) -> bool:
+    if method in MUTATION_METHODS and path.startswith("/api/work-schedules"):
+        return True
+    if method in MUTATION_METHODS and path.startswith("/api/events/") and path.endswith(("/business-review", "/case", "/work-schedule", "/evidence/pin")):
+        return True
+    return method in MUTATION_METHODS and any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in ADMIN_CHANGE_PREFIXES
+    )
 
 
 def has_permission(role: Role, action: str) -> bool:
@@ -64,7 +84,11 @@ def require_role(*roles: Role):
         if not auth_header.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-        payload = auth_manager.verify_token(auth_header[7:])
+        from netwatcher.web.auth import AuthStateUnavailable
+        try:
+            payload = await auth_manager.verify_token_async(auth_header[7:])
+        except AuthStateUnavailable:
+            raise HTTPException(503,'Account verification unavailable') from None
         if payload is None:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
@@ -82,25 +106,34 @@ def require_role(*roles: Role):
         await _audit_intent(request, payload)
         return payload
 
+    _dependency.required_roles = tuple(roles)
     return _dependency
 
 
 async def _audit_intent(request: Request, payload: dict) -> None:
-    if request.method == "POST" and request.url.path.endswith(("/approve", "/activate")):
+    protected = is_admin_change(request.url.path, request.method)
+    approval = request.method == "POST" and request.url.path.endswith(("/approve", "/activate"))
+    if protected or approval:
         audit = getattr(request.app.state, "audit_logger", None)
         if getattr(request.app.state, "audit_required", False):
+            if getattr(request.state, "audit_intent", None) is not None:
+                return
+            request_id = uuid4().hex
             try:
                 async with asyncio.timeout(2):
                     saved = audit is not None and await audit.log(
                         user=str(payload.get("sub", "unknown")),
                         action="authorized_intent", resource=request.url.path,
-                        details={"method": request.method},
+                        details={"method": request.method, "request_id": request_id},
                         ip=request.client.host if request.client else "",
                     )
             except Exception:
                 saved = False
             if not saved:
-                raise HTTPException(503, "Required approval audit is unavailable")
+                raise HTTPException(503, "Required change audit is unavailable")
+            request.state.audit_intent = {
+                "user": str(payload.get("sub", "unknown")), "request_id": request_id,
+            }
 
 
 class RBACManager:

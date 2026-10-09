@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 # 환경변수 → Config 경로 매핑
 _ENV_OVERRIDES: list[tuple[str, str, type]] = [
+    ("NETWATCHER_WEB_HOST", "web.host", str),
+    ("NETWATCHER_LOG_DIR", "logging.directory", str),
     ("NETWATCHER_DB_HOST", "postgresql.host", str),
     ("NETWATCHER_DB_PORT", "postgresql.port", int),
     ("NETWATCHER_DB_NAME", "postgresql.database", str),

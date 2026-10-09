@@ -120,6 +120,61 @@ async def test_proposal_records_current_config_for_rollback():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, [], OSError("private configuration path")])
+async def test_unavailable_current_config_cannot_create_proposal(failure):
+    repo = FakeRepo()
+    svc = _service(repo)
+    if isinstance(failure, Exception):
+        svc._editor.get_engine_config.side_effect = failure
+    else:
+        svc._editor.get_engine_config.return_value = failure
+    with pytest.raises(ProposalError, match="현재 설정을 조회할 수 없습니다"):
+        await svc.submit("port_scan", {"threshold": 80})
+    assert repo.rows == {}
+    svc._registry.reload_engine.assert_not_called()
+    svc._editor.update_engine_config.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_current_config_keeps_approval_pending():
+    repo = FakeRepo()
+    svc = _service(repo)
+    pid = await svc.submit("port_scan", {"threshold": 80})
+    svc._editor.get_engine_config.side_effect = OSError("private configuration path")
+    with pytest.raises(ProposalError, match="현재 설정을 조회할 수 없습니다"):
+        await svc.decide(pid, True, "admin")
+    assert repo.rows[pid]["status"] == STATUS_PENDING
+    svc._registry.reload_engine.assert_not_called()
+    svc._editor.update_engine_config.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_drift_without_replay_cannot_approve():
+    repo = FakeRepo()
+    svc = _service(repo)
+    pid = await svc.submit("port_scan", {"threshold": 80})
+    svc._editor.get_engine_config.return_value = {**CURRENT, "window_seconds": 90}
+    with pytest.raises(ProposalError, match="설정이 변경"):
+        await svc.decide(pid, True, "admin")
+    assert repo.rows[pid]["status"] == STATUS_PENDING
+    svc._registry.reload_engine.assert_not_called()
+    svc._editor.update_engine_config.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_drift_at_final_apply_check_does_not_write():
+    repo = FakeRepo()
+    svc = _service(repo)
+    pid = await svc.submit("port_scan", {"threshold": 80})
+    svc._editor.get_engine_config.side_effect = [dict(CURRENT), {**CURRENT, "window_seconds": 90}]
+    result = await svc.decide(pid, True, "admin")
+    assert result.applied is False
+    assert repo.rows[pid]["status"] == STATUS_FAILED
+    svc._registry.reload_engine.assert_not_called()
+    svc._editor.update_engine_config.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_ai_source_is_recorded():
     repo = FakeRepo()
     svc = _service(repo)
@@ -328,11 +383,10 @@ async def test_preexisting_drift_warns_but_does_not_block():
     """
     repo = FakeRepo()
     svc = _service(repo)
-    pid = await svc.submit("port_scan", {"threshold": 80})
-
     # 접수 시점에 이미 있던 기존 설정 문제
-    repo.rows[pid]["before"]["legacy_undeclared_key"] = 1
-    repo.rows[pid]["before"].pop("window_seconds", None)  # 스키마 필드 누락
+    svc._editor.get_engine_config.return_value["legacy_undeclared_key"] = 1
+    svc._editor.get_engine_config.return_value.pop("window_seconds", None)
+    pid = await svc.submit("port_scan", {"threshold": 80})
 
     decision = await svc.decide(pid, approved=True, decided_by="admin")
 

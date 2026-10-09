@@ -29,6 +29,7 @@
                 <div id="login-error" class="login-error" role="alert"></div>
                 <button type="submit" class="btn btn-accent" style="width:100%;margin-top:4px" data-i18n="login.button">Login</button>
             </form>
+            <a id="login-sso" href="/api/auth/oidc/start" class="btn btn-outline hidden" style="width:100%;margin-top:12px" data-i18n="login.sso">SSO 로그인</a>
         </div>
     </div>
 
@@ -115,6 +116,7 @@
             <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
             <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none" data-i18n="tabs.ai_analyzer">AI Analyzer</button>
             <button class="tab" data-tab="governance" data-i18n="tabs.governance">Governance</button>
+            <button class="tab" data-tab="users" style="display:none" data-i18n="console.users.title">Accounts</button>
         </nav>
 
         <!-- Events Tab -->
@@ -150,6 +152,31 @@
                 <button id="btn-export-csv" class="btn btn-export" data-i18n="toolbar.export_csv">Export CSV</button>
                 <button id="btn-export-json" class="btn btn-export" data-i18n="toolbar.export_json">Export JSON</button>
             </div>
+            <div class="toolbar case-queue-toolbar" id="case-queue-toolbar" hidden>
+                <label for="filter-case-status" data-i18n="console.case_queue.status">Case status</label>
+                <select id="filter-case-status">
+                    <option value="" data-i18n="console.case_queue.all">All statuses</option>
+                    <option value="open" data-i18n="console.case_workflow.statuses.open">Open</option>
+                    <option value="investigating" data-i18n="console.case_workflow.statuses.investigating">Investigating</option>
+                    <option value="closed" data-i18n="console.case_workflow.statuses.closed">Closed</option>
+                </select>
+                <label for="filter-case-owner" data-i18n="console.case_queue.owner">Owner name</label>
+                <input id="filter-case-owner" type="text" class="input-search" maxlength="128">
+                <label><input id="filter-case-unassigned" type="checkbox"><span data-i18n="console.case_queue.unassigned">Unassigned only</span></label>
+                <label id="case-mine-control" hidden><input id="filter-case-mine" type="checkbox"><span data-i18n="console.case_queue.mine">Assigned to me</span></label>
+                <button id="btn-weekly-report" type="button" class="btn" data-i18n="console.case_queue.report">Last 7 days CSV</button>
+                <span class="scope-hint" data-i18n="console.case_queue.scope">Report covers the last 7 days independently of list filters.</span>
+            </div>
+            <details id="event-groups-panel" class="detail-section" hidden>
+                <summary>반복 경보 묶음</summary>
+                <p class="scope-note">개별 목록의 필터와 별도로 조회합니다. 원본 경보와 판정은 경보별로 유지됩니다.</p>
+                <div class="toolbar">
+                    <label>묶음 조회 시작 <input id="group-period-start" type="datetime-local"></label>
+                    <label>묶음 조회 종료 <input id="group-period-end" type="datetime-local"></label>
+                    <button class="btn" id="group-period-load" type="button">묶음 조회</button>
+                </div>
+                <div id="event-group-list" aria-live="polite"></div>
+            </details>
             <div class="table-wrapper">
                 <table id="events-table">
                     <thead>
@@ -160,6 +187,7 @@
                             <th data-i18n="table.title">Title</th>
                             <th data-i18n="table.source">Source</th>
                             <th data-i18n="table.destination">Destination</th>
+                            <th id="events-case-header" hidden data-i18n="console.case_queue.column">Owner / status</th>
                             <th data-i18n="table.actions">Actions</th>
                         </tr>
                     </thead>
@@ -182,6 +210,7 @@
                 </label>
                 <button id="btn-incidents-refresh" class="btn" data-i18n="common.refresh">Refresh</button>
             </div>
+            <p id="incident-control-status" role="status" aria-live="polite"></p>
             <div class="incidents-layout">
                 <div id="incidents-list" class="incidents-list"></div>
                 <div id="incident-detail" class="incident-detail"></div>
@@ -190,6 +219,8 @@
 
         <!-- Defense Tab -->
         <section id="tab-defense" class="tab-content">
+            <div id="response-panel" hidden></div>
+            <div id="defense-legacy">
             <h3 class="section-title">
                 <span data-i18n="defense.active_blocks">Active Blocks</span>
                 <span class="section-count" id="blocks-count">0</span>
@@ -218,12 +249,16 @@
                 </table>
             </div>
 
+            </div>
+            <div id="signature-rules">
             <h3 class="section-title">
                 <span data-i18n="defense.signature_rules">Signature Rules</span>
                 <span class="section-count" id="rules-count">0</span>
             </h3>
+            <p id="rules-status" class="section-hint" role="status" aria-live="polite"></p>
             <div class="toolbar">
-                <button id="btn-rules-reload" class="btn" data-i18n="defense.reload_rules">Reload Rules</button>
+                <button id="btn-rules-refresh" class="btn" data-i18n="console.rule_control.refresh">다시 조회</button>
+                <button id="btn-rules-reload" disabled class="btn" data-i18n="defense.reload_rules">Reload Rules</button>
             </div>
             <div class="table-wrapper">
                 <table>
@@ -238,6 +273,8 @@
                     </thead>
                     <tbody id="rules-body"></tbody>
                 </table>
+            </div>
+            <div id="rules-pagination" class="pagination"></div>
             </div>
         </section>
 
@@ -270,7 +307,7 @@
             <div id="inv-summary" class="inv-summary"></div>
             <div class="toolbar">
                 <select id="devices-filter-type">
-                    <option value="">All Types</option>
+                    <option value="" data-i18n="console.blocklist_control.all_types">All Types</option>
                     <option value="pc">PC</option>
                     <option value="mobile">Mobile</option>
                     <option value="printer">Printer</option>
@@ -318,53 +355,60 @@
                 <select id="bl-filter-type">
                     <option value="">All Types</option>
                     <option value="ip">IP</option>
-                    <option value="domain">Domain</option>
+                    <option value="domain" data-i18n="console.blocklist_control.domain">Domain</option>
                 </select>
                 <select id="bl-filter-source">
-                    <option value="">All Sources</option>
-                    <option value="custom">Custom</option>
-                    <option value="feed">Feed</option>
+                    <option value="" data-i18n="console.blocklist_control.all_sources">All Sources</option>
+                    <option value="custom" data-i18n="console.blocklist_control.custom">Custom</option>
+                    <option value="feed" data-i18n="console.blocklist_control.feed">Feed</option>
                 </select>
-                <input type="text" id="bl-search" class="input-search" placeholder="Search blocklist..." />
-                <button id="btn-add-blocklist" class="btn btn-accent">Add Entry</button>
+                <input type="text" id="bl-search" class="input-search" maxlength="253" data-i18n="[placeholder]console.blocklist_control.search" placeholder="Search blocklist..." />
+                <button id="btn-add-blocklist" class="btn btn-accent" disabled data-i18n="console.blocklist_control.add">Add Entry</button>
+                <button id="bl-refresh" class="btn" data-i18n="console.blocklist_control.refresh">Refresh</button>
             </div>
+            <p class="scope-note" data-i18n="console.blocklist_control.scope"></p>
+            <p id="bl-status" role="status" aria-live="polite"></p>
             <div id="bl-stats" class="bl-stats"></div>
             <div class="table-wrapper">
                 <table id="blocklist-table">
                     <thead>
                         <tr>
-                            <th>Type</th>
-                            <th>Value</th>
-                            <th>Source</th>
-                            <th>Actions</th>
+                            <th data-i18n="console.blocklist_control.type">Type</th>
+                            <th data-i18n="console.blocklist_control.value">Value</th>
+                            <th data-i18n="console.blocklist_control.source">Source</th>
+                            <th data-i18n="console.blocklist_control.actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="blocklist-body"></tbody>
                 </table>
             </div>
             <div class="pagination" id="blocklist-pagination"></div>
+            <p id="bl-details" role="status" aria-live="polite"></p>
         </section>
 
         <!-- Whitelist Tab -->
         <section id="tab-whitelist" class="tab-content">
             <div class="toolbar">
                 <select id="wl-filter-type">
-                    <option value="">All Types</option>
+                    <option value="" data-i18n="console.whitelist_control.all_types">모든 유형</option>
                     <option value="ip">IP</option>
                     <option value="mac">MAC</option>
-                    <option value="domain">Domain</option>
-                    <option value="ip_range">IP Range</option>
+                    <option value="domain" data-i18n="console.whitelist_control.domain">도메인</option>
+                    <option value="ip_range" data-i18n="console.whitelist_control.range">IP 대역</option>
+                    <option value="suffix" data-i18n="console.whitelist_control.suffix">도메인 접미사</option>
                 </select>
-                <input type="text" id="wl-search" class="input-search" placeholder="Search whitelist..." />
-                <button id="btn-add-whitelist" class="btn btn-accent">Add Entry</button>
+                <input type="text" id="wl-search" class="input-search" placeholder="탐지 예외 검색" aria-label="탐지 예외 검색" data-i18n="console.whitelist_control.search" data-i18n-aria-label="console.whitelist_control.search" />
+                <button id="whitelist-refresh" class="btn" data-i18n="console.whitelist_control.refresh">목록 다시 조회</button>
+                <button id="btn-add-whitelist" class="btn btn-accent" data-i18n="console.whitelist_control.add">항목 추가</button>
             </div>
+            <p id="whitelist-control-status" class="scope-note" role="status" aria-live="polite"></p>
             <div class="table-wrapper">
                 <table id="whitelist-table">
                     <thead>
                         <tr>
-                            <th>Type</th>
-                            <th>Value</th>
-                            <th>Actions</th>
+                            <th data-i18n="console.whitelist_control.type">유형</th>
+                            <th data-i18n="console.whitelist_control.value">값</th>
+                            <th data-i18n="console.whitelist_control.actions">조작</th>
                         </tr>
                     </thead>
                     <tbody id="whitelist-body"></tbody>
@@ -375,11 +419,19 @@
         <!-- Engines Tab -->
         <section id="tab-engines" class="tab-content">
             <div class="engines-layout">
+                <div class="engine-control-bar">
+                    <p id="engine-control-status" role="status" aria-live="polite"></p>
+                    <button id="engine-control-refresh" class="btn" data-i18n="console.engine_control.refresh">설정 다시 조회</button>
+                </div>
                 <div class="engines-list" id="engines-list"></div>
                 <div class="engine-detail" id="engine-detail">
-                    <div class="engine-detail-empty">Select an engine to configure</div>
+                    <div class="engine-detail-empty" data-i18n="console.engine_control.select">엔진을 선택해 설정을 확인하세요.</div>
                 </div>
             </div>
+        </section>
+
+        <section id="tab-users" class="tab-content">
+            <section id="users-panel" class="detail-section"></section>
         </section>
 
         <!-- Governance Tab (PR 11: 관측 범위 + 제안 승인) -->
@@ -408,7 +460,7 @@
             <section id="onboarding-panel" class="detail-section">
                 <div class="onboarding-check-heading"><h3 data-i18n="console.onboarding.title">Installation checks</h3>
                 <button type="button" id="onboarding-refresh" class="btn" data-i18n="toolbar.refresh">Refresh</button></div>
-                <p class="scope-hint" data-i18n="console.onboarding.scope">Current checks do not certify production coverage.</p>
+                <p class="scope-hint" data-onboarding-scope data-i18n="console.onboarding.scope">Current checks do not certify production coverage.</p>
                 <div id="onboarding-box" class="onboarding-grid"></div>
             </section>
             <div class="detail-section">
@@ -427,9 +479,25 @@
                 </p>
                 <div id="observation-box"></div>
             </div>
-            <div class="detail-section">
+            <div id="proposal-panel" class="detail-section">
                 <h3><span data-i18n="console.proposals.title">설정 제안 승인</span> <span class="proposals-count" id="proposals-count"></span></h3>
                 <p class="scope-hint" data-i18n="console.proposals.hint">검증 근거를 확인한 사람이 승인해야 설정이 변경됩니다.</p>
+                <div id="proposal-control-toolbar" class="toolbar" hidden>
+                    <button id="proposal-control-refresh" class="btn" data-i18n="console.proposal_control.refresh">상태 다시 확인</button>
+                    <span id="proposal-control-status" role="status"></span>
+                    <button id="proposal-page-prev" class="btn" data-i18n="console.proposal_control.previous">이전</button>
+                    <button id="proposal-page-next" class="btn" data-i18n="console.proposal_control.next">다음</button>
+                </div>
+                <form id="proposal-create-form" class="proposal-create-form" hidden>
+                    <h4 data-i18n="console.proposal_control.create">포트 스캔 임계값 제안</h4>
+                    <p><span data-i18n="console.proposal_control.current">현재 임계값</span>: <strong id="proposal-current-threshold">—</strong></p>
+                    <label for="proposal-threshold" data-i18n="console.proposal_control.threshold">제안 임계값 (5~100)</label>
+                    <input id="proposal-threshold" type="number" min="5" max="100" step="1" value="15" required>
+                    <label for="proposal-reason" data-i18n="console.proposal_control.reason">제안 이유</label>
+                    <textarea id="proposal-reason" maxlength="2000" rows="2"></textarea>
+                    <p class="scope-hint" data-i18n="console.proposal_control.hint">제안만으로 설정은 바뀌지 않습니다. 정상·공격 입력을 비교하고 검증 근거를 연결한 뒤 관리자가 승인합니다.</p>
+                    <button id="proposal-create-submit" type="submit" class="btn" data-i18n="console.proposal_control.submit">제안 제출</button>
+                </form>
                 <div class="scope-table-scroll" tabindex="0"><table class="scope-table">
                     <thead>
                         <tr>
@@ -445,35 +513,37 @@
         <!-- AI Analyzer Tab -->
         <section id="tab-ai-analyzer" class="tab-content">
             <div id="ai-analyzer-status-bar" class="toolbar" style="align-items:center;gap:16px;flex-wrap:wrap;">
-                <span>Provider: <strong id="ai-provider">—</strong></span>
-                <span>Interval: <strong id="ai-interval">—</strong> min</span>
-                <span>Lookback: <strong id="ai-lookback">—</strong> min</span>
-                <span>FP Threshold: <strong id="ai-fp-threshold">—</strong></span>
+                <span data-i18n="console.ai_status.state">분석 상태</span><strong id="ai-state" role="status" aria-live="polite">—</strong>
+                <span><span data-i18n="console.ai_status.provider">분석 도구</span>: <strong id="ai-provider">—</strong></span>
+                <span><span data-i18n="console.ai_status.interval">분석 주기(분)</span>: <strong id="ai-interval">—</strong></span>
+                <span><span data-i18n="console.ai_status.lookback">조회 범위(분)</span>: <strong id="ai-lookback">—</strong></span>
+                <span><span data-i18n="console.ai_status.fp_threshold">연속 오탐 기준</span>: <strong id="ai-fp-threshold">—</strong></span>
             </div>
             <div class="toolbar" style="margin-top:8px">
-                <select id="ai-filter-verdict">
-                    <option value="">All Verdicts</option>
-                    <option value="CONFIRMED_THREAT">Confirmed Threat</option>
-                    <option value="FALSE_POSITIVE">False Positive</option>
-                    <option value="UNCERTAIN">Uncertain</option>
-                    <option value="adjustment">Adjustment</option>
+                <select id="ai-filter-verdict" aria-label="판정 필터" data-i18n="[aria-label]console.ai_status.verdict">
+                    <option value="" data-i18n="console.ai_status.all">All Verdicts</option>
+                    <option value="CONFIRMED_THREAT" data-i18n="console.ai_status.confirmed">Confirmed Threat</option>
+                    <option value="FALSE_POSITIVE" data-i18n="console.ai_status.fp">False Positive</option>
+                    <option value="UNCERTAIN" data-i18n="console.ai_status.uncertain">Uncertain</option>
+                    <option value="adjustment" data-i18n="console.ai_status.adjustment">Adjustment</option>
                 </select>
-                <select id="ai-filter-pagesize">
+                <select id="ai-filter-pagesize" aria-label="페이지당 기록 수">
                     <option value="50" selected>50 / page</option>
                     <option value="100">100 / page</option>
                 </select>
-                <button id="btn-ai-refresh" class="btn">Refresh</button>
+                <button id="btn-ai-refresh" class="btn" data-i18n="console.ai_status.refresh">새로고침</button>
             </div>
+            <p class="muted" data-i18n="console.ai_status.notice">AI 판정은 조사 참고 자료입니다. 설정 제안은 검증과 관리자 승인을 거쳐 반영됩니다.</p>
             <div class="table-wrapper">
                 <table id="ai-logs-table">
                     <thead>
                         <tr>
-                            <th>Time</th>
-                            <th>Verdict</th>
-                            <th>Engine</th>
-                            <th>Reason</th>
-                            <th>Adjustments</th>
-                            <th>Provider</th>
+                            <th data-i18n="console.ai_status.time">Time</th>
+                            <th data-i18n="console.ai_status.verdict">Verdict</th>
+                            <th data-i18n="console.ai_status.engine">Engine</th>
+                            <th data-i18n="console.ai_status.reason">Reason</th>
+                            <th data-i18n="console.ai_status.changes">Adjustments</th>
+                            <th data-i18n="console.ai_status.provider">Provider</th>
                         </tr>
                     </thead>
                     <tbody id="ai-logs-body"></tbody>
@@ -553,30 +623,30 @@
     <div id="blocklist-form-overlay" class="modal-overlay hidden">
         <div class="modal" style="max-width:500px">
             <div class="modal-header">
-                <h2>Add Blocklist Entry</h2>
+                <h2 data-i18n="console.blocklist_control.add">Add Blocklist Entry</h2>
                 <button class="modal-close" id="blocklist-form-close-btn">&times;</button>
             </div>
             <div class="modal-body">
                 <form id="blocklist-form">
                     <div class="form-group">
-                        <label for="bf-type">Type</label>
+                        <label for="bf-type" data-i18n="console.blocklist_control.type">Type</label>
                         <select id="bf-type" style="width:100%">
-                            <option value="ip">IP Address</option>
-                            <option value="domain">Domain</option>
+                            <option value="ip" data-i18n="console.blocklist_control.ip">IP Address</option>
+                            <option value="domain" data-i18n="console.blocklist_control.domain">Domain</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="bf-value">Value</label>
-                        <input type="text" id="bf-value" class="input-search" placeholder="e.g. 10.0.0.1 or evil.com" style="width:100%" />
+                        <label for="bf-value" data-i18n="console.blocklist_control.value">Value</label>
+                        <input type="text" id="bf-value" class="input-search" maxlength="253" required data-i18n="[placeholder]console.blocklist_control.value" placeholder="IP, CIDR, domain" style="width:100%" />
                     </div>
                     <div class="form-group">
-                        <label for="bf-notes">Notes</label>
-                        <textarea id="bf-notes" class="input-search" rows="2" placeholder="Reason for blocking..." style="width:100%"></textarea>
+                        <label for="bf-notes" data-i18n="console.blocklist_control.notes">Notes</label>
+                        <textarea id="bf-notes" class="input-search" rows="2" maxlength="2048" style="width:100%"></textarea>
                     </div>
                     <div id="bf-error" style="color:var(--critical);font-size:13px;margin-bottom:8px;display:none"></div>
                     <div class="form-actions">
-                        <button type="button" class="btn" id="blocklist-form-cancel-btn">Cancel</button>
-                        <button type="submit" class="btn btn-accent">Add</button>
+                        <button type="button" class="btn" id="blocklist-form-cancel-btn" data-i18n="console.blocklist_control.cancel">Cancel</button>
+                        <button type="submit" class="btn btn-accent" disabled data-i18n="console.blocklist_control.add">Add</button>
                     </div>
                 </form>
             </div>
@@ -587,28 +657,29 @@
     <div id="whitelist-form-overlay" class="modal-overlay hidden">
         <div class="modal" style="max-width:500px">
             <div class="modal-header">
-                <h2>Add Whitelist Entry</h2>
+                <h2 data-i18n="console.whitelist_control.add">항목 추가</h2>
                 <button class="modal-close" id="whitelist-form-close-btn">&times;</button>
             </div>
             <div class="modal-body">
                 <form id="whitelist-form">
                     <div class="form-group">
-                        <label for="wf-type">Type</label>
+                        <label for="wf-type" data-i18n="console.whitelist_control.type">유형</label>
                         <select id="wf-type" style="width:100%">
-                            <option value="ip">IP Address</option>
+                            <option value="ip" data-i18n="console.blocklist_control.ip">IP Address</option>
                             <option value="mac">MAC Address</option>
-                            <option value="domain">Domain</option>
+                            <option value="domain" data-i18n="console.whitelist_control.domain">도메인</option>
                             <option value="ip_range">IP Range (CIDR)</option>
+                            <option value="suffix" data-i18n="console.whitelist_control.suffix">도메인 접미사</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="wf-value">Value</label>
-                        <input type="text" id="wf-value" class="input-search" placeholder="e.g. 192.168.0.1 or trusted.com" style="width:100%" />
+                        <label for="wf-value" data-i18n="console.whitelist_control.value">값</label>
+                        <input type="text" id="wf-value" class="input-search" maxlength="253" placeholder="e.g. 192.168.0.1 or trusted.com" style="width:100%" />
                     </div>
                     <div id="wf-error" style="color:var(--critical);font-size:13px;margin-bottom:8px;display:none"></div>
                     <div class="form-actions">
-                        <button type="button" class="btn" id="whitelist-form-cancel-btn">Cancel</button>
-                        <button type="submit" class="btn btn-accent">Add</button>
+                        <button type="button" class="btn" id="whitelist-form-cancel-btn" data-i18n="console.whitelist_control.cancel">취소</button>
+                        <button type="submit" class="btn btn-accent" data-i18n="console.whitelist_control.add">항목 추가</button>
                     </div>
                 </form>
             </div>

@@ -124,8 +124,29 @@ async def test_drop_expired_partitions(db):
 
     pm = PartitionManager(pool)
 
-    # retention 90일로 삭제 — 2020년 파티션은 삭제되어야 한다
+    # 파티션 삭제 실패 때 판정·인계 삭제도 함께 되돌아가야 한다.
+    import asyncpg
+    event_id = await pool.fetchval("""INSERT INTO events(timestamp,engine,severity,title)
+        VALUES('2020-01-10','test','WARNING','old event') RETURNING id""")
+    await pool.execute("""INSERT INTO case_workflows(event_id,version,owner,status,actor,updated_at)
+        VALUES($1,1,'operator','investigating','admin',NOW())""", event_id)
+    await pool.execute("""INSERT INTO case_history(event_id,version,owner,status,note,actor,updated_at)
+        VALUES($1,1,'operator','investigating','retain note','admin',NOW())""", event_id)
+    await pool.execute("""INSERT INTO business_reviews(event_id,version,decision,note,actor,scope,reviewed_at)
+        VALUES($1,1,'investigate','retain review','admin','{}',NOW())""", event_id)
+    await pool.execute("""CREATE TABLE partition_retention_guard (
+        event_id BIGINT,event_timestamp TIMESTAMPTZ,
+        FOREIGN KEY(event_id,event_timestamp) REFERENCES events_2020_01(id,timestamp))""")
+    with pytest.raises(asyncpg.DependentObjectsStillExistError):
+        await pm.drop_expired_partitions(retention_days=90)
+    for table in ('events','business_reviews','case_workflows','case_history'):
+        assert await pool.fetchval(f'SELECT count(*) FROM {table}') == 1
+    await pool.execute('DROP TABLE partition_retention_guard')
+
+    # retention 90일로 삭제 — 2020년 파티션과 연결 기록은 삭제되어야 한다.
     dropped = await pm.drop_expired_partitions(retention_days=90)
+    for table in ('business_reviews','case_workflows','case_history'):
+        assert await pool.fetchval(f'SELECT count(*) FROM {table}') == 0
     assert "events_2020_01" in dropped
 
     # 현재 월 파티션은 유지

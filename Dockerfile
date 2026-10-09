@@ -6,8 +6,8 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY . .
 
@@ -20,3 +20,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # DB 마이그레이션: docker compose run --rm db-migrate
 ENTRYPOINT ["python", "-m", "netwatcher"]
+
+FROM base AS native
+CMD ["--component", "sensor"]
+
+FROM base AS unprivileged
+RUN groupadd --gid 10001 panopticon && \
+    useradd --uid 10001 --gid 10001 --no-create-home panopticon && \
+    chown -R 10001:10001 /app/data
+USER 10001:10001
+
+FROM unprivileged AS native-console
+CMD ["--component", "console"]
+
+FROM unprivileged AS eve

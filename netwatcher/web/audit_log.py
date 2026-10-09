@@ -1,7 +1,7 @@
 """감사 로그 (Audit Trail).
 
 API 호출에 대한 사용자 행위를 PostgreSQL에 기록한다.
-audit_log 테이블이 존재할 때만 동작하며, 부재 시 graceful하게 무시한다.
+저장 성공 여부를 반환한다. 필수 감사 호출자는 저장 실패 시 변경을 거절한다.
 
 작성자: 최진호
 작성일: 2026-03-29
@@ -19,11 +19,41 @@ import asyncpg
 logger = logging.getLogger("netwatcher.web.audit_log")
 
 
+def _details(value):
+    decoded = json.loads(value) if isinstance(value, str) else value
+    if decoded is None:
+        return {}
+    if not isinstance(decoded, dict):
+        raise ValueError("Invalid stored audit details")
+    return decoded
+
+
 class AuditLogger:
     """비동기 감사 로그 기록 및 조회."""
 
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
+
+    async def change_history(self, request_id: str) -> list[dict[str, Any]]:
+        """한 변경의 의도·상세·결과를 조회한다. 저장소 실패를 빈 이력으로 숨기지 않는다."""
+        rows = await self._pool.fetch(
+            """WITH decisive AS (
+                   SELECT id FROM audit_log WHERE details->>'request_id'=$1
+                     AND action IN ('sensor_change_prepared','sensor_change_applied','sensor_change_archived')
+                   ORDER BY created_at DESC,id DESC LIMIT 3
+               ), recent AS (
+                   SELECT id FROM audit_log WHERE details->>'request_id'=$1
+                     AND action IN ('authorized_intent','change_prepared','api_mutation',
+                                    'sensor_change_prepared','sensor_change_applied','sensor_change_archived')
+                   ORDER BY created_at DESC,id DESC LIMIT 17
+               )
+               SELECT user_id,action,resource,details,created_at FROM audit_log
+               WHERE id IN (SELECT id FROM decisive UNION SELECT id FROM recent)
+               ORDER BY created_at,id""", request_id,
+        )
+        return [{"user": row["user_id"], "action": row["action"], "resource": row["resource"],
+                 "details": _details(row["details"]),
+                 "created_at": row["created_at"].isoformat() if isinstance(row["created_at"], datetime) else str(row["created_at"])} for row in rows]
 
     async def log(
         self,
@@ -36,7 +66,7 @@ class AuditLogger:
         """감사 이벤트를 audit_log 테이블에 기록한다."""
         sql = """
             INSERT INTO audit_log (user_id, action, resource, details, ip, created_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+            VALUES ($1, $2, $3, $4::text::jsonb, $5, $6)
         """
         now = datetime.now(timezone.utc)
         try:
@@ -88,29 +118,17 @@ class AuditLogger:
             ORDER BY created_at DESC
             LIMIT ${idx}
         """
-        try:
-            async with self._pool.acquire() as conn:
-                rows = await conn.fetch(sql, *params)
-        except asyncpg.UndefinedTableError:
-            return []
-        except Exception:
-            logger.exception("Failed to query audit log")
-            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
 
         results = []
         for r in rows:
-            details = r["details"]
-            if isinstance(details, str):
-                try:
-                    details = json.loads(details)
-                except (json.JSONDecodeError, TypeError):
-                    details = {}
             results.append({
                 "id":         r["id"],
                 "user":       r["user_id"],
                 "action":     r["action"],
                 "resource":   r["resource"],
-                "details":    details if details is not None else {},
+                "details":    _details(r["details"]),
                 "ip":         r["ip"],
                 "created_at": r["created_at"].isoformat() if isinstance(r["created_at"], datetime) else str(r["created_at"]),
             })

@@ -219,7 +219,7 @@ class TestHAManager:
     async def test_cluster_mode(self):
         """Redis 활성 시 cluster 모드 시작."""
         redis = MockRedisClient(available=True)
-        mgr = HAManager(redis, config={"ha": {"ttl_seconds": 5}})
+        mgr = HAManager(redis, config={"ha": {"enabled": True, "ttl_seconds": 5}})
 
         await mgr.start()
         await asyncio.sleep(0.5)
@@ -230,6 +230,20 @@ class TestHAManager:
         assert status["mode"] == "cluster"
 
         await mgr.stop()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("enabled", [False, "false", None])
+    async def test_disabled_ha_does_not_acquire_redis_leadership(self, enabled):
+        redis = MockRedisClient(available=True)
+        mgr = HAManager(redis, config={"ha": {"enabled": enabled}})
+        await mgr.start()
+        try:
+            assert (await mgr.cluster_status())["mode"] == "standalone"
+            assert redis._store == {}
+            assert redis._sets == {}
+            assert redis._hashes == {}
+        finally:
+            await mgr.stop()
 
 
 # ── CheckpointService 테스트 ─────────────────────────────────────────────────

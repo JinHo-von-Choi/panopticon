@@ -18,6 +18,7 @@ import pytest
 
 import netwatcher.web.routes as routes_pkg
 from netwatcher.web.server import create_app
+from netwatcher.utils.config import Config
 
 
 # UI 로드맵에서 의도적으로 제외된 라우터.
@@ -80,9 +81,7 @@ def test_unregistered_factories_are_absent_from_server():
 
 @pytest.fixture
 def wiring_config():
-    config = MagicMock()
-    config.section.return_value = {"cors": {"allowed_origins": ["http://localhost:38585"]}}
-    return config
+    return Config({'web': {'cors': {'allowed_origins': ['http://localhost:38585']}}})
 
 
 def test_create_app_wires_every_optional_component(wiring_config):

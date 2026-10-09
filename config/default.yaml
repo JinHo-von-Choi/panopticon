@@ -3,9 +3,27 @@
 # NETWATCHER_DB_USER, NETWATCHER_DB_PASSWORD, NETWATCHER_SLACK_WEBHOOK_URL,
 # NETWATCHER_SLACK_DASHBOARD_URL, NETWATCHER_JWT_SECRET (.env.example 참조)
 netwatcher:
+  input:
+    mode: "eve"
+    eve:
+      retention:
+        days: 30
+        max_records: 250000
+        max_bytes: 268435456
+        cleanup_interval_seconds: 60
+      sources:
+      - sensor_id: "suricata-1"
+        source_id: "office-eve"
+        directory: "/var/log/suricata"
+        filename: "eve.json"
   language:
     default: "ko"
     available: ["ko", "en"]
+  native:
+    sensor_id: office-native
+    heartbeat_seconds: 5
+    lease_seconds: 30
+
   interface:       # null = auto-detect
   bpf_filter: ""   # additional BPF filter
   capture:
@@ -77,6 +95,12 @@ netwatcher:
     token_expire_hours: 24
     login_attempts_per_minute: 10
     multi_user: false        # false = 기존 단일 사용자 모드 유지
+    oidc:
+      enabled: false
+      issuer: ""
+      client_id: ""
+      redirect_uri: ""
+      endpoint_origins: []
     default_admin_password: ""
     api_rate_limit:
       enabled: true
@@ -286,7 +310,7 @@ netwatcher:
 
   response:
     enabled: false
-    backend: "iptables"            # enforcement 는 iptables 만 검증 완료
+    backend: "iptables"            # 실행 지원에는 만료·권한 분리·복구 검증이 필요
     chain_name: "NETWATCHER_BLOCK" # INPUT 등 관측 범위 밖 체인은 거부
     default_duration: 3600         # 0(영구차단) 은 미지원
     max_blocks: 1000
@@ -335,7 +359,7 @@ netwatcher:
     checkpoint_interval: 60   # 엔진 상태 체크포인트 주기 (초)
 
   ha:
-    enabled: false              # true 시 Redis 기반 HA 클러스터 모드 활성화
+    enabled: false              # 실험 기능. limited 구성에서는 활성화를 거부함
     ttl_seconds: 30             # 리더 락 TTL / 하트비트 TTL
     lock_key: "ha:leader"       # 리더 선출 Redis 키
 

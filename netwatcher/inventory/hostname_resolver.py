@@ -143,8 +143,8 @@ def _nbns_hostname(packet: Packet) -> HostnameHit | None:
         if name:
             return HostnameHit("netbios", name, mac, _src_ip(packet))
 
-    except Exception:
-        pass
+    except (ValueError, TypeError, AttributeError, IndexError, struct.error):
+        return None
 
     return None
 
@@ -273,7 +273,7 @@ def _llmnr_hostname(packet: Packet) -> HostnameHit | None:
             name = _extract_rr_name(rr)
             if name:
                 return HostnameHit("llmnr", name, mac, _src_ip(packet))
-    except Exception:
-        pass
+    except (ValueError, TypeError, AttributeError, IndexError, struct.error):
+        return None
 
     return None

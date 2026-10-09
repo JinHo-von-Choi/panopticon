@@ -45,6 +45,18 @@ async def test_timeout_kills_and_reaps_worker():
 
 
 @pytest.mark.asyncio
+async def test_result_limit_rejects_large_worker_output_and_reaps():
+    runner = ReplayRunner(result_bytes=1024)
+    trace = source(1000)
+    for index, record in enumerate(trace.records):
+        record['src_ip'] = f'192.0.2.{index // 10 + 1}'
+    contract = AnalysisContract(engine_params={'threshold': 5})
+    with pytest.raises(ReplayBudgetError, match='result_bytes'):
+        await runner.run(trace, contract, contract, trace.size_bytes)
+    assert not runner._processes
+
+
+@pytest.mark.asyncio
 async def test_cancellation_reaps_worker():
     runner = ReplayRunner()
     trace = source(50000)

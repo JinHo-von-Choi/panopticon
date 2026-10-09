@@ -96,16 +96,17 @@ def test_list_falls_back_to_cache_without_store(correlator_without_store):
     assert data["total"] == 1
 
 
-def test_list_falls_back_when_store_errors(correlator_with_store):
+def test_list_rejects_store_failure_without_serving_cache(correlator_with_store):
     correlator, repo = correlator_with_store
     repo.list_recent.side_effect = RuntimeError("connection lost")
     correlator.get_incidents.return_value = [{"id": 99}]
 
     resp = _client(correlator).get("/api/incidents")
 
-    assert resp.status_code == 200
-    assert resp.json()["source"] == "cache"
-    assert resp.json()["incidents"][0]["id"] == 99
+    assert resp.status_code == 503
+    assert "incidents" not in resp.json()
+    assert resp.json()["detail"] == "사건 목록을 조회하지 못했습니다. 다시 조회하세요."
+    correlator.get_incidents.assert_not_called()
 
 
 def test_detail_reads_from_store(correlator_with_store):
@@ -137,6 +138,7 @@ def test_resolve_persists_even_when_not_cached(correlator_with_store):
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     repo.resolve.assert_awaited_once_with(7)
+    correlator.resolve_incident.assert_called_once_with(7, persist=False)
 
 
 def test_resolve_404_when_unknown(correlator_with_store):
@@ -147,3 +149,33 @@ def test_resolve_404_when_unknown(correlator_with_store):
     resp = _client(correlator).post("/api/incidents/12345/resolve")
 
     assert resp.status_code == 404
+    correlator.resolve_incident.assert_not_called()
+
+
+def test_resolve_store_failure_does_not_modify_cache(correlator_with_store):
+    correlator, repo = correlator_with_store
+    repo.resolve.side_effect = RuntimeError("connection lost")
+    correlator.resolve_incident.return_value = True
+    response = _client(correlator).post("/api/incidents/7/resolve")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "사건 해결 결과를 확인하지 못했습니다. 다시 조회하세요."
+    correlator.resolve_incident.assert_not_called()
+
+
+def test_detail_store_failure_never_serves_cached_record(correlator_with_store):
+    correlator, repo = correlator_with_store
+    repo.get_by_id.side_effect = RuntimeError("connection lost")
+    correlator.get_incident.return_value = _row(resolved=True)
+    response = _client(correlator).get("/api/incidents/7")
+    assert response.status_code == 503
+    assert "incident" not in response.json()
+    correlator.get_incident.assert_not_called()
+
+
+def test_missing_stored_record_never_serves_cached_record(correlator_with_store):
+    correlator, repo = correlator_with_store
+    repo.get_by_id.return_value = None
+    correlator.get_incident.return_value = _row()
+    response = _client(correlator).get("/api/incidents/7")
+    assert response.status_code == 404
+    correlator.get_incident.assert_not_called()

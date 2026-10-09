@@ -7,6 +7,8 @@ from typing import Any
 
 import aiohttp
 
+from netwatcher.utils.public_http import public_client_session
+
 from netwatcher.alerts.channels.base import NotificationChannel
 from netwatcher.detection.models import Alert
 from netwatcher.utils.network import validate_outbound_url
@@ -56,7 +58,7 @@ class DiscordChannel(NotificationChannel):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with public_client_session() as session:
                 async with session.post(
                     self._webhook_url, json=payload,
                     timeout=aiohttp.ClientTimeout(total=10)

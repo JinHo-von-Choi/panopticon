@@ -6,19 +6,21 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from netwatcher.web.rbac import Role, require_role
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
+from netwatcher.web.evidence_download import evidence_download
+from netwatcher.web.local_evidence import LocalEvidenceReader
 
-from netwatcher.alerts.dispatcher import AlertDispatcher
-from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.storage.repositories import EventRepository
 
 if TYPE_CHECKING:
+    from netwatcher.alerts.dispatcher import AlertDispatcher
+    from netwatcher.capture.pcap_writer import PCAPWriter
     from netwatcher.web.auth import AuthManager
 
 logger = logging.getLogger("netwatcher.web.routes.events")
@@ -39,7 +41,13 @@ def create_ws_router(
     @router.websocket("/events")
     async def ws_events(websocket: WebSocket, token: str | None = None):
         if auth_manager and auth_manager.enabled:
-            if not token or not auth_manager.verify_token(token):
+            from netwatcher.web.auth import AuthStateUnavailable
+            try:
+                verified = await auth_manager.verify_token_async(token) if token else None
+            except AuthStateUnavailable:
+                await websocket.close(code=1013)
+                return
+            if not verified:
                 await websocket.close(code=1008)
                 return
 
@@ -55,6 +63,7 @@ def create_ws_router(
         ws_connections_per_ip[client_ip] += 1
         q = dispatcher.subscribe_ws()
         msg_count = 0
+        gap_sent = False
         window_start = time.monotonic()
         async def wait_disconnect():
             received = 0
@@ -76,11 +85,20 @@ def create_ws_router(
         try:
             while True:
                 try:
-                    done, _ = await asyncio.wait((event_task, disconnect_task), timeout=30,
+                    done, _ = await asyncio.wait((event_task, disconnect_task), timeout=5 if auth_manager and auth_manager.multi_user else 30,
                                                  return_when=asyncio.FIRST_COMPLETED)
                     if disconnect_task in done:
                         disconnect_task.result()
                         break
+                    if auth_manager and auth_manager.enabled:
+                        try:
+                            verified = await auth_manager.verify_token_async(token)
+                        except AuthStateUnavailable:
+                            await websocket.close(code=1013)
+                            break
+                        if not verified:
+                            await websocket.close(code=1008)
+                            break
                     if event_task not in done:
                         await websocket.send_text('{"type":"ping"}')
                         continue
@@ -90,17 +108,21 @@ def create_ws_router(
                     now = time.monotonic()
                     if now - window_start >= 60.0:
                         msg_count = 0
+                        gap_sent = False
                         window_start = now
                     msg_count += 1
                     if msg_count > _WS_RATE_LIMIT_MSG_PER_MIN:
+                        if not gap_sent:
+                            await websocket.send_text('{"type":"stream_gap","reason":"websocket_rate_limit"}')
+                            gap_sent = True
                         continue  # 초과분은 드롭
                     await websocket.send_text(msg)
                 except asyncio.TimeoutError:
                     await websocket.send_text('{"type":"ping"}')
         except WebSocketDisconnect:
             pass
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("WebSocket stream ended unexpectedly (%s)", type(exc).__name__)
         finally:
             disconnect_task.cancel()
             event_task.cancel()
@@ -134,8 +156,11 @@ def create_events_router(
     pcap_writer: PCAPWriter | None = None,
     auth_manager: "AuthManager | None" = None,
     device_repo=None,
+    sensor_control=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/events", tags=["events"])
+    evidence_reader = LocalEvidenceReader(event_repo, pcap_writer)
+    evidence_slots = asyncio.Semaphore(2)
 
     @router.get("")
     async def list_events(
@@ -147,9 +172,12 @@ def create_events_router(
         until: str | None = Query(None),
         q: str | None = Query(None),
         source_ip: str | None = Query(None),
+        case_owner: str | None = Query(None, max_length=128),
+        case_owner_id: UUID | None = Query(None),
+        case_status: Literal["open", "investigating", "closed"] | None = Query(None),
     ):
-        events = await event_repo.list_recent(limit=limit, offset=offset, severity=severity, engine=engine, since=since, until=until, search=q, source_ip=source_ip)
-        total = await event_repo.count(severity=severity, engine=engine, since=since, until=until, search=q, source_ip=source_ip)
+        events = await event_repo.list_recent(limit=limit, offset=offset, severity=severity, engine=engine, since=since, until=until, search=q, source_ip=source_ip, case_owner=case_owner, case_owner_id=case_owner_id, case_status=case_status)
+        total = await event_repo.count(severity=severity, engine=engine, since=since, until=until, search=q, source_ip=source_ip, case_owner=case_owner, case_owner_id=case_owner_id, case_status=case_status)
         # 목록에서도 봉투를 함께 준다 — 목록에서 "근거 없는 탐지"를 걸러낼 수 있어야 한다
         return {"events": [_with_evidence(e) for e in events], "total": total}
 
@@ -161,21 +189,26 @@ def create_events_router(
         engine: str | None = Query(None),
         since: str | None = Query(None),
         until: str | None = Query(None),
+        q: str | None = Query(None),
+        case_owner: str | None = Query(None, max_length=128),
+        case_owner_id: UUID | None = Query(None),
+        case_status: Literal["open", "investigating", "closed"] | None = Query(None),
     ):
-        events = await event_repo.list_recent(limit=limit, offset=0, severity=severity, engine=engine, since=since, until=until)
+        events = await event_repo.list_recent(limit=limit, offset=0, severity=severity, engine=engine, since=since, until=until, search=q, case_owner=case_owner, case_owner_id=case_owner_id, case_status=case_status)
         if format == "csv":
             import csv, io
+            from netwatcher.investigation.reports import safe_cell
             output = io.StringIO()
             if events:
                 writer = csv.DictWriter(output, fieldnames=events[0].keys())
                 writer.writeheader()
                 for e in events:
                     row = {k: (str(v) if isinstance(v, dict) else v) for k, v in e.items()}
-                    writer.writerow(row)
+                    writer.writerow({key: safe_cell(value) for key, value in row.items()})
             return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=events.csv"})
         return {"events": events, "total": len(events)}
 
-    @router.post('/{event_id}/evidence/pin')
+    @router.post('/{event_id}/evidence/pin', include_in_schema=sensor_control is None)
     async def pin_evidence(event_id: int, body: EvidencePinRequest,
                            actor: dict = Depends(require_role(Role.ADMIN))):
         if pcap_writer is None:
@@ -188,31 +221,55 @@ def create_events_router(
                 hours=body.hours, enabled=body.enabled)
         except FileNotFoundError:
             raise HTTPException(404, 'Evidence file unavailable') from None
-        except ValueError as error:
-            raise HTTPException(409, str(error)) from None
+        except ValueError:
+            raise HTTPException(409, '증거 보존 상태 또는 보존 예산을 확인하세요.') from None
 
-    @router.get('/{event_id}/evidence/file')
-    async def download_evidence(event_id: int, actor: dict = Depends(require_role(Role.VIEWER))):
-        if pcap_writer is None:
-            raise HTTPException(503, 'Evidence storage unavailable')
-        if not await event_repo.get_by_id(event_id):
-            raise HTTPException(404, 'Event not found')
-        path = await asyncio.to_thread(pcap_writer.get_pcap_path, event_id)
-        if not path:
-            raise HTTPException(404, 'Evidence file unavailable')
-        return FileResponse(path, media_type='application/vnd.tcpdump.pcap', filename=Path(path).name)
+    @router.get('/{event_id}/evidence/file', include_in_schema=sensor_control is None)
+    async def download_evidence(event_id: int, request: Request, actor: dict = Depends(require_role(Role.VIEWER))):
+        manager = auth_manager or getattr(request.app.state, 'auth_manager', None)
+        token = request.headers.get('authorization', '')[7:]
+
+        async def authorize():
+            if manager is not None and manager.enabled:
+                from netwatcher.web.auth import AuthStateUnavailable
+                try:
+                    verified = await manager.verify_token_async(token)
+                except AuthStateUnavailable:
+                    raise HTTPException(503, '계정 상태를 확인하지 못했습니다.') from None
+                if verified != actor:
+                    raise HTTPException(401, '로그인 권한이 변경됐거나 만료됐습니다.')
+
+        async def read_state():
+            await authorize()
+            return await evidence_reader.state(event_id)
+
+        async def read_chunk(file_version, offset):
+            await authorize()
+            return await evidence_reader.chunk(event_id, file_version, offset)
+
+        return await evidence_download(event_id, read_state, read_chunk, evidence_slots)
 
     @router.get("/{event_id}")
-    async def get_event(event_id: int):
+    async def get_event(event_id: int, actor: dict = Depends(require_role(Role.VIEWER))):
         event = await event_repo.get_by_id(event_id)
         if not event: return JSONResponse({"error": "Event not found"}, status_code=404)
         if pcap_writer is not None:
             event["pcap_availability"] = await asyncio.to_thread(pcap_writer.evidence_availability, event_id)
+        elif sensor_control is not None:
+            from netwatcher.web.routes.remote_evidence import evidence_call
+            try:
+                result = await evidence_call(lambda: sensor_control.read_evidence(event_id, actor))
+                event["pcap_availability"] = {**result["evidence"], "control_process": "separate"}
+            except HTTPException:
+                event["pcap_availability"] = {"state": "unknown", "pin_state": "unknown", "pin": None,
+                    "reason": "sensor_unavailable", "control_process": "separate"}
         if device_repo is not None:
             event['asset_context'] = await device_repo.context_for_source(
                 event.get('source_ip'), event.get('source_mac'))
         return {"event": _with_evidence(event)}
 
+    if sensor_control is not None:
+        router.routes = [route for route in router.routes if not route.path.endswith(("/evidence/pin", "/evidence/file"))]
     return router
 
 

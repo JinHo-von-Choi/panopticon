@@ -2,36 +2,37 @@
  * NetWatcher Whitelist Module
  */
 
-import { authFetch } from '../core/api.js';
 import { esc, showToast, escAttr } from '../core/utils.js';
+import { whitelistData, refreshWhitelist, changeWhitelist, containsWhitelist, canChangeWhitelist,
+    whitelistStatus, whitelistText } from '../core/whitelist-state.js';
+export { whitelistData } from '../core/whitelist-state.js';
 
-let _whitelistData = { ips: [], ip_ranges: [], macs: [], domains: [], domain_suffixes: [] };
 let _filterType    = "";
 let _searchQuery   = "";
 
-export let whitelistData = _whitelistData;
-
 export async function loadWhitelist() {
-    try {
-        const resp = await authFetch("/api/whitelist");
-        if (!resp || !resp.ok) return;
-        _whitelistData = await resp.json();
-        whitelistData  = _whitelistData;
-        renderWhitelistTable();
-    } catch (e) { console.error("Failed to load whitelist", e); }
+    return refreshWhitelist(true);
 }
 
 function renderWhitelistTable() {
+    const state = whitelistStatus();
+    const notice = document.getElementById('whitelist-control-status');
+    if (notice) notice.textContent = state.message ? whitelistText(state.message) : '';
+    const refresh = document.getElementById('whitelist-refresh');
+    if (refresh) refresh.disabled = state.busy;
+    document.querySelectorAll('[data-whitelist-change], #btn-add-whitelist, #whitelist-form button[type="submit"]').forEach(button => {
+        button.disabled = !canChangeWhitelist();
+    });
     const tbody = document.getElementById("whitelist-body");
     if (!tbody) return;
 
     /** 타입별로 항목 평탄화 */
     const rows = [
-        ..._whitelistData.ips.map(v          => ({ type: "ip",         value: v })),
-        ..._whitelistData.ip_ranges.map(v     => ({ type: "ip_range",   value: v })),
-        ..._whitelistData.macs.map(v          => ({ type: "mac",        value: v })),
-        ..._whitelistData.domains.map(v       => ({ type: "domain",     value: v })),
-        ..._whitelistData.domain_suffixes.map(v => ({ type: "suffix",  value: v })),
+        ...whitelistData.ips.map(v          => ({ type: "ip",         value: v })),
+        ...whitelistData.ip_ranges.map(v     => ({ type: "ip_range",   value: v })),
+        ...whitelistData.macs.map(v          => ({ type: "mac",        value: v })),
+        ...whitelistData.domains.map(v       => ({ type: "domain",     value: v })),
+        ...whitelistData.domain_suffixes.map(v => ({ type: "suffix",  value: v })),
     ];
 
     /** 필터 적용 */
@@ -42,7 +43,7 @@ function renderWhitelistTable() {
     });
 
     if (!filtered.length) {
-        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-dim)">No whitelist entries.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="3">${esc(whitelistText(state.loaded ? 'empty' : 'load_required'))}</td></tr>`;
         return;
     }
 
@@ -53,7 +54,7 @@ function renderWhitelistTable() {
             `<td><span class="type-tag">${esc(type)}</span></td>` +
             `<td><code>${esc(value)}</code></td>` +
             `<td><button class="btn-detail" style="background:var(--critical)" ` +
-                `data-wl-remove type="${escAttr(type)}" value="${escAttr(value)}">Delete</button></td>`;
+                `data-wl-remove data-whitelist-change ${canChangeWhitelist() ? '' : 'disabled'} type="${escAttr(type)}" value="${escAttr(value)}">${esc(whitelistText('remove'))}</button></td>`;
         tr.querySelector("[data-wl-remove]")
             .addEventListener("click", () => window.removeWhitelistEntry(type, value));
         tbody.appendChild(tr);
@@ -61,29 +62,24 @@ function renderWhitelistTable() {
 }
 
 export async function toggleWhitelist(type, value) {
-    try {
-        const resp = await authFetch("/api/whitelist/toggle", {
-            method: "POST",
-            body: JSON.stringify({ type, value }),
-        });
-        if (!resp || !resp.ok) throw new Error("HTTP " + resp.status);
-        const data = await resp.json();
-        await loadWhitelist();
-        return data.action; // "added" | "removed"
-    } catch (e) {
-        showToast("Error", "Failed to update whitelist", "critical");
-        return null;
-    }
+    return changeWhitelist(type, value, !containsWhitelist(type, value));
 }
 
 window.removeWhitelistEntry = async function(type, value) {
-    if (!confirm(`Remove ${value} from whitelist?`)) return;
-    const action = await toggleWhitelist(type, value);
-    if (action === "removed") showToast("Whitelist", `${value} removed`, "info");
+    if (!canChangeWhitelist() || !confirm(whitelistText('confirm_remove') + ' ' + value)) return;
+    const action = await changeWhitelist(type, value, false);
+    if (action === "removed") showToast(whitelistText('title'), whitelistText('applied'), "info");
 };
 
 export function registerWhitelistListeners() {
+    window.addEventListener('nw-whitelist-updated', renderWhitelistTable);
+    window.addEventListener('nw-session-ended', () => {
+        _closeForm();
+        renderWhitelistTable();
+    });
+    document.getElementById('whitelist-refresh')?.addEventListener('click', loadWhitelist);
     document.getElementById("btn-add-whitelist")?.addEventListener("click", () => {
+        if (!canChangeWhitelist()) return;
         const form = document.getElementById("whitelist-form");
         if (form) form.reset();
         const errEl = document.getElementById("wf-error");
@@ -115,18 +111,19 @@ export function registerWhitelistListeners() {
         const errEl  = document.getElementById("wf-error");
 
         if (!value) {
-            if (errEl) { errEl.textContent = "Value is required"; errEl.style.display = "block"; }
+            if (errEl) { errEl.textContent = whitelistText('value_required'); errEl.style.display = "block"; }
             return;
         }
 
-        const action = await toggleWhitelist(type, value);
+        const action = await changeWhitelist(type, value, true);
         if (action) {
             _closeForm();
-            showToast("Whitelist", `${value} ${action}`, "info");
+            showToast(whitelistText('title'), whitelistText('applied'), "info");
         } else {
-            if (errEl) { errEl.textContent = "Failed to add entry"; errEl.style.display = "block"; }
+            if (errEl) { errEl.textContent = whitelistText('unknown'); errEl.style.display = "block"; }
         }
     });
+    renderWhitelistTable();
 }
 
 function _closeForm() {

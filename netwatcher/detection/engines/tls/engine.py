@@ -163,18 +163,53 @@ class TLSFingerprintEngine(DetectionEngine):
     def set_feeds(self, feed_manager: Any) -> None:
         """FeedManager의 실시간 차단 목록 참조를 주입한다."""
         self._feed_manager = feed_manager
-        self._blocked_ja3 = feed_manager._blocked_ja3
-        self._ja3_to_malware = feed_manager._ja3_to_malware
-        self._blocked_domains = feed_manager._blocked_domains
-        # JA4 피드 (이전 버전 FeedManager에는 없을 수 있음)
-        self._blocked_ja4 = getattr(feed_manager, "_blocked_ja4", set())
-        self._ja4_to_malware = getattr(feed_manager, "_ja4_to_malware", {})
 
         logger.info(
             "TLS fingerprint feeds loaded: %d JA3, %d JA4, %d blocked domains",
             len(self._blocked_ja3), len(self._blocked_ja4),
             len(self._blocked_domains),
         )
+
+    # 연결된 피드는 매번 최신 객체를 조회한다. 갱신 전 대형 목록을 붙잡지 않는다.
+    @property
+    def _blocked_ja3(self) -> set[str]:
+        return getattr(self._feed_manager, "_blocked_ja3", self._local_blocked_ja3)
+
+    @_blocked_ja3.setter
+    def _blocked_ja3(self, values: set[str]) -> None:
+        self._local_blocked_ja3 = values
+
+    @property
+    def _blocked_ja4(self) -> set[str]:
+        return getattr(self._feed_manager, "_blocked_ja4", self._local_blocked_ja4)
+
+    @_blocked_ja4.setter
+    def _blocked_ja4(self, values: set[str]) -> None:
+        self._local_blocked_ja4 = values
+
+    @property
+    def _ja3_to_malware(self) -> dict[str, str]:
+        return getattr(self._feed_manager, "_ja3_to_malware", self._local_ja3_to_malware)
+
+    @_ja3_to_malware.setter
+    def _ja3_to_malware(self, values: dict[str, str]) -> None:
+        self._local_ja3_to_malware = values
+
+    @property
+    def _ja4_to_malware(self) -> dict[str, str]:
+        return getattr(self._feed_manager, "_ja4_to_malware", self._local_ja4_to_malware)
+
+    @_ja4_to_malware.setter
+    def _ja4_to_malware(self, values: dict[str, str]) -> None:
+        self._local_ja4_to_malware = values
+
+    @property
+    def _blocked_domains(self) -> set[str]:
+        return getattr(self._feed_manager, "_blocked_domains", self._local_blocked_domains)
+
+    @_blocked_domains.setter
+    def _blocked_domains(self, values: set[str]) -> None:
+        self._local_blocked_domains = values
 
     def analyze(self, packet: Packet) -> Alert | None:
         """TLS 패킷에서 JA3/JA4 핑거프린트, SNI, 인증서 이상을 분석한다."""
@@ -272,11 +307,13 @@ class TLSFingerprintEngine(DetectionEngine):
 
     def shutdown(self) -> None:
         """엔진 종료 시 모든 차단 목록과 캐시를 초기화한다."""
-        self._blocked_ja3.clear()
-        self._blocked_ja4.clear()
-        self._ja3_to_malware.clear()
-        self._ja4_to_malware.clear()
-        self._blocked_domains.clear()
+        # 피드가 소유한 집합·매핑은 다른 엔진에서도 사용한다.
+        self._feed_manager = None
+        self._blocked_ja3 = set()
+        self._blocked_ja4 = set()
+        self._ja3_to_malware = {}
+        self._ja4_to_malware = {}
+        self._blocked_domains = set()
         self._sni_cache.clear()
         self._tunnel_detector.clear()
 

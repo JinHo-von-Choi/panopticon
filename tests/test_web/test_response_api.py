@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import jwt
 import pytest
+from tests.auth_helpers import configured_auth
 from fastapi import FastAPI
 
 from netwatcher.response.executor import ShadowExecutor
@@ -33,10 +34,7 @@ SECRET = "response-secret"
 
 
 def _auth_manager() -> AuthManager:
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = SECRET
-    manager._expire_hours = 1
+    manager = configured_auth(SECRET)
     return manager
 
 

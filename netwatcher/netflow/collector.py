@@ -20,11 +20,17 @@ class _FlowProtocol(asyncio.DatagramProtocol):
 
     def __init__(self, processor: FlowProcessor) -> None:
         self._processor = processor
+        self._accepting = True
+
+    def stop_accepting(self) -> None:
+        self._accepting = False
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         logger.debug("NetFlow UDP collector started")
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        if not self._accepting:
+            return
         flows = parse_netflow(data)
         if flows:
             self._processor.on_flows(flows)
@@ -52,12 +58,15 @@ class FlowCollector:
         self._host       = host
         self._port       = port
         self._transport: asyncio.DatagramTransport | None = None
+        self._protocol: _FlowProtocol | None = None
 
     async def start(self) -> None:
         """UDP 소켓을 열고 수신을 시작한다."""
         loop = asyncio.get_running_loop()
+        protocol = _FlowProtocol(self._processor)
+        self._protocol = protocol
         transport, _ = await loop.create_datagram_endpoint(
-            lambda: _FlowProtocol(self._processor),
+            lambda: protocol,
             local_addr=(self._host, self._port),
         )
         self._transport = transport
@@ -65,8 +74,14 @@ class FlowCollector:
             "NetFlow collector listening on %s:%d", self._host, self._port
         )
 
+    def stop_accepting(self) -> None:
+        """소켓 정리 전에도 대기 중인 데이터그램을 분석하지 않는다."""
+        if self._protocol is not None:
+            self._protocol.stop_accepting()
+
     def stop(self) -> None:
         """UDP 소켓을 닫는다."""
+        self.stop_accepting()
         if self._transport is not None:
             self._transport.close()
             self._transport = None

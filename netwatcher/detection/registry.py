@@ -40,6 +40,7 @@ class EngineRegistry:
         self._config  = config
         self._engines: list[DetectionEngine] = []
         self._whitelist: Whitelist | None = None
+        self._feed_manager = None
         # tick_interval 지원을 위한 엔진별 마지막 틱 타임스탬프
         self._last_tick: dict[str, float] = {}
         # 발견된 모든 엔진 클래스 매핑 (disabled 포함)
@@ -102,6 +103,8 @@ class EngineRegistry:
                             logger.warning("Config validation: %s", w)
                         # 화이트리스트 주입
                         engine.set_whitelist(self._whitelist)
+                        if self._feed_manager is not None and hasattr(engine, "set_feeds"):
+                            engine.set_feeds(self._feed_manager)
                         self._engines.append(engine)
                         self._last_tick[engine.name] = 0.0
                         logger.info("Registered engine: %s", engine)
@@ -281,6 +284,13 @@ class EngineRegistry:
     # 런타임 엔진 관리 (핫리로드 / 활성화 / 비활성화)
     # ------------------------------------------------------------------
 
+    def set_feeds(self, feed_manager) -> None:
+        """현재 엔진과 이후 재생성하는 엔진에 같은 피드를 연결한다."""
+        for engine in self._engines:
+            if hasattr(engine, "set_feeds"):
+                engine.set_feeds(feed_manager)
+        self._feed_manager = feed_manager
+
     def reload_engine(
         self, name: str, new_config: dict[str, Any],
     ) -> tuple[bool, str | None, list[str]]:
@@ -310,6 +320,8 @@ class EngineRegistry:
                 logger.warning("Config validation (%s): %s", name, w)
             if self._whitelist is not None:
                 new_engine.set_whitelist(self._whitelist)
+            if self._feed_manager is not None and hasattr(new_engine, "set_feeds"):
+                new_engine.set_feeds(self._feed_manager)
         except Exception as exc:
             return False, f"Failed to instantiate engine {name}: {exc}", []
 

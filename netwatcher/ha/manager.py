@@ -14,10 +14,10 @@ logger = logging.getLogger("netwatcher.ha.manager")
 
 
 class HAManager:
-    """고가용성 관리자.
+    """실험용 고가용성 관리자. 운영 fencing은 검증되지 않았다.
 
-    - Redis 비활성 시 standalone 모드로 동작 (항상 리더)
-    - Redis 활성 시 리더 선출 + 인스턴스 레지스트리 활성화
+    - HA가 꺼져 있거나 Redis 비활성 시 standalone 모드로 동작
+    - HA를 명시적으로 켜고 Redis가 활성일 때 리더 선출을 시작
     """
 
     def __init__(
@@ -49,9 +49,11 @@ class HAManager:
 
     async def start(self) -> None:
         """HA 시스템을 시작한다. Redis 비활성 시 standalone 모드."""
-        if not self._redis.available:
+        ha_cfg = self._config.get("ha", {})
+        enabled = str(ha_cfg.get("enabled", False)).lower() in ("true", "1", "yes", "on")
+        if not enabled or not self._redis.available:
             self._standalone = True
-            logger.info("HA standalone mode (Redis unavailable): instance=%s", self._instance_id)
+            logger.info("HA standalone mode: instance=%s", self._instance_id)
             # standalone에서는 즉시 리더 콜백 호출
             if self.on_become_leader is not None:
                 try:
@@ -61,9 +63,9 @@ class HAManager:
             return
 
         self._standalone = False
+        logger.warning("Experimental HA enabled; leader fencing is not verified")
 
         # 인스턴스 레지스트리 시작
-        ha_cfg    = self._config.get("ha", {})
         ttl       = ha_cfg.get("ttl_seconds", 30)
         lock_key  = ha_cfg.get("lock_key", "ha:leader")
 
@@ -133,8 +135,8 @@ class HAManager:
                 raw = await self._redis.get(self._leader._lock_key)
                 if raw is not None:
                     leader_id = raw.decode()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("HA leader lookup unavailable (%s)", type(exc).__name__)
 
         return {
             "mode": "cluster",

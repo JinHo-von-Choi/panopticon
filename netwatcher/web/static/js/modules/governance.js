@@ -13,8 +13,10 @@
  * 판단을 숨기는 화면은 장식이다. 위반이 있으면 눈에 띄게 드러낸다.
  */
 
-import { authFetch, canAnalyze, canConfigure } from '../core/api.js';
-import { esc, escAttr, formatTime, showToast } from '../core/utils.js';
+import { authFetch, canAnalyze, canConfigure, getAuthToken } from '../core/api.js';
+import { esc, escAttr, formatTime, showToast, formatBytes } from '../core/utils.js';
+import {featureEnabled} from '../core/capabilities.js';
+import {loadRemoteProposals} from './proposals.js';
 
 function containTables(box) {
     box.querySelectorAll('.scope-table').forEach(table => {
@@ -28,18 +30,28 @@ function containTables(box) {
 }
 
 /* ── 지원 프로필 ──────────────────────────────────────────────── */
+let supportRequest = 0;
+window.addEventListener('nw-session-ended', () => {
+    supportRequest++;
+    document.getElementById('support-profile-box')?.replaceChildren();
+});
 
 export async function loadSupportProfile() {
     const box = document.getElementById("support-profile-box");
     if (!box) return;
+    const request = ++supportRequest, token = getAuthToken();
+    const current = () => request === supportRequest && token === getAuthToken();
     box.innerHTML = '<div class="empty-state">Loading support profile…</div>';
 
     try {
         const resp = await authFetch("/api/support-profile");
         if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "?"));
-        renderSupportProfile(await resp.json(), box);
+        const data = await resp.json();
+        if (!current()) return;
+        renderSupportProfile(data, box);
         containTables(box);
     } catch (e) {
+        if (!current()) return;
         box.textContent = "";
         const div = document.createElement("div");
         div.className = "empty-state";
@@ -71,21 +83,33 @@ function renderSupportProfile(data, box) {
                 <span class="scope-label">위협 피드</span>
                 <span class="scope-value" data-value="feeds"
                       data-feed-status="${esc(feeds.status || "unknown")}">
-                    ${esc(feeds.status || "unknown")}
+                    ${esc(({ok: '최신', stale: '갱신 지연', degraded: '일부 피드 확인 필요', unknown: '확인 불가', unconfigured: '연결 안 됨'})[feeds.status] || '확인 불가')}
                     ${feeds.age_hours !== null && feeds.age_hours !== undefined
                         ? ` (${esc(String(feeds.age_hours))}시간 전)`
-                        : " (한 번도 갱신 안 됨)"}
+                        : (['ok', 'stale'].includes(feeds.status) ? " (성공한 갱신 기록 없음)" : "")}
                 </span>
             </div>
             <div class="scope-summary-row">
                 <span class="scope-label">지표</span>
-                <span class="scope-value">${esc(String(feeds.blocked_ips || 0))} IP /
-                    ${esc(String(feeds.blocked_domains || 0))} 도메인</span>
+                <span class="scope-value">${esc(Number.isSafeInteger(feeds.blocked_ips) ? String(feeds.blocked_ips) : '—')} IP /
+                    ${esc(Number.isSafeInteger(feeds.blocked_domains) ? String(feeds.blocked_domains) : '—')} 도메인</span>
             </div>` : ""}
         </div>
+        ${renderFeedSources(feeds)}
         ${violations.length ? renderViolations(violations) : renderCleanNotice()}
         ${data.profile_note ? `<div class="scope-note">${esc(data.profile_note)}</div>` : ""}
     `;
+}
+
+function renderFeedSources(feeds) {
+    if (!Array.isArray(feeds?.sources) || !feeds.sources.length) return '';
+    const labels = {ok:'최신', stale:'갱신 지연', unknown:'성공 시각 확인 불가'};
+    const outcomes = {downloaded:'다운로드', cached:'캐시 사용', failed:'실패'};
+    return `<table class="scope-table" id="feed-source-status"><thead><tr>
+        <th>피드</th><th>상태</th><th>마지막 성공</th><th>최근 결과</th></tr></thead><tbody>
+        ${feeds.sources.map(source => `<tr><td>${esc(source.name)}</td><td>${esc(labels[source.status] || '확인 불가')}</td>
+        <td>${esc(Number.isFinite(source.last_success_epoch) ? new Date(source.last_success_epoch * 1000).toLocaleString() : '—')}</td>
+        <td>${esc(outcomes[source.outcome] || '시도 기록 없음')}</td></tr>`).join('')}</tbody></table>`;
 }
 
 function renderViolations(violations) {
@@ -129,6 +153,7 @@ let validationRequired = false;
 window.addEventListener("proposal-validation-attached", loadProposals);
 
 export async function loadProposals() {
+    if (featureEnabled('proposals_control_remote')) return loadRemoteProposals();
     const body = document.getElementById("proposals-body");
     const count = document.getElementById("proposals-count");
     if (!body) return;
@@ -271,7 +296,12 @@ export async function loadObservation() {
     try {
         const resp = await authFetch("/api/observation");
         if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "?"));
-        renderObservation(await resp.json(), box);
+        const data = await resp.json();
+        if (data.input_mode === 'eve') {
+            const storage = await authFetch('/api/input/status');
+            if (storage?.ok) data.storage = (await storage.json()).storage;
+        }
+        renderObservation(data, box);
         containTables(box);
     } catch (e) {
         box.textContent = "";
@@ -284,6 +314,26 @@ export async function loadObservation() {
 }
 
 function renderObservation(data, box) {
+    if (data.input_mode === 'eve') {
+        const labels = {healthy: '수집 연결됨', degraded: '수집 상태 점검 필요', unhealthy: '수집 확인 필요'};
+        const rows = (data.sources || []).map(source => {
+            const usage = (data.storage || []).find(item => item.sensor_id === source.sensor_id && item.source_id === source.source_id);
+            return `<tr>
+            <td>${esc(source.sensor_id)} / ${esc(source.source_id)}</td>
+            <td>${esc(source.error === 'EveCapacityError' ? '저장 한도 도달: 보존 정책 확인' : source.backlog ? '수집 대기량 증가' : labels[source.status] || '확인 불가')}</td>
+            <td>${esc(String(source.committed_offset ?? '확인 불가'))}</td>
+            <td>${Number.isFinite(source.pending_bytes) && source.pending_bytes >= 0 ? esc(formatBytes(source.pending_bytes)) : '확인 불가'}</td>
+            <td>${esc(String(source.gaps ?? '확인 불가'))}</td>
+            <td>${esc(String(source.rejected ?? '확인 불가'))}</td>
+            <td>${usage ? esc(String(usage.records)) + ' / ' + esc(String(usage.max_records)) : '확인 불가'}</td>
+            <td>${usage ? esc(formatBytes(usage.accounted_bytes)) + ' / ' + esc(formatBytes(usage.max_bytes)) : '확인 불가'}</td></tr>`;
+        }).join('');
+        box.innerHTML = `<p class="scope-hint">Suricata EVE 파일 수집. 외부 IDS의 패킷 누락과 망 전체 관측 범위는 확인되지 않습니다.</p>
+            <div class="scope-table-scroll" tabindex="0"><table class="scope-table">
+            <thead><tr><th>입력</th><th>수집 상태</th><th>저장 위치 (바이트)</th><th>수집 대기량</th><th>누락 가능성 기록</th><th>거절된 행</th><th>보존 기록</th><th>내용 예산</th></tr></thead>
+            <tbody>${rows}</tbody></table></div><p class="scope-hint">수집 대기량은 현재 읽는 파일에서 아직 저장하지 않은 바이트 수입니다. 다른 파일의 대기량이나 IDS의 패킷 손실은 포함하지 않습니다. 내용 예산은 실제 DB 디스크 사용량과 다릅니다. DB 서버의 디스크 여유도 별도로 확인하세요.</p>`;
+        return;
+    }
     const state = data.state || "unknown";
     const status = state === "observed" ? "ok" : (state === "partial" ? "warn" : "bad");
     const stages = data.stages || {};

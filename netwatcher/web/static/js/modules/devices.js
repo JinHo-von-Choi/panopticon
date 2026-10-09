@@ -6,35 +6,19 @@ import { authFetch, canConfigure } from '../core/api.js';
 import { esc, escAttr, textEl, formatTime, formatBytes, renderPagination, showToast } from '../core/utils.js';
 import { openDeviceDrawer } from '../core/detail-drawer.js';
 import { DEVICE_TYPE_MAP } from '../core/constants.js';
+import { featureEnabled } from '../core/capabilities.js';
+import { whitelistData, refreshWhitelist, changeWhitelist, containsWhitelist, canChangeWhitelist } from '../core/whitelist-state.js';
+export { whitelistData } from '../core/whitelist-state.js';
 
-export var whitelistData = { ips: [], macs: [], domains: [], ip_ranges: [] };
 export var devicesAll = [];
 export var devicesFiltered = [];
 var devicesPage = 0;
 const DEVICES_PER_PAGE = 50;
 
-export async function fetchWhitelist() {
-    try {
-        var resp = await authFetch("/api/whitelist");
-        if (resp.ok) {
-            whitelistData = await resp.json();
-        }
-    } catch (e) { console.error("Failed to fetch whitelist", e); }
-}
+export async function fetchWhitelist() { return refreshWhitelist(); }
 
 export async function toggleWhitelist(type, value) {
-    if (!value) return;
-    try {
-        var resp = await authFetch("/api/whitelist/toggle", {
-            method: "POST",
-            body: JSON.stringify({ type: type, value: value })
-        });
-        if (resp.ok) {
-            await fetchWhitelist();
-            return true;
-        }
-        return false;
-    } catch (e) { alert("Failed to toggle whitelist: " + e.message); return false; }
+    return !!await changeWhitelist(type, value, !containsWhitelist(type, value));
 }
 
 export async function loadDevices() {
@@ -188,6 +172,7 @@ window.showDeviceDetail = async function(mac) {
     openDeviceDrawer();
 
     try {
+        await fetchWhitelist();
         var resp = await authFetch("/api/devices/" + mac);
         var data = await resp.json();
         if (request !== deviceDetailRequest || document.getElementById("device-modal-overlay").classList.contains("hidden")) return;
@@ -229,7 +214,7 @@ function renderDeviceModalContent(dev) {
             </div>
             <div class="detail-section">
                 <h3>Exception (Whitelist)</h3>
-                <button type="button" class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-mac="${esc(dev.mac_address)}">
+                <button type="button" class="btn ${isWhitelisted ? 'btn-accent' : ''}" data-wl-mac="${esc(dev.mac_address)}" data-whitelist-change ${canChangeWhitelist() ? '' : 'disabled'}>
                     ${isWhitelisted ? 'Remove from Whitelist' : 'Add to Whitelist'}
                 </button>
             </div>
@@ -260,7 +245,7 @@ function renderAssetContext(body, dev) {
         <p class="text-dim">${esc(t('scope'))}</p>
         ${context.reason ? `<p>${esc(t('reasons.' + context.reason))}</p>` : ''}
         ${context.expires_at ? `<p>${esc(t('expires'))}: ${esc(formatTime(context.expires_at))}</p>` : ''}`;
-    if (canConfigure() && dev.ip_address) {
+    if (canConfigure() && dev.ip_address && featureEnabled('whitelist')) {
         panel.innerHTML += `<label>${esc(t('role'))}<select class="input-search" id="asset-role">
             ${roles.map(role => `<option value="${role}" ${context.role === role ? 'selected' : ''}>${esc(t('roles.' + role))}</option>`).join('')}</select></label>
             <label>${esc(t('evidence'))}<textarea id="asset-evidence" class="input-search" maxlength="1000" rows="3"></textarea></label>

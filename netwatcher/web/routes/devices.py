@@ -7,13 +7,14 @@ from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from netwatcher.detection.context_policy import ExpectedFlowRule
 from netwatcher.storage.repositories import DeviceRepository
 from netwatcher.web.rbac import Role, require_role
+from netwatcher.web.change_audit import ChangeAudit, state_summary
 
 _MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 
@@ -73,6 +74,17 @@ class ConfirmContextRequest(BaseModel):
 
 def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
     router = APIRouter(prefix="/devices", tags=["devices"])
+    changes = ChangeAudit()
+
+    async def snapshot(**args):
+        mac = args.get("mac_address") or args["body"].mac_address
+        if not _valid_mac(mac):
+            raise HTTPException(400, "Invalid MAC address")
+        device = await device_repo.get_by_mac(mac)
+        fields = ("nickname", "hostname", "ip_address", "device_type", "is_known",
+                  "notes", "context_version", "context_profile")
+        return {"mac_address": mac, "present": device is not None,
+                "state": state_summary({key: device.get(key) for key in fields}) if device else None}
 
     @router.get("")
     async def list_devices():
@@ -80,7 +92,8 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
         return {"devices": devices}
 
     @router.put('/{mac_address}/context')
-    async def confirm_context(mac_address: str, body: ConfirmContextRequest,
+    @changes.guard(snapshot)
+    async def confirm_context(mac_address: str, body: ConfirmContextRequest, request: Request,
                               actor: dict = Depends(require_role(Role.ADMIN))):
         if not _valid_mac(mac_address):
             raise HTTPException(400, 'Invalid MAC address')
@@ -100,8 +113,9 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
         return {'ok': True, 'device': device, 'asset_context': context}
 
     # 고정 경로를 /{mac_address}보다 먼저 선언해야 "register"가 MAC으로 해석되지 않는다.
-    @router.post("/register")
-    async def register_by_body(body: RegisterByMacRequest):
+    @router.post("/register", dependencies=[Depends(require_role(Role.ADMIN))])
+    @changes.guard(snapshot)
+    async def register_by_body(body: RegisterByMacRequest, request: Request):
         """요청 본문의 MAC 주소로 디바이스를 등록한다."""
         if not _valid_mac(body.mac_address):
             return JSONResponse(
@@ -130,8 +144,9 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
         device['asset_context'] = await device_repo.context_for_device(device)
         return {"device": device}
 
-    @router.post("/{mac_address}")
-    async def register_device(mac_address: str, body: RegisterDeviceRequest):
+    @router.post("/{mac_address}", dependencies=[Depends(require_role(Role.ADMIN))])
+    @changes.guard(snapshot)
+    async def register_device(mac_address: str, body: RegisterDeviceRequest, request: Request):
         if not _valid_mac(mac_address):
             return JSONResponse(
                 {"error": f"Invalid MAC address: {mac_address}"},
@@ -147,8 +162,9 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
         await device_repo.update_device(mac_address, device_type=body.device_type, is_known=body.is_known)
         return {"ok": True}
 
-    @router.put("/{mac_address}")
-    async def update_device(mac_address: str, body: UpdateDeviceRequest):
+    @router.put("/{mac_address}", dependencies=[Depends(require_role(Role.ADMIN))])
+    @changes.guard(snapshot)
+    async def update_device(mac_address: str, body: UpdateDeviceRequest, request: Request):
         """등록된 디바이스의 속성을 수정한다."""
         if not _valid_mac(mac_address):
             return JSONResponse(

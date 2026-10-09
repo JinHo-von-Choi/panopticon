@@ -177,8 +177,12 @@ def test_missing_jwt_secret_rejected(base_raw):
     assert "SUP-030" in _codes(SupportContract(Config(base_raw)))
 
 
-def test_multi_user_rejected_until_role_claims_exist(base_raw):
+def test_managed_accounts_require_enabled_auth_and_persistent_secret(base_raw):
     base_raw["auth"]["multi_user"] = True
+    assert validate_support(Config(base_raw)) == []
+    base_raw["auth"]["jwt_secret"] = ""
+    assert "SUP-030" in _codes(SupportContract(Config(base_raw)))
+    base_raw["auth"]["enabled"] = False
     assert "SUP-032" in _codes(SupportContract(Config(base_raw)))
 
 

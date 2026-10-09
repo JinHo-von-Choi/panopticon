@@ -1,20 +1,68 @@
-/**
- * NetWatcher Engines Module (Production Grade - No Omissions)
- */
+/** 탐지 엔진 조회와 설정 변경. */
 
-import { authFetch } from '../core/api.js';
-import { esc, showToast } from '../core/utils.js';
+import { authFetch, canConfigure, getAuthToken } from '../core/api.js';
+import { esc, showToast, newRequestId } from '../core/utils.js';
 
 var enginesData = [];
+let selectedEngine = null;
+let busy = false;
+let needsRefresh = false;
+let remoteControl = false;
+let sessionEpoch = 0;
+let loadAttempt = 0;
+const tr = key => window.i18next.t('console.engine_control.' + key);
+
+function notice(key) {
+    const node = document.getElementById('engine-control-status');
+    if (node) node.textContent = key ? tr(key) : '';
+}
+
+function editable(eng) {
+    return canConfigure() && !busy && !needsRefresh && eng.configuration_available !== false;
+}
+
+function render() {
+    const refresh = document.getElementById('engine-control-refresh');
+    if (refresh) refresh.disabled = busy;
+    renderEnginesList();
+    const selected = enginesData.find(engine => engine.name === selectedEngine);
+    if (selected) renderEngineDetail(selected);
+    else {
+        const node = document.getElementById('engine-detail');
+        if (node) node.textContent = tr('select');
+    }
+}
 
 export async function loadEngines() {
+    if (busy) return false;
+    const attempt = ++loadAttempt;
+    const epoch = sessionEpoch;
+    const token = getAuthToken();
+    const current = () => epoch === sessionEpoch && token === getAuthToken() && attempt === loadAttempt;
     try {
         const resp = await authFetch("/api/engines");
-        if (!resp || !resp.ok) return;
+        if (!current()) return false;
+        if (!resp || !resp.ok) throw new Error('Engine list unavailable');
         const data = await resp.json();
+        if (!current()) return false;
+        if (!Array.isArray(data.engines) || data.engines.length > 64) throw new Error('Invalid engine list');
+        remoteControl = data.control_process === 'separate' || data.engines.some(engine => engine.base_version !== undefined);
+        if (remoteControl && data.engines.some(engine => !/^[a-f0-9]{64}$/.test(engine.base_version))) {
+            throw new Error('Missing engine version');
+        }
         enginesData = data.engines;
-        renderEnginesList();
-    } catch (e) { console.error("Failed to load engines", e); }
+        needsRefresh = false;
+        notice(canConfigure() ? '' : 'readonly');
+        render();
+        return true;
+    } catch (e) {
+        if (!current()) return false;
+        enginesData = [];
+        needsRefresh = true;
+        notice('load_failed');
+        render();
+        return false;
+    }
 }
 
 export function renderEnginesList() {
@@ -24,7 +72,7 @@ export function renderEnginesList() {
     container.innerHTML = "";
     enginesData.forEach(eng => {
         const card = document.createElement("div");
-        card.className = "engine-card" + (eng.enabled ? "" : " disabled");
+        card.className = "engine-card" + (eng.enabled ? "" : " disabled") + (selectedEngine === eng.name ? ' selected' : '');
         
         const displayName = window.i18next.t("engines." + eng.name + ".name", { 
             defaultValue: eng.name.replace(/_/g, " ").toUpperCase() 
@@ -32,9 +80,9 @@ export function renderEnginesList() {
 
         card.innerHTML = `
             <div class="engine-card-header">
-                <span class="engine-card-name">${esc(displayName)}</span>
+                <button type="button" class="engine-card-name">${esc(displayName)}</button>
                 <label class="toggle-switch">
-                    <input type="checkbox" ${eng.enabled ? 'checked' : ''} data-engine="${esc(eng.name)}" />
+                    <input type="checkbox" ${eng.enabled ? 'checked' : ''} ${editable(eng) ? '' : 'disabled'} data-engine="${esc(eng.name)}" aria-label="${esc(displayName + ' · ' + tr('toggle'))}" />
                     <span class="toggle-slider"></span>
                 </label>
             </div>
@@ -46,25 +94,69 @@ export function renderEnginesList() {
             toggleEngine(eng.name, e.target.checked);
         });
 
-        card.addEventListener("click", () => renderEngineDetail(eng));
+        card.addEventListener("click", () => {
+            selectedEngine = eng.name;
+            container.querySelectorAll('.engine-card').forEach(node => node.classList.toggle('selected', node === card));
+            renderEngineDetail(eng);
+        });
         container.appendChild(card);
     });
 }
 
 async function toggleEngine(name, enabled) {
+    await changeEngine(name, 'toggle', {enabled}, 'PATCH');
+}
+
+async function changeEngine(name, operation, updates, method) {
+    const eng = enginesData.find(engine => engine.name === name);
+    if (!eng || !editable(eng)) return;
+    const epoch = sessionEpoch;
+    const token = getAuthToken();
+    const current = () => epoch === sessionEpoch && token === getAuthToken();
+    const requestId = newRequestId();
+    const body = remoteControl ? {request_id: requestId, base_version: eng.base_version,
+        ...(operation === 'toggle' ? updates : {config: updates})} : updates;
+    busy = true;
+    notice('pending');
+    render();
     try {
-        const resp = await authFetch(`/api/engines/${name}/toggle`, {
-            method: "PATCH",
-            body: JSON.stringify({ enabled: enabled })
+        const resp = await authFetch(`/api/engines/${encodeURIComponent(name)}/${operation}`, {
+            method, body: JSON.stringify(body)
         });
-        if (resp.ok) {
-            showToast("Engine Updated", `${name} is now ${enabled ? 'enabled' : 'disabled'}`, "info");
-            loadEngines();
+        if (!current()) return;
+        if (!resp || resp.status >= 500) throw new Error('Unconfirmed result');
+        if (!resp.ok) {
+            needsRefresh = true;
+            notice('rejected');
+            return;
         }
-    } catch (e) { showToast("Error", "Failed to toggle engine", "critical"); }
+        const result = await resp.json();
+        if (!current()) return;
+        if (remoteControl && (result.status !== 'applied' || result.request_id !== requestId
+                || result.engine?.name !== name || !/^[a-f0-9]{64}$/.test(result.base_version))) {
+            throw new Error('Unconfirmed result');
+        }
+        busy = false;
+        if (await loadEngines()) {
+            if (current()) {
+                notice('saved');
+                showToast(tr('title'), tr('saved'), 'info');
+            }
+        }
+    } catch (e) {
+        if (!current()) return;
+        needsRefresh = true;
+        notice('unknown');
+    } finally {
+        if (current()) {
+            busy = false;
+            render();
+        }
+    }
 }
 
 function renderEngineDetail(eng) {
+    document.querySelectorAll('.engine-tooltip').forEach(node => node.remove());
     const container = document.getElementById("engine-detail");
     if (!container) return;
     
@@ -75,9 +167,12 @@ function renderEngineDetail(eng) {
     const description = eng.description_key ? window.i18next.t(eng.description_key, { defaultValue: eng.description }) : eng.description;
     const schemaList = Array.isArray(eng.schema) ? eng.schema : [];
     const config = eng.config || {};
+    const disabled = editable(eng) ? '' : 'disabled';
 
-    let html = `<h3>${esc(displayName)}</h3>`;
+    const state = busy ? 'pending_state' : needsRefresh ? 'unknown_state' : eng.enabled ? 'enabled' : 'disabled';
+    let html = `<div class="engine-detail-heading"><h3>${esc(displayName)}</h3><span class="engine-state" data-engine-state>${esc(tr(state))}</span></div>`;
     if (description) html += `<p class="engine-desc">${esc(description)}</p>`;
+    if (eng.configuration_available === false) html += `<p>${esc(tr('unconfigured'))}</p>`;
     
     html += `<form id="engine-config-form">`;
     schemaList.forEach(field => {
@@ -87,8 +182,8 @@ function renderEngineDetail(eng) {
         const val   = config[field.key] !== undefined ? config[field.key] : field.default;
         const metaParts = [];
         if (field.type) metaParts.push(`type: ${field.type}`);
-        if (field.min !== undefined) metaParts.push(`min: ${field.min}`);
-        if (field.max !== undefined) metaParts.push(`max: ${field.max}`);
+        if (field.min != null) metaParts.push(`min: ${field.min}`);
+        if (field.max != null) metaParts.push(`max: ${field.max}`);
         const meta = metaParts.join(' · ');
 
         const tipIcon = desc
@@ -96,20 +191,21 @@ function renderEngineDetail(eng) {
             : '';
 
         html += `<div class="form-group">
-            <label style="display:flex;align-items:center;gap:6px">${esc(label)} <small style="color:var(--text-dim)">(${field.key})</small>${tipIcon}</label>`;
+            <label for="engine-field-${esc(field.key)}" style="display:flex;align-items:center;gap:6px">${esc(label)} <small style="color:var(--text-dim)">(${esc(field.key)})</small>${tipIcon}</label>`;
 
         if (field.type === "bool") {
-            html += `<select name="${field.key}" class="input-search">
-                <option value="true" ${val === true ? 'selected' : ''}>True</option>
-                <option value="false" ${val === false ? 'selected' : ''}>False</option>
+            html += `<select id="engine-field-${esc(field.key)}" name="${esc(field.key)}" class="input-search" ${disabled}>
+                <option value="true" ${val === true ? 'selected' : ''}>${esc(tr('yes'))}</option>
+                <option value="false" ${val === false ? 'selected' : ''}>${esc(tr('no'))}</option>
             </select>`;
         } else {
-            html += `<input type="text" name="${field.key}" class="input-search" value="${esc(val.toString())}" />`;
+            const text = field.type === 'list' ? JSON.stringify(val ?? []) : String(val ?? '');
+            html += `<input id="engine-field-${esc(field.key)}" type="text" name="${esc(field.key)}" class="input-search" value="${esc(text)}" ${disabled} />`;
         }
         html += `</div>`;
     });
 
-    html += `<button type="submit" class="btn btn-accent" style="width:100%;margin-top:10px">Save Configuration</button></form>`;
+    html += `<button type="submit" class="btn btn-accent" style="width:100%;margin-top:10px" ${disabled}>${esc(tr('save'))}</button></form>`;
     container.innerHTML = html;
 
     // 툴팁 hover 핸들러
@@ -139,37 +235,58 @@ function renderEngineDetail(eng) {
         e.preventDefault();
         const formData = new FormData(e.target);
         const updates = {};
-        schemaList.forEach(field => {
+        try { schemaList.forEach(field => {
             if (field.key === "enabled") return;
             let val = formData.get(field.key);
-            if (field.type === "int") val = parseInt(val, 10);
-            else if (field.type === "float") val = parseFloat(val);
+            if (field.type === "int" || field.type === "float") {
+                if (!val.trim()) throw new Error('Empty number');
+                val = Number(val);
+                if (!Number.isFinite(val) || (field.type === 'int' && !Number.isSafeInteger(val))) throw new Error('Invalid number');
+            }
             else if (field.type === "bool") val = (val === "true");
+            else if (field.type === 'list') {
+                val = JSON.parse(val);
+                if (!Array.isArray(val)) throw new Error('Invalid list');
+            }
             updates[field.key] = val;
-        });
+        }); } catch (error) {
+            notice('invalid');
+            return;
+        }
         saveEngineConfig(eng.name, updates);
     });
 }
 
 async function saveEngineConfig(name, updates) {
-    try {
-        const resp = await authFetch(`/api/engines/${name}/config`, {
-            method: "PUT",
-            body: JSON.stringify(updates)
-        });
-        if (resp.ok) {
-            showToast("Success", "Engine configuration saved and reloaded", "info");
-            loadEngines();
-        }
-    } catch (e) { showToast("Error", "Failed to save configuration", "critical"); }
+    await changeEngine(name, 'config', updates, 'PUT');
 }
 
+window.addEventListener('nw-session-ended', () => {
+    sessionEpoch++;
+    loadAttempt++;
+    enginesData = [];
+    selectedEngine = null;
+    busy = false;
+    needsRefresh = true;
+    remoteControl = false;
+    const filter = document.getElementById('filter-engine');
+    if (filter) while (filter.options.length > 1) filter.remove(1);
+    notice('');
+    render();
+});
+
+document.getElementById('engine-control-refresh')?.addEventListener('click', () => loadEngines());
+
 export async function populateEngineFilter() {
+    const epoch = sessionEpoch;
+    const token = getAuthToken();
     const filter = document.getElementById("filter-engine");
     if (!filter) return;
     try {
         const resp = await authFetch("/api/engines");
+        if (!resp?.ok || epoch !== sessionEpoch || token !== getAuthToken()) return;
         const data = await resp.json();
+        if (epoch !== sessionEpoch || token !== getAuthToken() || !Array.isArray(data.engines)) return;
         while (filter.options.length > 1) filter.remove(1);
         data.engines.forEach(eng => {
             const opt = document.createElement("option");
@@ -177,5 +294,9 @@ export async function populateEngineFilter() {
             opt.textContent = window.i18next.t("engines." + eng.name + ".name", { defaultValue: eng.name });
             filter.appendChild(opt);
         });
-    } catch (e) {}
+    } catch (error) {
+        if (epoch !== sessionEpoch || token !== getAuthToken()) return;
+        while (filter.options.length > 1) filter.remove(1);
+        console.warn('Engine filter unavailable', error);
+    }
 }

@@ -88,6 +88,7 @@ docs/*
 !docs/playbooks/
 !docs/OPERATIONS-GUIDE.md
 !docs/GOVERNANCE.md
+!docs/EVE.md
 !docs/plans/
 docs/plans/*
 !docs/plans/2026-10-05-plan-review-stage1.md
@@ -139,3 +140,10 @@ config/**/*.bak
 # 에디터 도구 캐시
 # ============================================================
 .serena/
+*.env
+installation*/
+
+!docs/NATIVE-SYSTEMD.md
+!docs/RELEASE-VERIFICATION.md
+node_modules/
+!docs/AUTO-UPDATE.md

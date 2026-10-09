@@ -1,0 +1,36 @@
+[Unit]
+Description=Panopticon Suricata EVE console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=panopticon
+Group=panopticon
+WorkingDirectory=/opt/panopticon
+EnvironmentFile=/etc/panopticon/panopticon.env
+Environment=NETWATCHER_LOG_DIR=/var/lib/panopticon/logs XDG_CONFIG_HOME=/var/lib/panopticon/config XDG_CACHE_HOME=/var/lib/panopticon/cache NETWATCHER_SKIP_DOTENV=1
+ExecStart=/opt/panopticon/.venv/bin/python -m netwatcher -c /etc/panopticon/config.yaml
+StateDirectory=panopticon
+StateDirectoryMode=0750
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=128
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

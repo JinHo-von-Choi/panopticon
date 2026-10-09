@@ -4,11 +4,11 @@ from __future__ import annotations
 import asyncio
 import math
 import multiprocessing
-import pickle
 import resource
 import time
 
 from netwatcher.replay.service import compare
+from netwatcher.replay.result_wire import encode_result, decode_result
 
 
 class ReplayBudgetError(RuntimeError):
@@ -21,14 +21,14 @@ def _compute(send, trace, baseline, candidate, source_bytes, memory_bytes, timeo
         cpu = max(1, math.ceil(timeout)) + 1
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
         outcome = compare(trace, baseline, candidate, source_bytes=source_bytes)
-        data = pickle.dumps(('ok', outcome), protocol=pickle.HIGHEST_PROTOCOL)
+        data = encode_result('ok', outcome)
         if len(data) > result_bytes:
-            data = pickle.dumps(('budget', 'result_bytes'))
+            data = encode_result('budget', 'result_bytes')
         send.send_bytes(data)
     except MemoryError:
-        send.send_bytes(pickle.dumps(('budget', 'memory')))
+        send.send_bytes(encode_result('budget', 'memory'))
     except Exception as error:
-        send.send_bytes(pickle.dumps(('error', type(error).__name__)))
+        send.send_bytes(encode_result('error', type(error).__name__))
     finally:
         send.close()
 
@@ -76,7 +76,16 @@ class ReplayRunner:
                 raise ReplayBudgetError('wall_time') from None
             except EOFError:
                 raise ReplayBudgetError('worker_resource_limit') from None
-            kind, payload = pickle.loads(data)  # 직접 기동한 내부 worker의 결과만 받는다.
+            except OSError:
+                raise ReplayBudgetError('result_bytes') from None
+            try:
+                remaining = max(.001, deadline - time.monotonic())
+                kind, payload = await asyncio.wait_for(
+                    asyncio.to_thread(decode_result, data, self.result_bytes), remaining)
+            except asyncio.TimeoutError:
+                raise ReplayBudgetError('wall_time') from None
+            except (ValueError, TypeError, OverflowError, RecursionError):
+                raise ReplayBudgetError('invalid_result') from None
             if kind == 'budget':
                 raise ReplayBudgetError(payload)
             if kind != 'ok':

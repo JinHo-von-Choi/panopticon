@@ -3,12 +3,12 @@
  */
 
 import { initI18n } from './core/i18n.js';
-import { getAuthToken, setAuthToken, setAuthEnabled, setAuthRequired, isAuthEnabled, authFetch, setCurrentRole } from './core/api.js';
-import { loadEvents, renderEventRow, exportEvents, receiveLiveEvent } from './modules/events.js';
+import { getAuthToken, setAuthToken, setAuthEnabled, setAuthRequired, isAuthEnabled, authFetch, setCurrentRole, setCurrentUserId, handleUnauthorized } from './core/api.js';
+import { loadEvents, renderEventRow, exportEvents, exportWeeklyReport, receiveLiveEvent } from './modules/events.js';
 import { loadDevices, filterDevices, renderDevicesPage } from './modules/devices.js';
 import { loadStats, loadCharts, bumpSeverityCounter } from './modules/stats.js';
 import { loadEngines, populateEngineFilter } from './modules/engines.js';
-import { loadBlocklist } from './modules/blocklist.js';
+import { loadBlocklist, changeBlocklist, canChangeBlocklist } from './modules/blocklist.js';
 import { loadIncidents, registerIncidentListeners } from './modules/incidents.js';
 import { loadDefense, registerDefenseListeners } from './modules/defense.js';
 import { registerHuntListeners } from './modules/hunting.js';
@@ -20,6 +20,9 @@ import { initConsole, loadConsoleState } from './modules/console.js';
 import { initOnboarding, loadOnboarding } from './modules/onboarding.js';
 import { initOverview, loadOverview } from './modules/overview.js';
 import { initReplay, loadReplay } from './modules/replay.js';
+import { loadCapabilities, featureEnabled } from './core/capabilities.js';
+import { loadUsers } from './modules/users.js';
+import { showToast } from './core/utils.js';
 
 var ws = null;
 var statsInterval = null;
@@ -29,13 +32,14 @@ async function initApp() {
     setAuthEnabled(true);
     document.getElementById("login-overlay").classList.add("hidden");
     document.getElementById("btn-logout").style.display = getAuthToken() ? "" : "none";
+    await loadCapabilities();
 
     await Promise.all([
         loadStats(),
         loadEvents(0),
         loadDevices(),
-        populateEngineFilter(),
-        initAiAnalyzerTab()
+        featureEnabled('engines') ? populateEngineFilter() : Promise.resolve(),
+        featureEnabled('ai-analyzer') ? initAiAnalyzerTab() : Promise.resolve()
     ]);
 
     connectWS();
@@ -92,17 +96,27 @@ function connectWS() {
     const wsUrl = `${protocol}//${window.location.host}/api/ws/events` + (token ? `?token=${encodeURIComponent(token)}` : "");
     
     ws = new WebSocket(wsUrl);
+    const connection = ws;
+    let gapRefresh = null;
     ws.onopen = () => document.getElementById("connection-status").className = "status-dot connected";
-    ws.onclose = () => {
+    ws.onclose = event => {
+        if (ws !== connection) return;
         document.getElementById("connection-status").className = "status-dot disconnected";
+        if (event.code === 1008) { handleUnauthorized(); return; }
         if (isAuthEnabled()) setTimeout(connectWS, 3000);
     };
     ws.onmessage = (e) => {
+        if (ws !== connection || !isAuthEnabled()) return;
         const ev = JSON.parse(e.data);
         if (ev.type === "alert") {
             receiveLiveEvent(ev);
             bumpSeverityCounter(ev.severity);
             markDataReceived();
+        } else if (ev.type === 'stream_gap' && !gapRefresh) {
+            showToast(window.i18next.t('console.stream_gap_title'),
+                window.i18next.t('console.stream_gap_message'), 'WARNING');
+            gapRefresh = Promise.allSettled([loadEvents(), loadStats(), loadConsoleState()])
+                .finally(() => { gapRefresh = null; });
         }
     };
 }
@@ -112,6 +126,17 @@ window.closeModal = closeEventDrawer;
 window.closeDeviceModal = closeDeviceDrawer;
 
 function registerListeners() {
+    window.addEventListener('nw-session-ended', () => {
+        if (ws) { const connection = ws; ws = null; connection.close(); }
+        if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+        document.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
+        document.getElementById('users-panel')?.replaceChildren();
+        document.getElementById('filter-case-mine').checked = false;
+        document.getElementById('filter-case-owner').disabled = false;
+        document.querySelectorAll('[data-tab="users"]').forEach(button => { button.style.display = 'none'; });
+        document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === 'events'));
+        document.querySelectorAll('.tab-content').forEach(panel => panel.classList.toggle('active', panel.id === 'tab-events'));
+    });
     registerIncidentListeners();
     registerDefenseListeners();
     registerHuntListeners();
@@ -128,6 +153,7 @@ function registerListeners() {
             
             if (target === "events")       loadEvents(0);
             if (target === "devices")      loadDevices();
+            if (target === "users")        loadUsers();
             if (target === "traffic")      loadCharts();
             if (target === "engines")      loadEngines();
             if (target === "incidents")    loadIncidents();
@@ -135,18 +161,30 @@ function registerListeners() {
             if (target === "blocklist")    loadBlocklist(0);
             if (target === "whitelist")    loadWhitelist();
             if (target === "ai-analyzer") { loadAiAnalyzerStatus(); loadAiLogs(0); }
-            if (target === "governance")    { loadSupportProfile(); loadObservation(); loadProposals(); loadOnboarding(); loadReplay(); }
+            if (target === "governance")    { loadSupportProfile(); loadObservation();
+                if (featureEnabled('proposals')) loadProposals();
+                loadOnboarding();
+                if (featureEnabled('replay')) loadReplay();
+            }
         });
     });
 
     // Event Filters & Refresh
-    ["filter-severity", "filter-engine", "filter-pagesize"].forEach(id => {
-        document.getElementById(id)?.addEventListener("change", () => loadEvents(0));
+    ["filter-severity", "filter-engine", "filter-pagesize", "filter-case-status", "filter-case-unassigned", "filter-case-mine"].forEach(id => {
+        document.getElementById(id)?.addEventListener("change", event => {
+            if (event.target.checked && id === 'filter-case-mine') document.getElementById('filter-case-unassigned').checked = false;
+            if (event.target.checked && id === 'filter-case-unassigned') document.getElementById('filter-case-mine').checked = false;
+            document.getElementById('filter-case-owner').disabled = document.getElementById('filter-case-mine').checked;
+            loadEvents(0);
+        });
     });
-    ["filter-search", "filter-since", "filter-until"].forEach(id => {
+    ["filter-search", "filter-since", "filter-until", "filter-case-owner"].forEach(id => {
         document.getElementById(id)?.addEventListener("change", () => loadEvents(0));
     });
     document.getElementById("btn-refresh")?.addEventListener("click", () => { loadEvents(0); loadStats(); });
+
+    document.getElementById("filter-case-unassigned")?.addEventListener("change", event => { document.getElementById("filter-case-owner").disabled = event.target.checked; });
+    document.getElementById("btn-weekly-report")?.addEventListener("click", exportWeeklyReport);
 
     // Export Buttons
     document.getElementById("btn-export-csv")?.addEventListener("click", () => exportEvents('csv'));
@@ -177,8 +215,12 @@ function registerListeners() {
 
     // Blocklist Filters & Forms
     document.getElementById("btn-add-blocklist")?.addEventListener("click", () => {
+        if (!canChangeBlocklist()) return;
+        const error = document.getElementById('bf-error');
+        if (error) error.style.display = 'none';
         document.getElementById("blocklist-form-overlay").classList.remove("hidden");
     });
+    document.getElementById('bl-refresh')?.addEventListener('click', () => loadBlocklist(0, true));
     document.getElementById("blocklist-form-cancel-btn")?.addEventListener("click", () => {
         document.getElementById("blocklist-form-overlay").classList.add("hidden");
     });
@@ -244,26 +286,11 @@ function registerListeners() {
             const type = document.getElementById("bf-type").value;
             const value = document.getElementById("bf-value").value.trim();
             const notes = document.getElementById("bf-notes").value.trim();
-            const errEl = document.getElementById("bf-error");
-
             if (!value) return;
-            try {
-                const resp = await authFetch(`/api/blocklist/${type}`, {
-                    method: "POST",
-                    body: JSON.stringify({ [type]: value, notes: notes })
-                });
-                if (resp.ok) {
-                    document.getElementById("blocklist-form-overlay").classList.add("hidden");
-                    e.target.reset();
-                    loadBlocklist(0);
-                } else {
-                    const data = await resp.json();
-                    if (errEl) {
-                        errEl.textContent = data.error || "Failed to add";
-                        errEl.style.display = "block";
-                    }
-                }
-            } catch (err) { console.error("Add failed", err); }
+            if (await changeBlocklist(type, value, true, notes)) {
+                document.getElementById("blocklist-form-overlay").classList.add("hidden");
+                e.target.reset();
+            }
         }
 
         // Login
@@ -284,6 +311,7 @@ function registerListeners() {
                     const status = await authFetch("/api/auth/status");
                     const identity = status.ok ? await status.json() : {};
                     setCurrentRole(identity.role);
+                    setCurrentUserId(identity.user_id);
                     initApp();
                 } else {
                     errEl.textContent = data.error || "Login failed";
@@ -322,11 +350,35 @@ window.addEventListener("DOMContentLoaded", () => {
         initOnboarding();
         initReplay();
         initOverview();
-        const token = getAuthToken();
+        let token = getAuthToken();
+        const returnUrl = new URL(window.location.href);
+        const oidcResult = returnUrl.searchParams.get('oidc');
+        if (oidcResult) {
+            returnUrl.searchParams.delete('oidc');
+            window.history.replaceState(null, '', returnUrl.pathname + returnUrl.search + returnUrl.hash);
+            setAuthToken(null);
+            token = null;
+            if (oidcResult === 'finish') {
+                try {
+                    const session = await fetch('/api/auth/oidc/session', { method: 'POST', credentials: 'same-origin', cache: 'no-store' });
+                    const result = session.ok ? await session.json() : null;
+                    if (result && typeof result.token === 'string') {
+                        setAuthToken(result.token);
+                        token = result.token;
+                    }
+                } catch (_) { /* 로그인 화면에서 새 요청으로 다시 시작한다. */ }
+            }
+            if (!token) {
+                const error = document.getElementById('login-error');
+                error.textContent = window.i18next.t('login.sso_failed');
+                error.style.display = 'block';
+            }
+        }
         const headers = token ? { "Authorization": `Bearer ${token}` } : {};
         try {
             const resp = await fetch("/api/auth/status", { headers });
             const data = resp.ok ? await resp.json() : null;
+            document.getElementById('login-sso')?.classList.toggle('hidden', data?.oidc?.enabled !== true);
 
             // 인증이 꺼진 배포에서는 로그인 화면을 띄우지 않는다.
             if (data && data.enabled === false) {
@@ -334,6 +386,7 @@ window.addEventListener("DOMContentLoaded", () => {
                 initApp();
             } else if (resp.ok && token) {
                 setCurrentRole(data?.role);
+                setCurrentUserId(data?.user_id);
                 initApp();
             } else {
                 if (token) setAuthToken(null);

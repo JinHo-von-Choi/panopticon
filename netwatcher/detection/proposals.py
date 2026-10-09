@@ -94,6 +94,10 @@ class ProposalService:
         self._yaml_editor = yaml_editor
         self._repo = proposal_repo
         self._replay_service = None
+        self._sensor_origin = None
+
+    def bind_sensor_origin(self, control):
+        self._sensor_origin = control
 
     def require_replay_validation(self, service):
         self._replay_service = service
@@ -133,10 +137,15 @@ class ProposalService:
         params: dict[str, Any],
         reason: str = "",
         source: str = SOURCE_HUMAN,
+        expected_config: dict | None = None,
     ) -> int:
         """제안을 접수한다. 스키마를 어기면 큐에 넣지 않고 거부한다."""
         if not isinstance(params, dict) or not params:
             raise ProposalError("제안 파라미터가 비어 있거나 dict 가 아니다")
+        if self._sensor_origin is not None:
+            if source != SOURCE_AI or expected_config is None:
+                raise ProposalError("센서 AI 제안에는 확인한 현재 설정이 필요합니다")
+            return await self._sensor_origin.proposals.submit_ai(engine, params, reason, expected_config)
 
         schema = self._schema_for(engine)
         if schema is None:
@@ -156,6 +165,8 @@ class ProposalService:
 
         # 되돌리기 근거로 현재 설정을 함께 남긴다
         before = self._current_config(engine)
+        if expected_config is not None and before != expected_config:
+            raise ProposalError("분석 이후 설정이 변경되었습니다. 현재 설정으로 다시 분석하세요")
         proposal_id = await self._repo.insert(
             engine=engine, params=dict(params), reason=reason,
             source=source, before=before,
@@ -240,6 +251,8 @@ class ProposalService:
             await self._validate_runs(row, validation['normal_run_id'], validation['attack_run_id'])
 
         before = dict(row.get("before") or {})
+        if self._current_config(engine) != before:
+            raise ProposalError("제안 이후 설정이 변경되었습니다. 현재 설정으로 다시 제안하세요")
         drift = validate_engine_config(schema, {**before, **params})
         # drift 에 남는 항목은 before 쪽에서 온 것이다 (params 는 위에서 통과)
         existing_drift = [v for v in drift if v.key in before or v.code in ("V-001", "V-002")]
@@ -249,15 +262,14 @@ class ProposalService:
             raise ProposalError("다른 사람이 먼저 결정했다")
 
         try:
-            if self.validation_required and self._current_config(engine) != before:
-                raise RuntimeError("검증 이후 설정이 변경되었습니다")
-            applied = self._apply(engine, params)
-        except Exception as exc:
+            applied = self._apply(engine, params, expected=before)
+        except Exception:
             logger.exception("승인된 제안 적용 실패: id=%s", proposal_id)
-            await self._repo.mark_applied(proposal_id, False, str(exc))
+            error = "설정 제안 반영에 실패했습니다. 현재 설정을 확인하세요"
+            await self._repo.mark_applied(proposal_id, False, error)
             return Decision(
                 proposal_id=proposal_id, approved=True, applied=False,
-                engine=engine, params=params, error=str(exc),
+                engine=engine, params=params, error=error,
                 warnings=existing_drift,
             )
 
@@ -310,14 +322,17 @@ class ProposalService:
 
     def _current_config(self, engine: str) -> dict:
         if self._yaml_editor is None:
-            return {}
+            raise ProposalError("현재 설정을 조회할 수 없습니다")
         try:
-            return dict(self._yaml_editor.get_engine_config(engine) or {})
+            config = self._yaml_editor.get_engine_config(engine)
+            if not isinstance(config, dict):
+                raise ValueError("invalid engine configuration")
+            return dict(config)
         except Exception:
             logger.exception("현재 설정 조회 실패: %s", engine)
-            return {}
+            raise ProposalError("현재 설정을 조회할 수 없습니다") from None
 
-    def _apply(self, engine: str, params: dict) -> bool:
+    def _apply(self, engine: str, params: dict, *, expected: dict) -> bool:
         """검증을 통과한 설정을 런타임과 YAML 에 반영한다.
 
         대시보드 설정 쓰기(PUT /engines/{name}/config)와 **동일한 순서**를
@@ -328,6 +343,8 @@ class ProposalService:
 
         self._yaml_editor.ensure_writable()
         previous = self._current_config(engine)
+        if previous != expected:
+            raise ProposalError("제안 이후 설정이 변경되었습니다. 현재 설정으로 다시 제안하세요")
         merged = {**previous, **params}
         ok, err, _warnings = self._registry.reload_engine(engine, merged)
         if not ok:

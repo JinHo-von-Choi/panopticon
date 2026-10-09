@@ -6,6 +6,10 @@ let _token = localStorage.getItem("nw_token");
 let _authEnabled = false;
 let _authRequired = true;
 let _currentRole = "viewer";
+let _currentUserId = null;
+
+export function setCurrentUserId(id) { _currentUserId = typeof id === 'string' ? id : null; }
+export function getCurrentUserId() { return _currentUserId; }
 
 export function setCurrentRole(role) {
     _currentRole = ["viewer", "analyst", "admin"].includes(role) ? role : "viewer";
@@ -25,6 +29,7 @@ export function setAuthToken(token) {
     } else {
         localStorage.removeItem("nw_token");
         _currentRole = "viewer";
+        _currentUserId = null;
         _authEnabled = false; // 토큰이 없으면 인증도 비활성화
     }
 }
@@ -75,7 +80,8 @@ export async function authFetch(url, options) {
     }
 }
 
-function handleUnauthorized() {
+export function handleUnauthorized() {
+    const hadSession = !!_token || _authEnabled;
     setAuthToken(null);
     setAuthEnabled(false);
     const overlay = document.getElementById("login-overlay");
@@ -83,6 +89,7 @@ function handleUnauthorized() {
         overlay.classList.remove("hidden");
         // 에러 메시지 표시
         const errEl = document.getElementById("login-error");
-        if (errEl) errEl.textContent = "Session expired. Please login again.";
+        if (errEl) errEl.textContent = window.i18next?.t('console.users.session_expired') || "Please sign in again.";
     }
+    if (hadSession) window.dispatchEvent(new Event('nw-session-ended'));
 }

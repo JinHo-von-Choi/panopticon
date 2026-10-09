@@ -1,0 +1,147 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: netwatcher_test
+          POSTGRES_USER: netwatcher
+          POSTGRES_PASSWORD: netwatcher
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U netwatcher"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NETWATCHER_DB_HOST: localhost
+      NETWATCHER_DB_PORT: '5432'
+      NETWATCHER_DB_NAME: netwatcher_test
+      NETWATCHER_DB_USER: netwatcher
+      NETWATCHER_DB_PASSWORD: netwatcher
+      NETWATCHER_TEST_DB_HOST: localhost
+      NETWATCHER_TEST_DB_PORT: '5432'
+      NETWATCHER_TEST_DB_NAME: netwatcher_test
+      NETWATCHER_TEST_DB_USER: netwatcher
+      NETWATCHER_TEST_DB_PASSWORD: netwatcher
+      NETWATCHER_SKIP_DOTENV: '1'
+      PANOPTICON_NATIVE_SENSOR_IMAGE: panopticon-native-release:test
+      PANOPTICON_NATIVE_CONSOLE_IMAGE: panopticon-console-release:test
+      PANOPTICON_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked dependencies
+        run: pip install --require-hashes -r requirements-dev.lock
+      - name: Check attestation verifier
+        run: gh attestation verify --help > /dev/null
+      - name: Prepare browser tests
+        run: |
+          npm ci --prefix tests/browser --ignore-scripts
+          command -v google-chrome
+          echo "PANOPTICON_PLAYWRIGHT_CORE=$GITHUB_WORKSPACE/tests/browser/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "PANOPTICON_CHROME=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: Build isolated runtime images
+        run: |
+          docker build --target native -t "$PANOPTICON_NATIVE_SENSOR_IMAGE" .
+          docker build --target native-console -t "$PANOPTICON_NATIVE_CONSOLE_IMAGE" .
+      - name: Apply migrations
+        run: python -m alembic upgrade head
+      - name: Verify release gates
+        run: python scripts/gates.py
+
+  package:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Build source archive and dependency inventory
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/build_release.py --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/release"
+      - name: Build OCI image archives from the release source
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -eu
+          docker buildx create --name panopticon-release --driver docker-container --use
+          trap 'docker buildx rm panopticon-release' EXIT
+          version="${RELEASE_TAG#v}"
+          source_directory="$(mktemp -d "$RUNNER_TEMP/release-source-XXXXXX")"
+          tar -xzf "$RUNNER_TEMP/release/panopticon-$version.tar.gz" \
+            --strip-components=1 --no-same-owner -C "$source_directory"
+          for target in eve native-console native; do
+            docker buildx build --target "$target" --platform linux/amd64 \
+              --label "org.opencontainers.image.version=$version" \
+              --label "org.opencontainers.image.revision=$RELEASE_COMMIT" \
+              --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+              --provenance=mode=max --sbom=true \
+              --metadata-file "$RUNNER_TEMP/$target-image.json" \
+              --output "type=oci,dest=$RUNNER_TEMP/release/panopticon-$version-$target.oci.tar" \
+              "$source_directory"
+          done
+          python scripts/release_image_manifest.py --release-directory "$RUNNER_TEMP/release" --metadata-directory "$RUNNER_TEMP"
+      - name: Sign build provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/release/*
+      - name: Sign Python dependency inventory
+        id: dependencies
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/release/panopticon-*.tar.gz
+          sbom-path: ${{ runner.temp }}/release/sbom.cdx.json
+      - name: Verify provenance before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          DEPENDENCY_BUNDLE: ${{ steps.dependencies.outputs.bundle-path }}
+        run: |
+          for artifact in "$RUNNER_TEMP"/release/*; do
+            gh attestation verify "$artifact" --bundle "$PROVENANCE_BUNDLE" --repo "$RELEASE_REPOSITORY" --signer-workflow "$RELEASE_REPOSITORY/.github/workflows/release.yml" --source-digest "$RELEASE_COMMIT"
+          done
+          for archive in "$RUNNER_TEMP"/release/panopticon-*.tar.gz; do
+            gh attestation verify "$archive" --bundle "$DEPENDENCY_BUNDLE" --repo "$RELEASE_REPOSITORY" --signer-workflow "$RELEASE_REPOSITORY/.github/workflows/release.yml" --source-digest "$RELEASE_COMMIT" --predicate-type https://cyclonedx.org/bom
+          done
+          cp "$PROVENANCE_BUNDLE" "$RUNNER_TEMP/release/provenance.sigstore.json"
+          cp "$DEPENDENCY_BUNDLE" "$RUNNER_TEMP/release/dependencies.sigstore.json"
+      - name: Publish a draft release for final review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: gh release create "$RELEASE_TAG" "$RUNNER_TEMP"/release/* --repo "$RELEASE_REPOSITORY" --verify-tag --draft --title "Panopticon $RELEASE_TAG" --generate-notes

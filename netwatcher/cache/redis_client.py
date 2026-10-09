@@ -78,8 +78,8 @@ class RedisClient:
         if self._pool is not None:
             try:
                 await self._pool.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Redis pool cleanup failed (%s)", type(exc).__name__)
             self._pool     = None
             self._available = False
 

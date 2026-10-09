@@ -72,6 +72,11 @@ function abbreviate(val) {
 function updateCounter(id, val) {
     const el = document.getElementById(id);
     if (el) {
+        if (val === null || val === undefined) {
+            el.textContent = '-';
+            el.removeAttribute('title');
+            return;
+        }
         const n = val || 0;
         el.textContent = abbreviate(n);
         el.title = n.toLocaleString();

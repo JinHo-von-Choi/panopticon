@@ -9,6 +9,8 @@ from typing import NamedTuple
 
 import aiohttp
 
+from netwatcher.utils.public_http import public_client_session
+
 from netwatcher.inventory.risk_scorer import assess
 from netwatcher.storage.repositories import (
     DeviceRepository,
@@ -347,7 +349,7 @@ class DailyReporter:
                 ],
             })
 
-        async with aiohttp.ClientSession() as session:
+        async with public_client_session() as session:
             async with session.post(
                 self._slack_url,
                 json={"blocks": blocks},
@@ -404,7 +406,7 @@ class DailyReporter:
             "parse_mode": "Markdown",
         }
 
-        async with aiohttp.ClientSession() as session:
+        async with public_client_session() as session:
             async with session.post(
                 url, json=payload,
                 timeout=aiohttp.ClientTimeout(total=15),
@@ -471,7 +473,7 @@ class DailyReporter:
         if d.dashboard_url:
             embed["url"] = d.dashboard_url
 
-        async with aiohttp.ClientSession() as session:
+        async with public_client_session() as session:
             async with session.post(
                 self._discord_url,
                 json={"embeds": [embed]},

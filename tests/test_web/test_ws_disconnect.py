@@ -36,3 +36,37 @@ async def test_idle_disconnect_releases_subscription_promptly():
         server.should_exit = True
         await asyncio.wait_for(task, 2)
         listener.close()
+
+
+@pytest.mark.asyncio
+async def test_outgoing_rate_limit_notifies_client_once(monkeypatch):
+    from netwatcher.alerts.stream import EventStream
+    import netwatcher.web.routes.events as routes
+    import json
+    monkeypatch.setattr(routes, '_WS_RATE_LIMIT_MSG_PER_MIN', 2)
+    stream = EventStream()
+    app = FastAPI()
+    app.include_router(create_ws_router(stream), prefix='/api')
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, log_level='critical', lifespan='off', timeout_graceful_shutdown=1))
+    task = asyncio.create_task(server.serve(sockets=[listener]))
+    try:
+        async with asyncio.timeout(5):
+            while not server.started:
+                assert not task.done()
+                await asyncio.sleep(.01)
+        async with websockets.connect(f'ws://127.0.0.1:{port}/api/ws/events') as client:
+            for identifier in range(5):
+                stream.publish({'type': 'alert', 'id': identifier})
+            assert json.loads(await asyncio.wait_for(client.recv(), 2))['id'] == 0
+            assert json.loads(await asyncio.wait_for(client.recv(), 2))['id'] == 1
+            assert json.loads(await asyncio.wait_for(client.recv(), 2)) == {'type': 'stream_gap', 'reason': 'websocket_rate_limit'}
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(client.recv(), .2)
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(task, 2)
+        listener.close()

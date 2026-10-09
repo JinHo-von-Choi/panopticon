@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import TYPE_CHECKING
 
 try:
@@ -33,8 +34,9 @@ def _positive_hours(value, default: float = 6.0) -> float:
     try:
         hours = float(value)
     except (TypeError, ValueError):
+        logger.warning("갱신 주기를 확인할 수 없어 기본값 %s 시간을 사용합니다", default)
         return default
-    if hours <= 0:
+    if not math.isfinite(hours) or hours <= 0:
         logger.warning(
             "주기 값이 양수가 아니다(%r) — 기본값 %s 시간을 사용한다", value, default,
         )
@@ -53,8 +55,10 @@ class MaintenanceService:
         incident_repo: IncidentRepository,
         feed_manager: FeedManager | None,
         block_manager: BlockManager | None,
+        *, retention_enabled: bool = True,
     ) -> None:
         """유지보수 서비스를 초기화한다. 저장소, 피드 매니저, 차단 매니저를 주입받는다."""
+        self.retention_enabled = retention_enabled
         self.config        = config
         self.event_repo    = event_repo
         self.stats_repo    = stats_repo
@@ -68,7 +72,8 @@ class MaintenanceService:
 
     async def start(self) -> None:
         """보존 정책 정리, 피드 갱신, 차단 정리 루프를 시작한다."""
-        self._retention_task = asyncio.create_task(self._retention_cleanup_loop())
+        if self.retention_enabled:
+            self._retention_task = asyncio.create_task(self._retention_cleanup_loop())
         self._feed_task      = asyncio.create_task(self._feed_refresh_loop())
         self._block_task     = asyncio.create_task(self._block_cleanup_loop())
 
@@ -85,7 +90,7 @@ class MaintenanceService:
 
     async def _retention_cleanup_loop(self) -> None:
         """주기적으로 오래된 이벤트, 통계, 인시던트를 정리한다."""
-        interval = self.config.get("retention.cleanup_interval_hours", 6) * 3600
+        interval = _positive_hours(self.config.get("retention.cleanup_interval_hours", 6)) * 3600
         while True:
             await asyncio.sleep(interval)
             try:

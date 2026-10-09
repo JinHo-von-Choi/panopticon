@@ -154,15 +154,12 @@ class TestEngineTPPConsistency:
 
         result = {}
         for finder, module_name, _ in pkgutil.iter_modules(engines_pkg.__path__):
-            try:
-                mod = importlib.import_module(f"netwatcher.detection.engines.{module_name}")
-                for _, cls in inspect.getmembers(mod, inspect.isclass):
-                    if issubclass(cls, DetectionEngine) and cls is not DetectionEngine:
-                        ttps = getattr(cls, "mitre_attack_ids", [])
-                        if ttps:
-                            result[cls.name] = ttps
-            except Exception:
-                pass
+            mod = importlib.import_module(f"netwatcher.detection.engines.{module_name}")
+            for _, cls in inspect.getmembers(mod, inspect.isclass):
+                if issubclass(cls, DetectionEngine) and cls is not DetectionEngine:
+                    ttps = getattr(cls, "mitre_attack_ids", [])
+                    if ttps:
+                        result[cls.name] = ttps
         return result
 
     def test_engine_ttps_resolvable(self):

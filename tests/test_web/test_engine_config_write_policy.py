@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from tests.auth_helpers import configured_auth
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -207,13 +208,8 @@ def test_toggle_requires_admin_role(registry, yaml_editor):
     app = FastAPI()
     app.include_router(create_engines_router(registry, yaml_editor), prefix="/api")
 
-    from netwatcher.web.auth import AuthManager
-    import time
 
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = "test-secret"
-    manager._expire_hours = 1
+    manager = configured_auth("test-secret")
     import jwt as pyjwt
     from datetime import datetime, timedelta, timezone
 
@@ -240,15 +236,11 @@ def test_config_write_requires_admin_role(registry, yaml_editor):
     import jwt as pyjwt
     from datetime import datetime, timedelta, timezone
 
-    from netwatcher.web.auth import AuthManager
 
     app = FastAPI()
     app.include_router(create_engines_router(registry, yaml_editor), prefix="/api")
 
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = "test-secret"
-    manager._expire_hours = 1
+    manager = configured_auth("test-secret")
     app.state.auth_manager = manager
 
     now = datetime.now(timezone.utc)
@@ -273,15 +265,11 @@ def test_admin_role_can_write(registry, yaml_editor):
     import jwt as pyjwt
     from datetime import datetime, timedelta, timezone
 
-    from netwatcher.web.auth import AuthManager
 
     app = FastAPI()
     app.include_router(create_engines_router(registry, yaml_editor), prefix="/api")
 
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = "test-secret"
-    manager._expire_hours = 1
+    manager = configured_auth("test-secret")
     app.state.auth_manager = manager
 
     now = datetime.now(timezone.utc)

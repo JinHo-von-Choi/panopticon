@@ -47,7 +47,7 @@ def _build_database_url() -> str:
             user     = pg.get("username", user)
             password = pg.get("password", password)
         except Exception:
-            pass
+            raise RuntimeError("Migration configuration could not be loaded") from None
 
     socket_host = str(host).startswith("/")
     return URL.create(
@@ -69,7 +69,7 @@ def _get_search_path() -> str:
         pg  = cfg.section("postgresql")
         return pg.get("search_path", "netwatcher,public")
     except Exception:
-        return "netwatcher,public"
+        raise RuntimeError("Migration search path configuration could not be loaded") from None
 
 
 def run_migrations_offline() -> None:

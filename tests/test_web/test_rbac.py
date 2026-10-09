@@ -36,8 +36,8 @@ class TestRolePermissions:
     def test_analyst_permissions(self):
         assert has_permission(Role.ANALYST, "read")
         assert has_permission(Role.ANALYST, "acknowledge")
-        assert has_permission(Role.ANALYST, "block")
-        assert has_permission(Role.ANALYST, "unblock")
+        assert not has_permission(Role.ANALYST, "block")
+        assert not has_permission(Role.ANALYST, "unblock")
         assert has_permission(Role.ANALYST, "export")
         assert not has_permission(Role.ANALYST, "admin_only_action")
 
@@ -165,7 +165,7 @@ class TestRequireRoleDependency:
     async def test_invalid_token_returns_401(self):
         auth = MagicMock()
         auth.enabled = True
-        auth.verify_token.return_value = None
+        auth.verify_token_async = AsyncMock(return_value=None)
         app = self._build_app(auth, [Role.ADMIN])
 
         transport = ASGITransport(app=app)
@@ -177,7 +177,7 @@ class TestRequireRoleDependency:
     async def test_wrong_role_returns_403(self):
         auth = MagicMock()
         auth.enabled = True
-        auth.verify_token.return_value = {"sub": "user1", "role": "viewer"}
+        auth.verify_token_async = AsyncMock(return_value={"sub": "user1", "role": "viewer"})
         app = self._build_app(auth, [Role.ADMIN])
 
         transport = ASGITransport(app=app)
@@ -189,7 +189,7 @@ class TestRequireRoleDependency:
     async def test_correct_role_passes(self):
         auth = MagicMock()
         auth.enabled = True
-        auth.verify_token.return_value = {"sub": "admin1", "role": "admin"}
+        auth.verify_token_async = AsyncMock(return_value={"sub": "admin1", "role": "admin"})
         app = self._build_app(auth, [Role.ADMIN])
 
         transport = ASGITransport(app=app)
@@ -202,7 +202,7 @@ class TestRequireRoleDependency:
     async def test_multiple_allowed_roles(self):
         auth = MagicMock()
         auth.enabled = True
-        auth.verify_token.return_value = {"sub": "analyst1", "role": "analyst"}
+        auth.verify_token_async = AsyncMock(return_value={"sub": "analyst1", "role": "analyst"})
         app = self._build_app(auth, [Role.ADMIN, Role.ANALYST])
 
         transport = ASGITransport(app=app)

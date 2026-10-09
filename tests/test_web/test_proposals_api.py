@@ -19,11 +19,11 @@ from unittest.mock import MagicMock
 
 import jwt
 import pytest
+from tests.auth_helpers import configured_auth
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from netwatcher.detection.proposals import STATUS_PENDING, ProposalService
-from netwatcher.web.auth import AuthManager
 from netwatcher.web.routes.proposals import create_proposals_router
 from netwatcher.web.rbac import Role
 
@@ -95,10 +95,7 @@ def _client(repo=None, reload_result=(True, None, [])) -> tuple[TestClient, Magi
     app.include_router(create_proposals_router(svc), prefix="/api")
 
     # 인증을 켠 상태로 역할 검증을 실제로 건다
-    manager = AuthManager.__new__(AuthManager)
-    manager._enabled = True
-    manager._secret = SECRET
-    manager._expire_hours = 1
+    manager = configured_auth(SECRET)
     app.state.auth_manager = manager
 
     return TestClient(app), editor, repo
@@ -114,6 +111,35 @@ def _token(role: Role) -> str:
 
 def _h(role: Role) -> dict:
     return {"Authorization": f"Bearer {_token(role)}"}
+
+
+def test_submit_does_not_hide_config_read_failure():
+    client, editor, repo = _client()
+    editor.get_engine_config.side_effect = OSError("private configuration path")
+    response = client.post("/api/proposals", headers=_h(Role.ANALYST),
+                           json={"engine": "port_scan", "params": {"threshold": 80}})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "현재 설정을 조회할 수 없습니다"
+    assert "private configuration path" not in response.text
+    assert repo.rows == {}
+
+
+def test_apply_error_response_and_queue_do_not_expose_internal_exception():
+    client, editor, repo = _client()
+    response = client.post("/api/proposals", headers=_h(Role.ANALYST),
+                           json={"engine": "port_scan", "params": {"threshold": 80}})
+    assert response.status_code == 201
+    pid = response.json()["id"]
+    editor.update_engine_config.side_effect = OSError("private configuration path")
+    response = client.post(f"/api/proposals/{pid}/approve", headers=_h(Role.ADMIN), json={})
+    assert response.status_code == 200
+    assert response.json()["applied"] is False
+    assert response.json()["status"] == "failed"
+    assert "private configuration path" not in response.text
+    response = client.get("/api/proposals", headers=_h(Role.VIEWER))
+    assert response.status_code == 200
+    assert "private configuration path" not in response.text
+    assert repo.rows[pid]["apply_error"] == "설정 제안 반영에 실패했습니다. 현재 설정을 확인하세요"
 
 
 # ------------------------------------------------------------------

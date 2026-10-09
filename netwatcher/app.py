@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from pathlib import Path
 
 from netwatcher.alerts.dispatcher import AlertDispatcher
 from netwatcher.capture.pcap_writer import PCAPWriter
@@ -32,7 +33,6 @@ from netwatcher.utils.config import Config
 from netwatcher.utils.logging_setup import setup_logging
 from netwatcher.utils.network import AsyncDNSResolver
 from netwatcher.utils.yaml_editor import YamlConfigEditor
-from netwatcher.web.server import create_app
 
 logger = logging.getLogger("netwatcher.app")
 
@@ -53,8 +53,50 @@ class NetWatcher:
     컴포넌트 연결, 시작 순서 제어, 정상 종료만 담당한다.
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, *, sensor_only: bool = False) -> None:
+        if type(sensor_only) is not bool:
+            raise ValueError("sensor_only는 불리언이어야 합니다")
+        if sensor_only:
+            if config.get("input.mode", "native") != "native":
+                raise ValueError("독립 센서는 input.mode: native가 필요합니다")
+            for path in ("response.enabled", "response_execution.enabled"):
+                if str(config.get(path, False)).lower() in {"true", "1", "yes"}:
+                    raise ValueError(f"독립 센서에서 {path}를 사용할 수 없습니다")
         self.config = config
+        self.sensor_only = sensor_only
+        self._sensor_cleanup = []
+        self._shutdown_completed = False
+        self._run_task = None
+        self._stop_event = None
+        self._capture_started = False
+        self._sensor_sniffer = None
+        self._sensor_flow_collector = None
+        self._sensor_dispatcher = None
+        self._sensor_stats = None
+        self._sensor_health = None
+        self._sensor_control_server = None
+        self._sensor_control_unconfirmed = False
+        self._sensor_control_settings = None
+        if sensor_only:
+            control = config.get("native.control", {})
+            if not isinstance(control, dict) or type(control.get("enabled", False)) is not bool:
+                raise ValueError("native.control 설정이 유효하지 않습니다")
+            if control.get("enabled"):
+                login = config.get("auth.enabled")
+                if not (login is True or login == "true") or config.get("auth.multi_user") is not True:
+                    raise ValueError("센서 제어에는 인증과 다중 사용자 설정이 필요합니다")
+                if type(control.get("allowed_uid")) is not int or control["allowed_uid"] <= 0:
+                    raise ValueError("센서 제어 호출자는 명시적인 일반 사용자 UID여야 합니다")
+                if not isinstance(control.get("socket_path"), str) or not Path(control["socket_path"]).is_absolute():
+                    raise ValueError("센서 제어에는 절대 소켓 경로가 필요합니다")
+                if control.get("socket_gid") is not None and (type(control["socket_gid"]) is not int or control["socket_gid"] < 0):
+                    raise ValueError("센서 제어 소켓 그룹이 유효하지 않습니다")
+                if type(config.get("workers", 1)) is not int or not 1 <= config.get("workers", 1) <= 32:
+                    raise ValueError("센서 제어의 워커 수는 1~32 사이의 정수여야 합니다")
+                if not config.config_path:
+                    raise ValueError("센서 제어에는 저장할 설정 파일이 필요합니다")
+                self._sensor_control_settings = control
+        self._sensor_previous_signals = {}
         self.loop: asyncio.AbstractEventLoop | None = None
         # 지원 프로필 계약. run() 에서 기동 직전에 검증한다.
         self.support_contract = None
@@ -63,6 +105,14 @@ class NetWatcher:
 
         # 핵심 컴포넌트
         self.db         = Database(config)
+        self._sensor_publisher = None
+        if sensor_only:
+            from netwatcher.services.sensor_state import SensorStatePublisher
+            from netwatcher.storage.sensor_state import SensorStateRepository
+            self._sensor_publisher = SensorStatePublisher(SensorStateRepository(self.db),
+                config.get("native.sensor_id"), self._sensor_snapshot, self._request_sensor_stop,
+                interval=config.get("native.heartbeat_seconds", 5),
+                lease_seconds=config.get("native.lease_seconds", 30))
         self.registry   = EngineRegistry(config)
         self.correlator = AlertCorrelator()
         evidence_cfg = config.section("evidence")
@@ -85,9 +135,90 @@ class NetWatcher:
             self._yaml_editor = None
             logger.warning("Config file path not available; engine config editing disabled")
 
+    def _register_sensor_cleanup(self, name, operation):
+        if self.sensor_only:
+            self._sensor_cleanup.append((name, operation))
+
+    def _sensor_snapshot(self):
+        snapshot = self.observation.snapshot() if self.observation else {
+            "state": "unknown", "reasons": ["센서를 초기화하는 중입니다."], "no_traffic_observed": None}
+        snapshot["runtime"] = {
+            "capture_running": bool(self._sensor_sniffer and self._sensor_sniffer.is_running),
+            "registered_engines": len(self.registry.engines),
+            "alert_queue": {"queued": self._sensor_dispatcher._queue.qsize(),
+                            "oldest_age_seconds": self._sensor_dispatcher.oldest_queue_age_seconds}
+                           if self._sensor_dispatcher else None,
+            "stats_flush": self._sensor_stats.status() if self._sensor_stats else None,
+        }
+        if self._sensor_health is not None:
+            snapshot["runtime"]["health_components"] = {
+                "sniffer": self._sensor_health._check_sniffer(),
+                "engines": self._sensor_health._check_engines(),
+                "alert_queue": self._sensor_health._check_alert_queue(),
+                "stats_flush": self._sensor_stats.status() if self._sensor_stats else {"status": "unconfigured"},
+            }
+        if not snapshot["runtime"]["capture_running"]:
+            snapshot["state"] = "unknown"
+            snapshot["no_traffic_observed"] = None
+            snapshot["reasons"] = [*(snapshot.get("reasons") or []), "패킷 캡처의 실행을 확인할 수 없습니다."]
+        return snapshot
+
+    def _request_sensor_stop(self):
+        if self._sensor_sniffer is not None:
+            self._sensor_sniffer.stop_accepting()
+        if self._sensor_flow_collector is not None:
+            self._sensor_flow_collector.stop_accepting()
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if (not self._capture_started and self._run_task is not None and not self._run_task.done()
+                and asyncio.current_task() is not self._run_task):
+            self._run_task.cancel()
+
+    def _request_sensor_control_stop(self):
+        self._sensor_control_unconfirmed = True
+        self._request_sensor_stop()
+
     async def run(self) -> None:
+        self._run_task = asyncio.current_task()
+        try:
+            await self._run()
+            if self._sensor_control_unconfirmed:
+                from netwatcher.services.sensor_control import SensorControlError
+                raise SensorControlError("sensor_change_unconfirmed", 503)
+            if self._sensor_publisher and self._sensor_publisher.lost:
+                from netwatcher.storage.sensor_state import SensorLeaseLost
+                raise SensorLeaseLost("실행 소유권을 확인하지 못해 센서를 중단했습니다")
+        except asyncio.CancelledError:
+            if not self.sensor_only or self._stop_event is None or not self._stop_event.is_set():
+                raise
+            if self._sensor_publisher and self._sensor_publisher.lost:
+                from netwatcher.storage.sensor_state import SensorLeaseLost
+                raise SensorLeaseLost("초기화 중 실행 소유권을 잃어 센서를 중단했습니다") from None
+        finally:
+            if self.sensor_only and not self._shutdown_completed:
+                self._request_sensor_stop()
+                from netwatcher.services.shutdown import ShutdownBudget
+                budget = ShutdownBudget(self.config.get("shutdown.timeout_seconds", 10))
+                for name, operation in reversed(self._sensor_cleanup):
+                    await budget.run(name, operation, limit=2)
+                self._sensor_cleanup.clear()
+                self.db.terminate()
+            if self.sensor_only and self.loop is not None:
+                for sig, handler in self._sensor_previous_signals.items():
+                    self.loop.remove_signal_handler(sig)
+                    signal.signal(sig, handler)
+                self._sensor_previous_signals.clear()
+
+    async def _run(self) -> None:
         """메인 진입점: 모든 컴포넌트를 시작한다."""
+        from netwatcher.response.remote import remote_client_from_config
+        remote_enabled = not self.sensor_only and remote_client_from_config(self.config) is not None
         self.loop = asyncio.get_running_loop()
+        self._stop_event = asyncio.Event()
+        if self.sensor_only:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                self._sensor_previous_signals[sig] = signal.getsignal(sig)
+                self.loop.add_signal_handler(sig, self._request_sensor_stop)
 
         setup_logging(self.config)
         
@@ -95,7 +226,7 @@ class NetWatcher:
         from pathlib import Path
         from netwatcher.utils.i18n import i18n
         locales_dir = Path(__file__).parent / "web" / "static" / "locales"
-        default_lang = self.config.get("netwatcher.language.default", "ko")
+        default_lang = self.config.get("language.default", "ko")
         i18n.init(locales_dir, default_lang)
         
         logger.info("NetWatcher starting...")
@@ -107,7 +238,12 @@ class NetWatcher:
         logger.info("Support profile: %s", self.support_contract.profile)
 
         # ── 데이터베이스 & 리포지토리 ──────────────────────────────────
+        self._register_sensor_cleanup("database", self.db.close)
         await self.db.connect()
+        if self._sensor_publisher:
+            self._register_sensor_cleanup("sensor_state", self._sensor_publisher.stop)
+            await self._sensor_publisher.start()
+        self._register_sensor_cleanup("engines", lambda: asyncio.to_thread(self.registry.shutdown))
         event_repo    = EventRepository(self.db)
         device_repo   = DeviceRepository(self.db)
         stats_repo    = TrafficStatsRepository(self.db)
@@ -128,6 +264,7 @@ class NetWatcher:
             key_prefix=redis_cfg.get("key_prefix", "nw:"),
             enabled=redis_cfg.get("enabled", False),
         )
+        self._register_sensor_cleanup("redis", redis_client.close)
         await redis_client.connect()
 
         # ── HA 관리자 ─────────────────────────────────────────────────────
@@ -142,7 +279,7 @@ class NetWatcher:
         # ── 차단 관리자 (IRS 자동 차단) ──────────────────────────────────
         block_manager: BlockManager | None = None
         response_cfg = self.config.section("response") or {}
-        if response_cfg.get("enabled", False):
+        if not self.sensor_only and response_cfg.get("enabled", False):
             block_manager = BlockManager(
                 enabled=True,
                 backend=response_cfg.get("backend", "iptables"),
@@ -166,7 +303,7 @@ class NetWatcher:
         # "경보 없음" 이 "문제 없음" 으로 읽히지 않게, 경보 옆에 무엇을
         # 관측했고 무엇을 관측하지 못했는지 남긴다. 기동 시점에 만든다.
         observation = ObservationService(
-            sensor_id=_sensor_id(self.config),
+            sensor_id=self._sensor_publisher.sensor_id if self._sensor_publisher else _sensor_id(self.config),
             heartbeat_seconds=obs_cfg.get("heartbeat_seconds", 10.0),
             missed_beats_to_stale=obs_cfg.get("missed_beats_to_stale", 3),
         )
@@ -182,6 +319,8 @@ class NetWatcher:
             block_manager=block_manager,
             observation=observation,
         )
+        self._sensor_dispatcher = dispatcher
+        self._register_sensor_cleanup("alerts", dispatcher.stop)
         await dispatcher.start()
 
         # ── 탐지 엔진 ─────────────────────────────────────────────────────
@@ -205,6 +344,7 @@ class NetWatcher:
                 state_manager=state_manager,
                 interval_seconds=checkpoint_interval,
             )
+            self._register_sensor_cleanup("checkpoint", checkpoint_service.stop)
             await checkpoint_service.start()
             logger.info("Checkpoint service started (interval=%ds)", checkpoint_interval)
 
@@ -219,6 +359,7 @@ class NetWatcher:
 
         ha_manager.on_become_leader = _on_become_leader
         ha_manager.on_lose_leader = _on_lose_leader
+        self._register_sensor_cleanup("ha", ha_manager.stop)
         await ha_manager.start()
 
         # ── 위협 인텔리전스 피드 ──────────────────────────────────────────
@@ -232,9 +373,7 @@ class NetWatcher:
             feed_mgr.load_custom_entries(custom_ips, custom_domains)
 
             await feed_mgr.update_all()
-            for engine in self.registry.engines:
-                if hasattr(engine, "set_feeds"):
-                    engine.set_feeds(feed_mgr)
+            self.registry.set_feeds(feed_mgr)
 
             try:
                 from netwatcher.web.metrics import feed_last_update
@@ -243,14 +382,26 @@ class NetWatcher:
                 pass
         except Exception:
             logger.warning("Threat intel feeds not loaded (non-fatal)", exc_info=True)
+            feed_mgr = None
+            self.registry.set_feeds(None)
 
         # ── 멀티프로세스 워커 풀 ─────────────────────────────────────────
         from netwatcher.capture.pool import WorkerPool
 
         num_workers = self.config.get("workers", 1)
         worker_pool = WorkerPool(self.config, num_workers=num_workers)
+        if worker_pool.is_multiprocess:
+            worker_pool.bind_failure(lambda: self.loop.call_soon_threadsafe(self._request_sensor_control_stop))
+        self._register_sensor_cleanup("workers", lambda: asyncio.to_thread(worker_pool.stop, timeout=1))
         worker_pool.start()
         if worker_pool.is_multiprocess:
+            await asyncio.to_thread(worker_pool.wait_ready, timeout=30)
+            worker_pool.configure_feeds(feed_mgr, timeout=5)
+            signature = self.registry._find_active("signature")
+            if signature is not None:
+                worker_pool.configure_rules(signature.rules, timeout=5)
+            if feed_mgr is not None:
+                feed_mgr.bind_runtime_update(worker_pool.configure_feeds)
             logger.info(
                 "멀티프로세스 모드: %d 워커 활성",
                 worker_pool.num_workers,
@@ -291,7 +442,13 @@ class NetWatcher:
             incident_repo=incident_repo,
             feed_manager=feed_mgr,
             block_manager=block_manager,
+            retention_enabled=not self.sensor_only,
         )
+
+        self._sensor_stats = stats_flush
+        self._register_sensor_cleanup("tick", tick_service.stop)
+        self._register_sensor_cleanup("stats", stats_flush.stop)
+        self._register_sensor_cleanup("maintenance", maintenance.stop)
 
         # ── 설정 제안 승인 큐 (PR 10) ────────────────────────────────────
         # AI 는 설정을 바꾸지 못한다. 제안만 큐에 올리고, 사람이 승인한
@@ -326,18 +483,19 @@ class NetWatcher:
             engines_cfg = netflow_cfg.get("engines", {})
 
             ps_cfg = engines_cfg.get("flow_port_scan", {})
-            if ps_cfg.get("enabled", True):
-                flow_processor.register_engine(FlowPortScanEngine(ps_cfg))
+            flow_processor.configure_engine(FlowPortScanEngine, ps_cfg)
 
             de_cfg = engines_cfg.get("flow_data_exfil", {})
-            if de_cfg.get("enabled", True):
-                flow_processor.register_engine(FlowDataExfilEngine(de_cfg))
+            flow_processor.configure_engine(FlowDataExfilEngine, de_cfg)
 
             flow_collector = FlowCollector(
                 processor = flow_processor,
                 host      = netflow_cfg.get("host", "0.0.0.0"),
                 port      = netflow_cfg.get("port", 2055),
             )
+            if self.sensor_only:
+                self._sensor_flow_collector = flow_collector
+            self._register_sensor_cleanup("flow_input", lambda: asyncio.to_thread(flow_collector.stop))
             await flow_collector.start()
             tick_service.set_flow_processor(flow_processor)
             logger.info(
@@ -375,107 +533,112 @@ class NetWatcher:
             max_pending_bytes=self.config.get('replay.max_pending_bytes', 33554432),
             timeout=self.config.get('replay.timeout_seconds', 600))
         proposal_service.require_replay_validation(replay_service)
+        self._register_sensor_cleanup("replay", replay_service.stop)
 
-        # ── 조치 생애주기 (계획서 2장, PR 13) ────────────────────────────
-        # OS 를 변경하는 백엔드는 없다. 계획서가 "검증된 만료 백엔드·권한
-        # 분리·적용 경로 증명이 하나라도 없으면 shadow/제안만 출시한다" 라고
-        # 했으므로, 지금은 shadow 실행기만 등록한다. 기존 iptables 자동 차단도
-        # 복구 검증 전까지 계속 비활성화한다.
-        from netwatcher.response.executor import build_executor, executor_capabilities
-        from netwatcher.storage.repositories import (
-            ResponseActionRepository,
-            ResponseProposalRepository,
-        )
-
-        response_repository = ResponseActionRepository(self.db)
-        response_proposal_repo = ResponseProposalRepository(self.db)
-
-        # 실행기 선택. nftables 은 구현되어 있지만 **커널 만료가 실측 확인되기
-        # 전까지는 스스로를 쓸 수 있다고 말하지 않는다.** 기동 시 자동 검증하면
-        # 라이브 장비 방화벽에 우리 테이블을 남기므로, 검증은 운영자가
-        #   sudo python -m netwatcher.verify_nftables
-        # 로 명시적으로 수행한다.
-        backend = (response_cfg or {}).get("backend", "shadow")
-        response_executor = build_executor(backend)
-        caps = executor_capabilities(backend, response_executor)
-        logger.info(
-            "Response executor: %s (applies_to_os=%s, kernel_expiry_verified=%s)",
-            caps["backend"], caps["applies_to_os"],
-            caps.get("kernel_expiry_verified"),
-        )
-        if caps["applies_to_os"] and not caps.get("kernel_expiry_verified"):
-            logger.warning(
-                "nftables 백엔드가 구현되어 있으나 커널 만료가 검증되지 않았다 — "
-                "적용 시 거부된다. sudo python -m netwatcher.verify_nftables 로 검증한다."
+        if not self.sensor_only:
+            # ── 조치 생애주기 (계획서 2장, PR 13) ────────────────────────────
+            # OS 를 변경하는 백엔드는 없다. 계획서가 "검증된 만료 백엔드·권한
+            # 분리·적용 경로 증명이 하나라도 없으면 shadow/제안만 출시한다" 라고
+            # 했으므로, 지금은 shadow 실행기만 등록한다. 기존 iptables 자동 차단도
+            # 복구 검증 전까지 계속 비활성화한다.
+            from netwatcher.response.executor import build_executor, executor_capabilities
+            from netwatcher.storage.repositories import (
+                ResponseActionRepository,
+                ResponseProposalRepository,
             )
 
-        # ── 웹 서버 ───────────────────────────────────────────────────────
+            response_repository = ResponseActionRepository(self.db)
+            response_proposal_repo = ResponseProposalRepository(self.db)
+
+            # 실행기 선택. nftables 은 구현되어 있지만 **커널 만료가 실측 확인되기
+            # 전까지는 스스로를 쓸 수 있다고 말하지 않는다.** 기동 시 자동 검증하면
+            # 라이브 장비 방화벽에 우리 테이블을 남기므로, 검증은 운영자가
+            #   sudo python -m netwatcher.verify_nftables
+            # 로 명시적으로 수행한다.
+            backend = (response_cfg or {}).get("backend", "shadow")
+            response_executor = None if remote_enabled else build_executor(backend)
+            caps = ({"backend": "shadow", "applies_to_os": False, "kernel_expiry_verified": False,
+                     "mode": "shadow", "notice": "독립 실행기에 연결하며 실제 차단은 적용하지 않습니다"}
+                    if remote_enabled else executor_capabilities(backend, response_executor))
+            logger.info(
+                "Response executor: %s (applies_to_os=%s, kernel_expiry_verified=%s)",
+                caps["backend"], caps["applies_to_os"],
+                caps.get("kernel_expiry_verified"),
+            )
+            if caps["applies_to_os"] and not caps.get("kernel_expiry_verified"):
+                logger.warning(
+                    "nftables 백엔드가 구현되어 있으나 커널 만료가 검증되지 않았다 — "
+                    "적용 시 거부된다. sudo python -m netwatcher.verify_nftables 로 검증한다."
+                )
+
         from netwatcher.observability.observation import KernelDropProbe
-        from netwatcher.web.auth import AuthManager
-        auth_manager = AuthManager(self.config)
-
-        # 대시보드와 스니퍼가 같은 프로브를 써야 "측정 불가" 와 "측정 안 함" 이
-        # 어긋나지 않는다.
-        kernel_probe = KernelDropProbe(observation)
-
         from netwatcher.observability.health import HealthChecker
-        from netwatcher.web.audit_log import AuditLogger
+        kernel_probe = KernelDropProbe(observation)
         health_checker = HealthChecker(database=self.db, dispatcher=dispatcher,
                                        registry=self.registry, observation=observation, stats_flush=stats_flush)
-        app = create_app(
-            config=self.config,
-            event_repo=event_repo,
-            device_repo=device_repo,
-            stats_repo=stats_repo,
-            dispatcher=dispatcher,
-            auth_manager=auth_manager,
-            correlator=self.correlator,
-            whitelist=self.registry.whitelist,
-            blocklist_repo=blocklist_repo,
-            feed_manager=feed_mgr,
-            sniffer=None,
-            block_manager=block_manager,
-            signature_engine=sig_engine,
-            registry=self.registry,
-            yaml_editor=self._yaml_editor,
-            flow_processor=flow_processor,
-            ai_analyzer=ai_analyzer,
-            proposal_service=proposal_service,
-            observation_service=observation,
-            kernel_probe=kernel_probe,
-            replay_service=replay_service,
-            response_repository=response_repository,
-            response_executor=response_executor,
-            response_proposal_repo=response_proposal_repo,
-            health_checker=health_checker,
-            audit_logger=AuditLogger(self.db.pool),
-            audit_required=True,
-            pcap_writer=self.pcap_writer,
-        )
+        self._sensor_health = health_checker
+        server = None
+        server_task = None
+        if not self.sensor_only:
+            from netwatcher.web.server import create_app
+            from netwatcher.web.auth import AuthManager
+            from netwatcher.storage.user_accounts import UserAccounts
+            from netwatcher.web.audit_log import AuditLogger
+            auth_manager = AuthManager(self.config, users=UserAccounts(self.db))
+            app = create_app(
+                config=self.config,
+                event_repo=event_repo,
+                device_repo=device_repo,
+                stats_repo=stats_repo,
+                dispatcher=dispatcher,
+                auth_manager=auth_manager,
+                correlator=self.correlator,
+                whitelist=self.registry.whitelist,
+                blocklist_repo=blocklist_repo,
+                feed_manager=feed_mgr,
+                sniffer=None,
+                block_manager=block_manager,
+                signature_engine=sig_engine,
+                registry=self.registry,
+                yaml_editor=self._yaml_editor,
+                flow_processor=flow_processor,
+                ai_analyzer=ai_analyzer,
+                proposal_service=proposal_service,
+                observation_service=observation,
+                kernel_probe=kernel_probe,
+                replay_service=replay_service,
+                response_repository=response_repository,
+                response_executor=response_executor,
+                response_proposal_repo=response_proposal_repo,
+                health_checker=health_checker,
+                audit_logger=AuditLogger(self.db.pool),
+                audit_required=True,
+                pcap_writer=self.pcap_writer,
+            )
 
-        import uvicorn
-        web_host = self.config.get("web.host", "0.0.0.0")
-        web_port = self.config.get("web.port", 38585)
+            import uvicorn
+            web_host = self.config.get("web.host", "0.0.0.0")
+            web_port = self.config.get("web.port", 38585)
 
-        # TLS 설정
-        tls_cfg  = self.config.section("web").get("tls", {})
-        ssl_args: dict = {}
-        if tls_cfg.get("enabled"):
-            certfile = tls_cfg.get("certfile", "")
-            keyfile  = tls_cfg.get("keyfile", "")
-            if certfile and keyfile:
-                ssl_args["ssl_certfile"] = certfile
-                ssl_args["ssl_keyfile"]  = keyfile
-                logger.info("TLS enabled: cert=%s", certfile)
-            else:
-                logger.warning("TLS enabled but certfile/keyfile not configured; falling back to HTTP")
+            # TLS 설정
+            tls_cfg  = self.config.section("web").get("tls", {})
+            ssl_args: dict = {}
+            if tls_cfg.get("enabled"):
+                certfile = tls_cfg.get("certfile", "")
+                keyfile  = tls_cfg.get("keyfile", "")
+                if certfile and keyfile:
+                    ssl_args["ssl_certfile"] = certfile
+                    ssl_args["ssl_keyfile"]  = keyfile
+                    logger.info("TLS enabled: cert=%s", certfile)
+                else:
+                    logger.warning("TLS enabled but certfile/keyfile not configured; falling back to HTTP")
 
-        uvi_config = uvicorn.Config(
-            app, host=web_host, port=web_port,
-            log_level="warning", loop="none",
-            **ssl_args,
-        )
-        server = uvicorn.Server(uvi_config)
+            uvi_config = uvicorn.Config(
+                app, host=web_host, port=web_port,
+                log_level="warning", loop="none",
+                **ssl_args,
+            )
+            server = uvicorn.Server(uvi_config)
 
         # ── 일일 리포트 스케줄러 ──────────────────────────────────────────
         daily_reporter = None
@@ -489,6 +652,7 @@ class NetWatcher:
                 stats_repo=stats_repo,
                 channels=dispatcher._channels,
             )
+            self._register_sensor_cleanup("daily_report", daily_reporter.stop)
             await daily_reporter.start()
 
         # ── 자산 변경 모니터 ──────────────────────────────────────────────
@@ -501,25 +665,21 @@ class NetWatcher:
                 dispatcher=dispatcher,
                 config=self.config,
             )
+            self._register_sensor_cleanup("asset_monitor", asset_monitor.stop)
             await asset_monitor.start()
 
-        # ── AI 오탐 분석기 시작 ──────────────────────────────────────────
-        if ai_analyzer is not None:
-            await ai_analyzer.start()
-            logger.info(
-                "AIAnalyzerService started (provider=%s, interval=%dmin)",
-                ai_analyzer_cfg.get("provider", "copilot"),
-                ai_analyzer_cfg.get("interval_minutes", 15),
-            )
-
         # ── DNS 리졸버 & 스니퍼 ──────────────────────────────────────────
+        self._register_sensor_cleanup("dns", self._dns_resolver.stop)
         await self._dns_resolver.start()
 
         sniffer = PacketSniffer(
             self.config, self.loop, packet_processor.on_packet,
             observation=observation, kernel_probe=kernel_probe,
         )
+        self._sensor_sniffer = sniffer
+        self._register_sensor_cleanup("capture", lambda: asyncio.to_thread(sniffer.stop, 1))
         sniffer.start()
+        self._capture_started = True
         health_checker.set_sniffer(sniffer)
 
         # 스니퍼가 필요한 서비스에 주입
@@ -527,11 +687,13 @@ class NetWatcher:
         stats_flush.set_sniffer(sniffer)
 
         # ── 시그널 처리 ─────────────────────────────────────────────────
-        stop_event = asyncio.Event()
+        stop_event = self._stop_event
 
         def _signal_handler() -> None:
             logger.info("Shutdown signal received")
             sniffer.stop_accepting()
+            if flow_collector is not None:
+                flow_collector.stop_accepting()
             stop_event.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -541,10 +703,36 @@ class NetWatcher:
         await tick_service.start()
         await stats_flush.start()
         await maintenance.start()
-        server_task = asyncio.create_task(server.serve())
+        if self._sensor_control_settings is not None:
+            from netwatcher.services.sensor_control import SensorControlService
+            from netwatcher.services.sensor_control_transport import SensorControlServer
+            settings = self._sensor_control_settings
+            service = SensorControlService(self.db, self._sensor_publisher.sensor_id,
+                self._sensor_publisher.owner, self.registry, self._yaml_editor, self._request_sensor_control_stop,
+                feed_manager=feed_mgr, pcap_writer=self.pcap_writer, replay_service=replay_service, ai_analyzer=ai_analyzer,
+                flow_processor=flow_processor, worker_pool=worker_pool)
+            proposal_service.bind_sensor_origin(service)
+            self._sensor_control_server = SensorControlServer(Path(settings["socket_path"]),
+                allowed_uid=settings["allowed_uid"], socket_gid=settings.get("socket_gid"), handler=service)
+            self._register_sensor_cleanup("sensor_control", self._sensor_control_server.close)
+            await self._sensor_control_server.start()
+        # ── AI 오탐 분석기 시작 ──────────────────────────────────────────
+        if ai_analyzer is not None:
+            self._register_sensor_cleanup("ai_analyzer", ai_analyzer.stop)
+            await ai_analyzer.start()
+            logger.info(
+                "AIAnalyzerService started (provider=%s, interval=%dmin)",
+                ai_analyzer_cfg.get("provider", "copilot"),
+                ai_analyzer_cfg.get("interval_minutes", 15),
+            )
 
-        proto = "https" if ssl_args else "http"
-        logger.info("NetWatcher ready - Dashboard: %s://%s:%d", proto, web_host, web_port)
+        if server is not None:
+            server_task = asyncio.create_task(server.serve())
+            proto = "https" if ssl_args else "http"
+            logger.info("NetWatcher ready - Dashboard: %s://%s:%d", proto, web_host, web_port)
+        else:
+            await self._sensor_publisher.publish_once()
+            logger.info("Native sensor ready (separate process)")
 
         await stop_event.wait()
 
@@ -553,6 +741,8 @@ class NetWatcher:
         from netwatcher.services.shutdown import ShutdownBudget, stop_workers
         budget = ShutdownBudget(self.config.get("shutdown.timeout_seconds", 10))
         sniffer.stop_accepting()
+        if self._sensor_control_server is not None:
+            await budget.run("sensor_control", self._sensor_control_server.close, limit=.5)
         if flow_collector is not None:
             await budget.run("flow_input", lambda: asyncio.to_thread(flow_collector.stop), limit=.5)
         await budget.run("capture", lambda: asyncio.to_thread(sniffer.stop, min(1, budget.remaining)), limit=1)
@@ -574,14 +764,19 @@ class NetWatcher:
         logger.info("Shutdown alert work remaining: queued=%d evidence_bytes=%d",
                     dispatcher._queue.qsize(),
                     dispatcher._evidence_writer.pending_bytes if dispatcher._evidence_writer else 0)
-        server.should_exit = True
-        async def stop_web():
-            await server_task
-        if not await budget.run("web", stop_web, limit=1):
-            server.force_exit = True
-            server_task.cancel()
+        if server is not None:
+            server.should_exit = True
+            async def stop_web():
+                await server_task
+            if not await budget.run("web", stop_web, limit=1):
+                server.force_exit = True
+                server_task.cancel()
+        if self._sensor_publisher is not None:
+            await budget.run("sensor_state", self._sensor_publisher.stop, limit=2)
         await budget.run("redis", redis_client.close, limit=.5)
         if not await budget.run("database", self.db.close, limit=.5):
             self.db.terminate()
         logger.info("Shutdown unconfirmed stages: %s", budget.unconfirmed)
+        self._sensor_cleanup.clear()
+        self._shutdown_completed = True
         logger.info("NetWatcher stopped")

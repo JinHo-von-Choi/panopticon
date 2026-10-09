@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 AUDIT_LOG_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_request ON audit_log((details->>'request_id'), created_at, id);",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id);",
 ]
@@ -171,6 +172,13 @@ CREATE TABLE IF NOT EXISTS config_proposals (
     validation_runs JSONB NOT NULL DEFAULT '{}'::jsonb,
     applied       BOOLEAN,
     apply_error   TEXT,
+    sensor_id     VARCHAR(128),
+    sensor_owner  UUID,
+    source_version VARCHAR(64),
+    CONSTRAINT config_proposals_origin_check CHECK (
+        (sensor_id IS NULL AND sensor_owner IS NULL AND source_version IS NULL)
+        OR (sensor_id IS NOT NULL AND length(sensor_id)>0 AND sensor_owner IS NOT NULL
+            AND source_version IS NOT NULL AND source_version ~ '^[a-f0-9]{64}$')),
     CONSTRAINT config_proposals_status_check
         CHECK (status IN ('pending', 'approved', 'rejected', 'failed'))
 );
@@ -181,6 +189,8 @@ CONFIG_PROPOSALS_INDEXES = [
     "ON config_proposals(created_at DESC) WHERE status = 'pending';",
     "CREATE INDEX IF NOT EXISTS idx_config_proposals_engine "
     "ON config_proposals(engine, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_config_proposals_sensor "
+    "ON config_proposals(sensor_id, created_at DESC, id DESC);",
 ]
 
 EVIDENCE_RECORDS_TABLE = """
@@ -418,7 +428,243 @@ CREATE TRIGGER devices_mapping_generation BEFORE UPDATE ON devices
 FOR EACH ROW EXECUTE FUNCTION bump_device_mapping();
 """
 
+EVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS eve_checkpoints (
+    sensor_id VARCHAR(64) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 0,
+    state JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(sensor_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS eve_records (
+    ingest_id UUID PRIMARY KEY,
+    sensor_id VARCHAR(64) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    observed_at TIMESTAMPTZ,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    record JSONB NOT NULL,
+    event_id BIGINT,
+    accounted_bytes BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_eve_records_flow ON eve_records(sensor_id, source_id, (record->>'flow_id'));
+CREATE INDEX IF NOT EXISTS idx_eve_records_received ON eve_records(received_at);
+CREATE INDEX IF NOT EXISTS idx_eve_records_source_received ON eve_records(sensor_id, source_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_eve_records_event ON eve_records(event_id) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_eve_records_alert_window ON eve_records(sensor_id,source_id,observed_at)
+    WHERE event_type='alert';
+CREATE TABLE IF NOT EXISTS eve_storage_usage (
+    sensor_id VARCHAR(64) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
+    record_count BIGINT NOT NULL DEFAULT 0 CHECK(record_count >= 0),
+    accounted_bytes BIGINT NOT NULL DEFAULT 0 CHECK(accounted_bytes >= 0),
+    PRIMARY KEY(sensor_id, source_id)
+);
+"""
+
+BUSINESS_REVIEWS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS business_reviews (
+    event_id BIGINT PRIMARY KEY,
+    version BIGINT NOT NULL CHECK(version > 0),
+    decision VARCHAR(32) NOT NULL,
+    note TEXT NOT NULL,
+    actor VARCHAR(255) NOT NULL,
+    scope JSONB NOT NULL,
+    reviewed_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ
+);
+"""
+
+CASE_WORKFLOWS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS case_workflows (
+    event_id BIGINT PRIMARY KEY,
+    version BIGINT NOT NULL CHECK(version > 0 AND version <= 1000),
+    owner VARCHAR(128) NOT NULL,
+    owner_id UUID REFERENCES user_accounts(id),
+    status VARCHAR(16) NOT NULL CHECK(status IN ('open','investigating','closed')),
+    actor VARCHAR(255) NOT NULL,
+    actor_id UUID REFERENCES user_accounts(id),
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS case_history (
+    event_id BIGINT NOT NULL REFERENCES case_workflows(event_id) ON DELETE CASCADE,
+    version BIGINT NOT NULL CHECK(version > 0 AND version <= 1000),
+    owner VARCHAR(128) NOT NULL,
+    owner_id UUID REFERENCES user_accounts(id),
+    status VARCHAR(16) NOT NULL CHECK(status IN ('open','investigating','closed')),
+    note VARCHAR(1024) NOT NULL,
+    actor VARCHAR(255) NOT NULL,
+    actor_id UUID REFERENCES user_accounts(id),
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY(event_id,version)
+);
+CREATE INDEX IF NOT EXISTS case_workflows_owner_id_idx ON case_workflows(owner_id);
+"""
+
+BUSINESS_REVIEW_HISTORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS business_review_history (
+    event_id BIGINT NOT NULL REFERENCES business_reviews(event_id) ON DELETE CASCADE,
+    version BIGINT NOT NULL CHECK(version > 0),
+    decision VARCHAR(32) NOT NULL,
+    note TEXT NOT NULL,
+    actor VARCHAR(255) NOT NULL,
+    scope JSONB NOT NULL,
+    reviewed_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ,
+    PRIMARY KEY(event_id,version)
+);
+"""
+
+WORK_SCHEDULES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS work_schedules (
+    id UUID PRIMARY KEY,
+    fingerprint CHAR(64) NOT NULL UNIQUE,
+    content JSONB NOT NULL,
+    starts_at TIMESTAMPTZ NOT NULL,
+    ends_at TIMESTAMPTZ NOT NULL CHECK(ends_at > starts_at),
+    actor VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    version BIGINT NOT NULL DEFAULT 1 CHECK(version IN (1,2)),
+    revoked_at TIMESTAMPTZ,
+    revoked_by VARCHAR(255),
+    revocation_note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_work_schedules_scope ON work_schedules
+    ((content->>'source_ip'),(content->>'dest_ip'),starts_at,ends_at);
+CREATE TABLE IF NOT EXISTS event_work_links (
+    event_id BIGINT PRIMARY KEY,
+    schedule_id UUID NOT NULL REFERENCES work_schedules(id),
+    version BIGINT NOT NULL CHECK(version > 0),
+    actor VARCHAR(255) NOT NULL,
+    linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+USER_ACCOUNTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_accounts (
+    id UUID PRIMARY KEY,
+    username VARCHAR(64) NOT NULL UNIQUE CHECK(username ~ '^[a-z0-9_.-]{1,64}$'),
+    password_hash TEXT NOT NULL,
+    role VARCHAR(16) NOT NULL CHECK(role IN ('viewer','analyst','admin')),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    version BIGINT NOT NULL DEFAULT 1 CHECK(version > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changed_by VARCHAR(255) NOT NULL
+);
+"""
+
+OIDC_IDENTITIES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS oidc_identities (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES user_accounts(id),
+    issuer VARCHAR(512) NOT NULL,
+    subject VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by VARCHAR(255) NOT NULL,
+    UNIQUE(issuer,subject),
+    UNIQUE(user_id,issuer)
+);
+"""
+
+OIDC_LOGIN_REQUESTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS oidc_login_requests (
+    state_hash VARCHAR(64) PRIMARY KEY,
+    browser_hash VARCHAR(64) NOT NULL,
+    protected TEXT NOT NULL CHECK(length(protected) <= 4096),
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_oidc_login_expiry ON oidc_login_requests(expires_at);
+"""
+
+EXECUTION_CLAIMS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS response_execution_bindings (
+    action_id BIGINT PRIMARY KEY REFERENCES response_actions(id),
+    actor_id UUID NOT NULL REFERENCES user_accounts(id),
+    actor_version BIGINT NOT NULL CHECK(actor_version > 0),
+    device_id BIGINT NOT NULL REFERENCES devices(id),
+    mapping_version BIGINT NOT NULL CHECK(mapping_version >= 0),
+    scope JSONB NOT NULL,
+    reason VARCHAR(512) NOT NULL CHECK(length(reason) > 0),
+    approval_expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS response_execution_claims (
+    action_id BIGINT NOT NULL REFERENCES response_actions(id),
+    operation VARCHAR(8) NOT NULL CHECK(operation IN ('apply','remove')),
+    request_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL CHECK(status IN ('prepared','completed')),
+    result JSONB,
+    prepared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    PRIMARY KEY(action_id, operation),
+    CHECK((status = 'prepared' AND result IS NULL AND completed_at IS NULL)
+       OR (status = 'completed' AND result IS NOT NULL AND completed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_execution_claims_prepared ON response_execution_claims(prepared_at);
+"""
+
+SENSOR_RUNTIME_STATE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sensor_runtime_state (
+    sensor_id VARCHAR(128) PRIMARY KEY,
+    owner UUID NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    lease_expires_at TIMESTAMPTZ NOT NULL,
+    stopped BOOLEAN NOT NULL DEFAULT FALSE,
+    snapshot JSONB NOT NULL DEFAULT '{}',
+    CHECK(length(sensor_id) > 0),
+    CHECK(jsonb_typeof(snapshot) = 'object'),
+    CHECK(octet_length(snapshot::text) <= 65536)
+);
+"""
+
+EVENT_STREAM_NOTIFICATION_SCHEMA = """
+CREATE OR REPLACE FUNCTION notify_committed_event() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_catalog.pg_notify('nw_events_' || pg_catalog.md5(TG_TABLE_SCHEMA),
+        pg_catalog.json_build_object('id',NEW.id,'timestamp',NEW.timestamp)::text);
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS events_stream_notify ON events;
+CREATE TRIGGER events_stream_notify AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION notify_committed_event();
+"""
+
+SENSOR_CONTROL_CLAIMS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sensor_control_claims (
+    request_id UUID PRIMARY KEY,
+    sensor_id VARCHAR(128) NOT NULL,
+    owner UUID NOT NULL,
+    actor_id UUID NOT NULL,
+    command_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'prepared' CHECK(status IN ('prepared','completed')),
+    result JSONB,
+    prepared_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    completed_at TIMESTAMPTZ,
+    CHECK((status='prepared' AND result IS NULL AND completed_at IS NULL)
+       OR (status='completed' AND result IS NOT NULL AND completed_at IS NOT NULL)),
+    CHECK(result IS NULL OR (jsonb_typeof(result)='object' AND octet_length(result::text)<=65536))
+);
+"""
+
+from netwatcher.storage.account_access import ACCOUNT_LOCK_FUNCTION_SQL
+from netwatcher.storage.sensor_claim_retention import SENSOR_CLAIM_RETENTION_SQL
+
 ALL_SCHEMAS = [
+    SENSOR_CONTROL_CLAIMS_SCHEMA,
+    SENSOR_RUNTIME_STATE_SCHEMA,
+    USER_ACCOUNTS_SCHEMA,
+    ACCOUNT_LOCK_FUNCTION_SQL,
+    OIDC_IDENTITIES_SCHEMA,
+    OIDC_LOGIN_REQUESTS_SCHEMA,
+    WORK_SCHEDULES_SCHEMA,
+    CASE_WORKFLOWS_SCHEMA,
+    BUSINESS_REVIEWS_SCHEMA,
+    BUSINESS_REVIEW_HISTORY_SCHEMA,
+    EVE_SCHEMA,
     FLUSH_RECEIPTS_TABLE,
     EVENT_INGEST_TABLE,
     EVENTS_TABLE,
@@ -435,6 +681,7 @@ ALL_SCHEMAS = [
     USERS_TABLE,
     AUDIT_LOG_TABLE,
     *AUDIT_LOG_INDEXES,
+    SENSOR_CLAIM_RETENTION_SQL,
     CONFIG_PROPOSALS_TABLE,
     *CONFIG_PROPOSALS_INDEXES,
     EVIDENCE_RECORDS_TABLE,
@@ -448,7 +695,9 @@ ALL_SCHEMAS = [
     RESPONSE_ACTIONS_TABLE,
     *RESPONSE_ACTIONS_INDEXES,
     RESPONSE_RECEIPTS_TABLE,
+    EXECUTION_CLAIMS_SCHEMA,
     *RESPONSE_RECEIPTS_INDEXES,
     RESPONSE_PROPOSALS_TABLE,
     *RESPONSE_PROPOSALS_INDEXES,
+    EVENT_STREAM_NOTIFICATION_SCHEMA,
 ]

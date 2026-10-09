@@ -186,8 +186,8 @@ def get_default_interface() -> str:
         iface = conf.iface
         if iface and str(iface) not in ("lo", "localhost"):
             return str(iface)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Default capture interface unavailable (%s)", type(exc).__name__)
 
     for iface in get_if_list():
         if iface not in ("lo", "localhost"):

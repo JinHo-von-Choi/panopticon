@@ -11,18 +11,19 @@ import asyncio
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
+from netwatcher.web.auth import AuthStateUnavailable
 
 if TYPE_CHECKING:
     from netwatcher.web.auth import AuthManager
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=100)
+    password: str = Field(max_length=256)
 
 
-def create_auth_router(auth_manager: "AuthManager | None") -> APIRouter:
+def create_auth_router(auth_manager: "AuthManager | None", *, oidc_login=None) -> APIRouter:
     router = APIRouter(prefix="/auth", tags=["auth"])
 
     @router.post("/login")
@@ -34,7 +35,10 @@ def create_auth_router(auth_manager: "AuthManager | None") -> APIRouter:
         if limiter is not None and not await limiter.check("login:" + ip):
             return JSONResponse({"error": "Too many login attempts"}, status_code=429,
                                 headers={"Retry-After": "60"})
-        token = await asyncio.to_thread(auth_manager.authenticate, body.username, body.password)
+        try:
+            token = await auth_manager.authenticate_async(body.username, body.password)
+        except AuthStateUnavailable:
+            return JSONResponse({'error':'Account verification unavailable'},status_code=503)
         if token is None:
             return JSONResponse({"error": "Invalid credentials"}, status_code=401)
         return {"token": token}
@@ -51,12 +55,22 @@ def create_auth_router(auth_manager: "AuthManager | None") -> APIRouter:
 
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
-            return {"enabled": True}
+            result = {"enabled": True}
+            if oidc_login is not None:
+                result['oidc'] = {'enabled': True, 'start_url': '/api/auth/oidc/start'}
+            return result
 
-        payload = auth_manager.verify_token(auth_header[7:])
+        try:
+            payload = await auth_manager.verify_token_async(auth_header[7:])
+        except AuthStateUnavailable:
+            return JSONResponse({'error':'Account verification unavailable'},status_code=503)
         if payload is None:
             return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
-        return {"enabled": True, "authenticated": True, "user": payload.get("sub"),
+        result = {"enabled": True, "authenticated": True, "user": payload.get("sub"),
+                "user_id": payload.get("uid"),
                 "role": payload.get("role", "viewer")}
+        if oidc_login is not None:
+            result['oidc'] = {'enabled': True, 'start_url': '/api/auth/oidc/start'}
+        return result
 
     return router

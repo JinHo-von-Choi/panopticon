@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from netwatcher.alerts.rate_limiter import RateLimiter, EventBudget
 from netwatcher.alerts.aggregation import AlertAggregator
+from netwatcher.alerts.stream import publish_message
 from netwatcher.services.evidence_writer import EvidenceWriter
 from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.detection.correlator import AlertCorrelator
@@ -37,7 +38,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("netwatcher.alerts.dispatcher")
 
 
-class AlertDispatcher:
+from netwatcher.alerts.stream import EventStream
+
+
+class AlertDispatcher(EventStream):
     """속도 제한 기능을 갖춘 중앙 알림 디스패처.
 
     각 알림에 대한 처리 흐름:
@@ -138,7 +142,7 @@ class AlertDispatcher:
         ) if self._channels else None
 
         # WebSocket 구독자
-        self._ws_subscribers: set[asyncio.Queue] = set()
+        EventStream.__init__(self)
 
     async def start(self) -> None:
         """디스패처 소비자 루프를 시작한다."""
@@ -352,16 +356,6 @@ class AlertDispatcher:
         metrics.alerts_queue_age.set(age)
         if self._observation is not None:
             self._observation.set_queue_metrics(STAGE_RESULT_QUEUE, depth, age)
-
-    def subscribe_ws(self) -> asyncio.Queue:
-        """WebSocket 구독자를 등록한다. 읽기용 큐를 반환한다."""
-        q: asyncio.Queue = asyncio.Queue(maxsize=100)
-        self._ws_subscribers.add(q)
-        return q
-
-    def unsubscribe_ws(self, q: asyncio.Queue) -> None:
-        """WebSocket 구독자를 해제한다."""
-        self._ws_subscribers.discard(q)
 
     async def _consumer_loop(self) -> None:
         """기존 유한 큐를 재사용해 준비된 대표만 다중행으로 저장한다."""
@@ -636,14 +630,7 @@ class AlertDispatcher:
         if event_id:
             alert_dict["id"] = event_id
         msg = json.dumps(alert_dict)
-        dead_subs = []
-        for sub_q in list(self._ws_subscribers):
-            try:
-                sub_q.put_nowait(msg)
-            except asyncio.QueueFull:
-                dead_subs.append(sub_q)
-        for q in dead_subs:
-            self._ws_subscribers.discard(q)
+        publish_message(self._ws_subscribers, msg)
 
         # 5. PCAP 캡처
         if self._pcap_writer and event_id:
@@ -666,11 +653,7 @@ class AlertDispatcher:
                         "type": "incident",
                         "incident": incident.to_dict(),
                     })
-                    for sub_q in list(self._ws_subscribers):
-                        try:
-                            sub_q.put_nowait(inc_msg)
-                        except asyncio.QueueFull:
-                            pass
+                    publish_message(self._ws_subscribers, inc_msg)
             except Exception:
                 logger.debug("Correlation failed", exc_info=True)
 

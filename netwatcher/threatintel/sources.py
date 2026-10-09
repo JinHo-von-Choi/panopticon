@@ -98,7 +98,7 @@ def parse_text_feed(content: str, comment_prefix: str, feed_type: str) -> set[st
                     parsed = urlparse(line)
                     if parsed.hostname:
                         entries.add(parsed.hostname.lower())
-                except Exception:
+                except ValueError:
                     pass
             else:
                 domain = line.split()[0].split("/")[0].lower()
@@ -111,7 +111,7 @@ def parse_text_feed(content: str, comment_prefix: str, feed_type: str) -> set[st
                     parsed = urlparse(line)
                     if parsed.hostname:
                         entries.add(parsed.hostname.lower())
-                except Exception:
+                except ValueError:
                     pass
 
     return entries
@@ -143,7 +143,7 @@ def _parse_csv_feed(content: str, feed_type: str) -> set[str]:
                     parsed = urlparse(value)
                     if parsed.hostname:
                         entries.add(parsed.hostname.lower())
-                except Exception:
+                except ValueError:
                     pass
             elif "." in value:
                 entries.add(value.lower())

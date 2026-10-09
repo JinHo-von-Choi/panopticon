@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from scapy.all import DNS, DNSQR, IP, TCP, Packet
+from scapy.all import DNS, DNSQR, IP, IPv6, TCP, Packet
 
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.models import Alert, Severity
@@ -41,11 +41,12 @@ class ThreatIntelEngine(DetectionEngine):
 
     def analyze(self, packet: Packet) -> Alert | None:
         """패킷의 IP 및 도메인을 위협 피드와 대조한다."""
-        if not self._feed_mgr or not packet.haslayer(IP):
+        if not self._feed_mgr or not (packet.haslayer(IP) or packet.haslayer(IPv6)):
             return None
 
-        src_ip = packet[IP].src
-        dst_ip = packet[IP].dst
+        network = packet[IP] if packet.haslayer(IP) else packet[IPv6]
+        src_ip = network.src
+        dst_ip = network.dst
 
         # TCP 연결 방향 판별
         # 순수 SYN (0x02, ACK 없음): 내가 먼저 연결 개시

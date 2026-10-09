@@ -1,0 +1,7 @@
+{
+  "name": "panopticon-browser-tests",
+  "private": true,
+  "devDependencies": {
+    "playwright-core": "1.64.0"
+  }
+}

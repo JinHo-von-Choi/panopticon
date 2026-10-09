@@ -1,0 +1,126 @@
+# docker-compose.yml과 함께 사용한다. 설치 도구가 센서·콘솔 설정을 생성한다.
+services:
+  netwatcher:
+    build:
+      target: native-console
+    command: ["--component", "console", "-c", "/app/config/console.yaml"]
+    env_file: !override
+      - ${PANOPTICON_CONSOLE_ENV_FILE:?Console credentials required}
+    group_add: !reset []
+    volumes: !override
+      - ${PANOPTICON_CONFIG_DIR:?Native installation config required}:/app/config:ro
+      - nw-console-data:/app/data
+      - nw-control:/run/panopticon:ro
+    depends_on:
+      native-db-grants:
+        condition: service_completed_successfully
+      native-init:
+        condition: service_completed_successfully
+
+  native-init:
+    build:
+      context: .
+      target: native
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    group_add: ["10001"]
+    entrypoint: ["python", "-m", "netwatcher.services.native_install"]
+    command: []
+    healthcheck:
+      disable: true
+    volumes:
+      - ${PANOPTICON_CONFIG_DIR:?Native installation config required}:/app/config:ro
+      - nw-sensor-data:/app/data
+      - nw-control:/run/panopticon
+
+  native-sensor:
+    build:
+      context: .
+      target: native
+    command: ["--component", "sensor", "-c", "/app/data/sensor.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 15s
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    group_add: ["10001"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    healthcheck:
+      disable: true
+    env_file:
+      - ${PANOPTICON_SENSOR_ENV_FILE:?Sensor credentials required}
+    environment:
+      NETWATCHER_DB_HOST: "${NETWATCHER_NATIVE_DB_HOST:-127.0.0.1}"
+      NETWATCHER_DB_PORT: "${NETWATCHER_NATIVE_DB_PORT:-${PANOPTICON_DB_PUBLISH_PORT:-5432}}"
+      NETWATCHER_SKIP_DOTENV: "1"
+    volumes:
+      - nw-sensor-data:/app/data
+      - nw-control:/run/panopticon
+    depends_on:
+      native-db-grants:
+        condition: service_completed_successfully
+      native-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+        required: false
+
+  native-db-roles:
+    build:
+      context: .
+      target: native-console
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    healthcheck:
+      disable: true
+    env_file:
+      - ${PANOPTICON_BOOTSTRAP_ENV_FILE:?Bootstrap credentials required}
+    environment:
+      NETWATCHER_DB_HOST: "${NETWATCHER_DB_HOST:-db}"
+    entrypoint: ["python", "-m", "netwatcher.storage.runtime_roles", "roles"]
+    command: []
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+
+  db-migrate:
+    profiles: !reset []
+    env_file: !override
+      - ${PANOPTICON_MIGRATE_ENV_FILE:?Migration credentials required}
+    depends_on:
+      native-db-roles:
+        condition: service_completed_successfully
+
+  native-db-grants:
+    build:
+      context: .
+      target: native-console
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    healthcheck:
+      disable: true
+    env_file:
+      - ${PANOPTICON_GRANTS_ENV_FILE:?Grant credentials required}
+    environment:
+      NETWATCHER_DB_HOST: "${NETWATCHER_DB_HOST:-db}"
+    entrypoint: ["python", "-m", "netwatcher.storage.runtime_roles", "grants"]
+    command: []
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+
+volumes:
+  nw-console-data:
+  nw-sensor-data:
+  nw-control:

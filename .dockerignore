@@ -1,4 +1,7 @@
 .venv/
+.venv*/
+.pytest_cache/
+.ruff_cache/
 .worktrees/
 __pycache__/
 *.pyc
@@ -10,5 +13,10 @@ tests/
 *.egg-info/
 *.bak
 .env
+.env*
 .claude/
 .mcp.json
+*.env
+**/*.env
+installation*/
+node_modules/

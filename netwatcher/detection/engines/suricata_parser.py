@@ -55,7 +55,10 @@ def _expand_variable(token: str, variables: dict[str, str]) -> str | None:
     """변수를 치환한다. 예: $HOME_NET -> 192.168.0.0/16."""
     token = token.strip()
     if token.startswith("$"):
-        return variables.get(token[1:], variables.get(token, None))
+        resolved = variables.get(token[1:], variables.get(token))
+        if resolved is None:
+            raise ValueError("Undefined rule address variable")
+        return resolved
     if token == "any":
         return None
     return token
@@ -70,28 +73,28 @@ def _parse_port(token: str, variables: dict[str, str]) -> int | list[int] | None
     if token.startswith("$"):
         resolved = variables.get(token[1:], variables.get(token))
         if resolved is None:
-            return None
+            raise ValueError("Undefined rule port variable")
         token = resolved
+        if token == "any":
+            return None
 
     if token.startswith("[") and token.endswith("]"):
         inner = token[1:-1]
         ports: list[int] = []
         for part in inner.split(","):
             part = part.strip()
-            if not part:
-                continue
-            if part.startswith("!"):
-                continue
-            try:
-                ports.append(int(part))
-            except ValueError:
-                pass
+            port = int(part)
+            if not 0 <= port <= 65535:
+                raise ValueError("Invalid rule port")
+            ports.append(port)
+        if not ports:
+            raise ValueError("Empty rule ports")
         return ports if len(ports) != 1 else ports[0]
 
-    try:
-        return int(token)
-    except ValueError:
-        return None
+    port = int(token)
+    if not 0 <= port <= 65535:
+        raise ValueError("Invalid rule port")
+    return port
 
 
 def _parse_hex_content(raw: str) -> str:
@@ -213,7 +216,7 @@ def _compile_pcre(pattern_str: str) -> re.Pattern[str] | None:
         return None
 
 
-def parse_rule(line: str, variables: dict[str, str] | None = None) -> SignatureRule | None:
+def parse_rule(line: str, variables: dict[str, str] | None = None, *, strict: bool = False) -> SignatureRule | None:
     """한 줄의 Suricata 규칙을 파싱하여 SignatureRule을 반환한다.
 
     파싱 실패 시 None을 반환한다.
@@ -271,6 +274,8 @@ def parse_rule(line: str, variables: dict[str, str] | None = None) -> SignatureR
             compiled = _compile_pcre(val)
             if compiled:
                 pcre_list.append(compiled)
+            elif strict:
+                raise ValueError("Invalid rule PCRE")
         elif key == "flow" and val:
             flow_str = val.strip('"')
         elif key == "flowbits" and val:
@@ -329,6 +334,7 @@ def parse_rule(line: str, variables: dict[str, str] | None = None) -> SignatureR
 def load_rules_file(
     path: Path,
     variables: dict[str, str] | None = None,
+    *, strict: bool = False,
 ) -> list[SignatureRule]:
     """Suricata .rules 파일에서 규칙을 로드한다."""
     variables = variables or {}
@@ -337,6 +343,8 @@ def load_rules_file(
     try:
         text = path.read_text(encoding="utf-8")
     except Exception:
+        if strict:
+            raise
         logger.exception("Failed to read rules file: %s", path)
         return rules
 
@@ -345,10 +353,14 @@ def load_rules_file(
         if not line or line.startswith("#"):
             continue
         try:
-            rule = parse_rule(line, variables)
+            rule = parse_rule(line, variables, strict=strict)
             if rule is not None:
                 rules.append(rule)
+            elif strict:
+                raise ValueError("Invalid rule syntax")
         except Exception:
+            if strict:
+                raise
             logger.exception("Failed to parse rule at %s:%d", path, line_no)
 
     logger.info("Loaded %d Suricata rules from %s", len(rules), path)

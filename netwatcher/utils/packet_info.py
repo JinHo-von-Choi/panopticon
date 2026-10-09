@@ -127,14 +127,11 @@ def extract_packet_info(packet: Packet) -> dict:
         info["payload_size"] = len(raw_data)
 
         # UTF-8 텍스트 미리보기 시도
-        try:
-            text = raw_data[:MAX_PAYLOAD_CAPTURE].decode("utf-8", errors="replace")
-            # 텍스트처럼 보이는지 확인 (HTTP 등)
-            printable_ratio = sum(1 for c in text if c.isprintable() or c in "\r\n\t") / max(len(text), 1)
-            if printable_ratio > 0.7:
-                info["payload_text"] = text
-        except Exception:
-            pass
+        text = raw_data[:MAX_PAYLOAD_CAPTURE].decode("utf-8", errors="replace")
+        # 텍스트처럼 보이는지 확인 (HTTP 등)
+        printable_ratio = sum(1 for c in text if c.isprintable() or c in "\r\n\t") / max(len(text), 1)
+        if printable_ratio > 0.7:
+            info["payload_text"] = text
 
         # 16진수 덤프 (처음 256바이트)
         info["payload_hex"] = raw_data[:256].hex()
@@ -143,35 +140,31 @@ def extract_packet_info(packet: Packet) -> dict:
         if raw_data[:4] in (b"GET ", b"POST", b"PUT ", b"HEAD", b"HTTP"):
             info["layers"].append("HTTP")
             # HTTP 헤더 추출
-            try:
-                header_end = raw_data.find(b"\r\n\r\n")
-                if header_end > 0:
-                    headers_raw  = raw_data[:min(header_end, MAX_PAYLOAD_CAPTURE)]
-                    headers_text = headers_raw.decode("utf-8", errors="replace")
-                    info["http_headers"] = headers_text
-                    # 주요 헤더 파싱
-                    for line in headers_text.split("\r\n"):
-                        lower = line.lower()
-                        if lower.startswith("host:"):
-                            info["http_host"] = line.split(":", 1)[1].strip()
-                        elif lower.startswith("user-agent:"):
-                            info["http_user_agent"] = line.split(":", 1)[1].strip()
-                        elif lower.startswith("content-type:"):
-                            info["http_content_type"] = line.split(":", 1)[1].strip()
-                        elif lower.startswith("content-length:"):
-                            info["http_content_length"] = line.split(":", 1)[1].strip()
-
-                    # HTTP 바디 미리보기
-                    body_start = header_end + 4
-                    if body_start < len(raw_data):
-                        body = raw_data[body_start:body_start + MAX_PAYLOAD_CAPTURE]
-                        try:
-                            body_text = body.decode("utf-8", errors="replace")
-                            info["http_body_preview"] = body_text
-                        except Exception:
-                            info["http_body_hex"] = body.hex()
-            except Exception:
-                pass
+            header_end = raw_data.find(b"\r\n\r\n")
+            if header_end > 0:
+                headers_raw  = raw_data[:min(header_end, MAX_PAYLOAD_CAPTURE)]
+                headers_text = headers_raw.decode("utf-8", errors="replace")
+                info["http_headers"] = headers_text
+                # 주요 헤더 파싱
+                for line in headers_text.split("\r\n"):
+                    lower = line.lower()
+                    if lower.startswith("host:"):
+                        info["http_host"] = line.split(":", 1)[1].strip()
+                    elif lower.startswith("user-agent:"):
+                        info["http_user_agent"] = line.split(":", 1)[1].strip()
+                    elif lower.startswith("content-type:"):
+                        info["http_content_type"] = line.split(":", 1)[1].strip()
+                    elif lower.startswith("content-length:"):
+                        info["http_content_length"] = line.split(":", 1)[1].strip()
+                # HTTP 바디 미리보기
+                body_start = header_end + 4
+                if body_start < len(raw_data):
+                    body = raw_data[body_start:body_start + MAX_PAYLOAD_CAPTURE]
+                    try:
+                        body_text = body.decode("utf-8", errors="replace")
+                        info["http_body_preview"] = body_text
+                    except Exception:
+                        info["http_body_hex"] = body.hex()
 
     return info
 

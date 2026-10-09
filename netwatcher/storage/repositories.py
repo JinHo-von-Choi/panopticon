@@ -120,9 +120,15 @@ class EventRepository:
         until: str | None = None,
         search: str | None = None,
         source_ip: str | None = None,
+        case_owner: str | None = None,
+        case_owner_id: uuid.UUID | None = None,
+        case_status: str | None = None,
     ) -> list[dict]:
         """선택적 필터를 적용하여 최신순으로 최근 이벤트를 반환한다."""
-        query = "SELECT * FROM events WHERE TRUE"
+        query = """SELECT events.*,COALESCE(w.owner,'') AS case_owner,
+            w.owner_id AS case_owner_id,
+            COALESCE(w.status,'open') AS case_status FROM events
+            LEFT JOIN case_workflows w ON w.event_id=events.id WHERE TRUE"""
         params: list[Any] = []
 
         if severity:
@@ -150,8 +156,18 @@ class EventRepository:
             params.append(source_ip)
             query += f" AND source_ip = ${len(params)}::inet"
 
+        if case_owner is not None:
+            params.append(case_owner)
+            query += f" AND COALESCE(w.owner,'') = ${len(params)}"
+        if case_owner_id is not None:
+            params.append(case_owner_id)
+            query += f" AND w.owner_id = ${len(params)}::uuid"
+        if case_status is not None:
+            params.append(case_status)
+            query += f" AND COALESCE(w.status,'open') = ${len(params)}"
+
         params.append(limit)
-        query += f" ORDER BY timestamp DESC LIMIT ${len(params)}"
+        query += f" ORDER BY timestamp DESC,events.id DESC LIMIT ${len(params)}"
         params.append(offset)
         query += f" OFFSET ${len(params)}"
 
@@ -166,9 +182,12 @@ class EventRepository:
         until: str | None = None,
         search: str | None = None,
         source_ip: str | None = None,
+        case_owner: str | None = None,
+        case_owner_id: uuid.UUID | None = None,
+        case_status: str | None = None,
     ) -> int:
         """선택적 필터 조건을 적용하여 이벤트 총 수를 반환한다."""
-        query = "SELECT COUNT(*) FROM events"
+        query = "SELECT COUNT(*) FROM events LEFT JOIN case_workflows w ON w.event_id=events.id"
         params: list[Any] = []
         conditions: list[str] = []
 
@@ -194,6 +213,16 @@ class EventRepository:
         if source_ip:
             params.append(source_ip)
             conditions.append(f"source_ip = ${len(params)}::inet")
+        if case_owner is not None:
+            params.append(case_owner)
+            conditions.append(f"COALESCE(w.owner,'') = ${len(params)}")
+        if case_owner_id is not None:
+            params.append(case_owner_id)
+            conditions.append(f"w.owner_id = ${len(params)}::uuid")
+        if case_status is not None:
+            params.append(case_status)
+            conditions.append(f"COALESCE(w.status,'open') = ${len(params)}")
+
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
 
@@ -233,10 +262,11 @@ class EventRepository:
             "UPDATE events SET resolved = TRUE WHERE id = $1", event_id,
         )
 
-    async def insert_batch_mapped(self, events: list[dict]) -> dict[uuid.UUID, int]:
-        """단일 다중행 INSERT. 결과 순서 대신 ingest_id로 확정 ID를 반환한다."""
+    async def insert_batch_mapped(self, events: list[dict], *, connection=None, event_ids=None) -> dict[uuid.UUID, int]:
+        """다중행을 저장하고 ingest_id로 ID를 반환한다. EVE 연결 ID는 같은 트랜잭션에서 먼저 배정한다."""
         if not events:
             return {}
+        reserved = dict(event_ids or {})
         ids, payload = [], []
         for event in events:
             event.setdefault("ingest_id", str(uuid.uuid4()))
@@ -245,7 +275,8 @@ class EventRepository:
             payload.append({
                 **{key: event.get(key) for key in ("title_key", "description_key", "source_ip", "source_mac",
                     "dest_ip", "dest_mac", "reasoning", "mitre_attack_id", "timestamp")},
-                "ingest_id": str(ingest_id), "engine": event.get("engine", ""),
+                "ingest_id": str(ingest_id), "event_id": reserved.get(ingest_id),
+                "engine": event.get("engine", ""),
                 "severity": event.get("severity", "INFO"), "title": _sanitize(event.get("title", "")),
                 "description": _sanitize(event.get("description", "")),
                 "metadata": _sanitize(event.get("metadata") or {}),
@@ -254,16 +285,20 @@ class EventRepository:
             })
         if len(set(ids)) != len(ids):
             raise ValueError("Duplicate ingest IDs in batch")
-        rows = await self._db.pool.fetch("""
+        if (any(type(value) is not int or not 0 < value < 2**63 for value in reserved.values())
+                or set(reserved) - set(ids) or len(set(reserved.values())) != len(reserved)):
+            raise ValueError("Invalid reserved event IDs")
+        executor = connection if connection is not None else self._db.pool
+        rows = await executor.fetch("""
             WITH payload AS (
-                SELECT * FROM jsonb_to_recordset($1::jsonb) AS e(ingest_id UUID, engine TEXT, severity TEXT,
+                SELECT * FROM jsonb_to_recordset($1::jsonb) AS e(ingest_id UUID, event_id BIGINT, engine TEXT, severity TEXT,
                     title TEXT, description TEXT, title_key TEXT, description_key TEXT,
                     source_ip INET, source_mac MACADDR, dest_ip INET, dest_mac MACADDR,
                     metadata JSONB, packet_info JSONB, reasoning TEXT, mitre_attack_id TEXT,
                     threat_level SMALLINT, timestamp TIMESTAMPTZ)
             ), claimed AS (
                 INSERT INTO event_ingest (ingest_id, event_id, event_timestamp)
-                SELECT ingest_id, nextval(pg_get_serial_sequence('events','id')),
+                SELECT ingest_id, COALESCE(event_id, nextval(pg_get_serial_sequence('events','id'))),
                     COALESCE(timestamp, NOW()) FROM payload
                 ON CONFLICT (ingest_id) DO UPDATE SET ingest_id=EXCLUDED.ingest_id
                 RETURNING ingest_id, event_id, event_timestamp
@@ -288,13 +323,14 @@ class EventRepository:
     async def delete_older_than(self, days: int) -> int:
         """지정된 일수보다 오래된 이벤트를 삭제한다."""
         cutoff = _now_utc() - timedelta(days=days)
-        await self._db.pool.execute(
-            "DELETE FROM event_ingest WHERE event_timestamp < $1", cutoff,
-        )
-        result = await self._db.pool.execute(
-            "DELETE FROM events WHERE timestamp < $1",
-            cutoff.isoformat(),
-        )
+        async with self._db.pool.acquire() as conn, conn.transaction():
+            for table in ("business_reviews", "case_workflows", "event_work_links"):
+                await conn.execute(
+                    f"DELETE FROM {table} WHERE event_id IN (SELECT id FROM events WHERE timestamp < $1)",
+                    cutoff.isoformat(),
+                )
+            await conn.execute("DELETE FROM event_ingest WHERE event_timestamp < $1", cutoff)
+            result = await conn.execute("DELETE FROM events WHERE timestamp < $1", cutoff.isoformat())
         return int(result.split()[-1])
 
 
@@ -485,6 +521,8 @@ class DeviceRepository:
         unknown = {"status": "unknown", "scope": "current_inventory", "reason": "not_confirmed"}
         if not ip:
             return unknown
+        if not mac:
+            return dict(unknown, reason="source_mac_missing")
         rows = await self._db.pool.fetch("SELECT * FROM devices WHERE ip_address = $1::inet", ip)
         if len(rows) != 1:
             return dict(unknown, reason="shared_ip" if rows else "not_confirmed")
@@ -662,18 +700,21 @@ class BlocklistRepository:
 
     async def add(self, entry_type: str, value: str, notes: str = "") -> int | None:
         """커스텀 차단 목록 항목을 추가한다. 행 ID를 반환하거나 중복 시 None."""
-        try:
-            row_id = await self._db.pool.fetchval(
+        row_id = await self._db.pool.fetchval(
                 """INSERT INTO custom_blocklist (entry_type, value, notes)
                    VALUES ($1, $2, $3)
                    ON CONFLICT (entry_type, value) DO NOTHING
                    RETURNING id""",
                 entry_type, value, notes,
             )
-            return row_id  # ON CONFLICT로 삽입이 생략되면 None
-        except Exception:
-            logger.exception("Failed to add blocklist entry")
-            return None
+        return row_id  # ON CONFLICT로 삽입이 생략되면 None. 저장 오류는 호출자에 전파한다.
+
+    async def get_entry(self, entry_type: str, value: str) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT id, entry_type, value, notes, created_at FROM custom_blocklist WHERE entry_type=$1 AND value=$2",
+            entry_type, value,
+        )
+        return dict(row) if row is not None else None
 
     async def remove_by_value(self, entry_type: str, value: str) -> bool:
         """커스텀 차단 목록 항목을 제거한다. 행이 삭제되면 True를 반환한다."""

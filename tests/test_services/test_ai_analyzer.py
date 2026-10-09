@@ -175,7 +175,7 @@ class TestTryAdjustThreshold:
 
         # 대신 제안만 남는다 (캡: 10 * 1.2 = 12)
         record.assert_called_once()
-        engine, capped, direction, _reason = record.call_args[0]
+        engine, capped, direction, _reason, before = record.call_args[0]
         assert engine == "port_scan"
         assert capped == {"threshold": 12.0}
         assert direction == "상향"
@@ -419,7 +419,7 @@ class TestTryLowerThreshold:
 
         # cap: max(10, 15 * (1 - 10/100)) = max(10, 13.5) = 13.5
         record.assert_called_once()
-        _engine, capped, direction, _reason = record.call_args[0]
+        _engine, capped, direction, _reason, before = record.call_args[0]
         assert capped == {"threshold": 13.5}
         assert direction == "하향"
         assert svc._consecutive_mt["port_scan"] == 0
