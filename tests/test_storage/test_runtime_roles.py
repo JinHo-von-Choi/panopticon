@@ -45,7 +45,9 @@ def test_real_runtime_roles_have_separate_credentials_and_deny_ddl_hash_and_audi
                         assert not any(cur.fetchone())
                         for query in ('CREATE TABLE forbidden(id int)','UPDATE audit_log SET action=\'forged\'','DELETE FROM audit_log'):
                             with pytest.raises(psycopg2.errors.InsufficientPrivilege):cur.execute(query)
-                        cur.execute("INSERT INTO audit_log(user_id,action,resource) VALUES('test','read','test')")
+                        with runtime:
+                            cur.execute("SELECT set_config('app.current_tenant_id','00000000-0000-0000-0000-000000000000',true)")
+                            cur.execute("INSERT INTO audit_log(user_id,action,resource) VALUES('test','read','test')")
                         cur.execute("SELECT has_function_privilege(current_user,'archive_sensor_claims(text,uuid,uuid,integer)','EXECUTE')")
                         assert cur.fetchone()[0] == (kind=='sensor')
                         if kind=='sensor':

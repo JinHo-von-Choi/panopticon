@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="operator">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,9 +7,31 @@
     <link rel="stylesheet" href="/fonts/fonts.css">
     <link rel="stylesheet" href="/css/style.css">
     <link rel="stylesheet" href="/css/console.css">
+    <!-- 트라이 테마(Operator/Auditor/Cinematic) 토큰은 콘솔 스타일에 최종 덮어쓰기한다 -->
+    <link rel="stylesheet" href="/css/themes.css">
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/vendor/i18next.min.js"></script>
     <script src="/js/vendor/i18nextHttpBackend.min.js"></script>
+    <script>
+        // 첫 페인트 전에 저장된 테마를 복원해 기본 테마 깜빡임을 막는다.
+        // themes.css 의 기본값(:root)은 Operator 이므로 실패해도 레이아웃은 정상이다.
+        (function () {
+            var themes = ['operator', 'auditor', 'cinematic'];
+            try {
+                var stored = localStorage.getItem('nw_theme');
+                var theme = themes.indexOf(stored) >= 0 ? stored : 'operator';
+                document.documentElement.dataset.theme = theme;
+                var fx = {};
+                try { fx = JSON.parse(localStorage.getItem('nw_hud_fx') || '{}') || {}; } catch (e) { fx = {}; }
+                if (theme === 'cinematic') {
+                    if (fx.scanlines === true) document.documentElement.dataset.hudScanlines = 'on';
+                    if (fx.sound === true) document.documentElement.dataset.hudSound = 'on';
+                }
+            } catch (e) {
+                document.documentElement.dataset.theme = 'operator';
+            }
+        })();
+    </script>
 </head>
 <body>
     <!-- Login Overlay -->
@@ -41,11 +63,24 @@
         </div>
         <div class="header-right">
             <button id="console-search" class="btn console-search" data-i18n="console.navigate">Navigate · Ctrl K</button>
-            <select id="lang-selector" class="input-search" style="font-size:12px;padding:4px 8px;margin-right:8px;background:var(--bg-card);border-color:var(--border-color)">
+            <div class="theme-switch">
+                <label for="theme-selector" data-i18n="console.theme.label">THEME</label>
+                <select id="theme-selector" data-i18n-aria-label="console.theme.label" aria-label="Console theme">
+                    <option value="operator" data-i18n="console.theme.operator">Operator</option>
+                    <option value="auditor" data-i18n="console.theme.auditor">Auditor</option>
+                    <option value="cinematic" data-i18n="console.theme.cinematic">Cinematic</option>
+                </select>
+            </div>
+            <div class="hud-fx-toggles">
+                <label><input type="checkbox" id="hud-scanlines-toggle" data-i18n-aria-label="console.theme.scanlines_aria"><span data-i18n="console.theme.scanlines">Scanlines</span></label>
+                <label><input type="checkbox" id="hud-sound-toggle" data-i18n-aria-label="console.theme.sound_aria"><span data-i18n="console.theme.sound">Sound</span></label>
+                <span id="hud-sound-state" class="hud-sound-state" aria-live="polite"></span>
+            </div>
+            <select id="lang-selector" class="input-search" style="padding:4px 8px;margin-right:8px;background:var(--bg-card);border-color:var(--border-color)">
                 <option value="ko">🇰🇷 한국어</option>
                 <option value="en">🇺🇸 English</option>
             </select>
-            <button id="btn-logout" class="btn" style="display:none;font-size:12px;padding:5px 12px" data-i18n="header.logout">Logout</button>
+            <button id="btn-logout" class="btn" style="display:none;padding:5px 12px" data-i18n="header.logout">Logout</button>
             <span id="clock"></span>
         </div>
     </header>
@@ -105,7 +140,7 @@
         </details>
 
         <!-- Tabs -->
-        <nav class="tabs" aria-label="Console navigation">
+        <nav class="tabs" data-i18n-aria-label="console.navigation" aria-label="Console navigation">
             <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
             <button class="tab" data-tab="incidents" data-i18n="tabs.incidents">Incidents</button>
             <button class="tab" data-tab="traffic" data-i18n="tabs.traffic">Traffic</button>
@@ -116,6 +151,9 @@
             <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
             <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none" data-i18n="tabs.ai_analyzer">AI Analyzer</button>
             <button class="tab" data-tab="governance" data-i18n="tabs.governance">Governance</button>
+            <button class="tab" type="button" data-tab="topology" aria-controls="tab-topology" data-i18n="tabs.topology">Topology</button>
+            <button class="tab" type="button" data-tab="compliance" aria-controls="tab-compliance" data-i18n="tabs.compliance">Compliance</button>
+            <button class="tab" type="button" data-tab="mitre" aria-controls="tab-mitre" data-i18n="tabs.mitre">MITRE Matrix</button>
             <button class="tab" data-tab="users" style="display:none" data-i18n="console.users.title">Accounts</button>
         </nav>
 
@@ -508,6 +546,97 @@
                     <tbody id="proposals-body"></tbody>
                 </table></div>
             </div>
+        </section>
+
+        <!-- Topology Tab (Stage 3: Canvas2D 토폴로지 맵) -->
+        <section id="tab-topology" class="tab-content">
+            <div class="hud-panel">
+                <div class="hud-panel-head">
+                    <h3 data-i18n="console.topology.title">Topology map</h3>
+                    <div class="hud-meta">
+                        <span class="badge-slot"><span id="topology-source-badge" class="badge badge-sev badge-sev-unknown" data-i18n="console.source.unchecked">UNVERIFIED</span></span>
+                        <span id="topology-counts" data-i18n="console.topology.counts_pending">nodes — · edges —</span>
+                        <button type="button" class="btn" id="topology-refresh" data-i18n="common.refresh">Refresh</button>
+                    </div>
+                </div>
+                <p class="scope-hint" data-i18n="console.topology.hint">The map is a reading of the observed inventory, not a verified view of the physical network.</p>
+                <div class="hud-canvas-frame">
+                    <canvas id="topology-canvas" role="img" data-i18n-aria-label="console.topology.canvas_aria"
+                            aria-label="Network topology map" tabindex="0"></canvas>
+                    <div id="topology-state" class="hud-canvas-state" role="status" aria-live="polite"
+                         data-i18n="console.topology.pending">Topology data integration pending.</div>
+                </div>
+                <div class="hud-legend">
+                    <span class="badge badge-sev badge-sev-critical" data-i18n="console.badge.critical">CRITICAL</span>
+                    <span class="badge badge-sev badge-sev-warning" data-i18n="console.badge.warning">WARNING</span>
+                    <span class="badge badge-sev badge-sev-info" data-i18n="console.badge.info">INFO</span>
+                    <span class="badge badge-sev badge-sev-ok" data-i18n="console.badge.ok">OK</span>
+                    <span class="badge badge-sev badge-sev-unknown" data-i18n="console.badge.unknown">UNKNOWN</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Compliance Tab (Stage 3: 컴플라이언스 KPI 전술 HUD) -->
+        <section id="tab-compliance" class="tab-content">
+            <div class="hud-panel">
+                <div class="hud-panel-head">
+                    <h3 data-i18n="console.compliance.title">Compliance coverage</h3>
+                    <div class="hud-meta">
+                        <span class="badge-slot"><span id="compliance-source-badge" class="badge badge-sev badge-sev-unknown" data-i18n="console.source.unchecked">UNVERIFIED</span></span>
+                        <button type="button" class="btn" id="compliance-refresh" data-i18n="common.refresh">Refresh</button>
+                    </div>
+                </div>
+                <p class="scope-hint" data-i18n="console.compliance.hint">Coverage is an estimate derived from enabled engines. It is not a certification and does not establish compliance.</p>
+                <div class="toolbar">
+                    <label for="compliance-framework" data-i18n="console.compliance.framework">Framework</label>
+                    <select id="compliance-framework" disabled></select>
+                </div>
+                <div class="hud-kpi">
+                    <div class="hud-kpi-head">
+                        <span class="hud-kpi-title" data-i18n="console.compliance.engine_coverage">Engine coverage estimate</span>
+                        <strong id="compliance-coverage-score" class="hud-kpi-score">—</strong>
+                    </div>
+                    <div id="compliance-coverage" class="hud-gauge" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                         aria-label="Engine coverage estimate" data-i18n-aria-label="console.compliance.engine_coverage">
+                        <span id="compliance-coverage-bar" style="width:0%"></span>
+                    </div>
+                </div>
+                <div id="compliance-kpis" class="hud-grid"></div>
+                <p id="compliance-state" role="status" aria-live="polite" data-i18n="console.compliance.pending">Compliance data integration pending.</p>
+            </div>
+        </section>
+
+        <section id="tab-mitre" class="tab-content">
+            <div class="hud-panel">
+                <div class="hud-panel-head">
+                    <h3 data-i18n="console.mitre.title">MITRE ATT&amp;CK Matrix</h3>
+                    <button type="button" class="btn" id="mitre-refresh" data-i18n="common.refresh">Refresh</button>
+                </div>
+                <p class="scope-hint" data-i18n="console.mitre.hint">Observed detections, limited to the latest 10,000 events in the selected period. Empty tactics do not establish coverage.</p>
+                <div class="toolbar mitre-toolbar">
+                    <label for="mitre-hours" data-i18n="console.mitre.range">Time range</label>
+                    <select id="mitre-hours">
+                        <option value="1">1h</option>
+                        <option value="24" selected>24h</option>
+                        <option value="168">7d</option>
+                    </select>
+                    <label for="mitre-search" data-i18n="console.mitre.search">Filter techniques</label>
+                    <input id="mitre-search" type="search" placeholder="TTP ID / technique / tactic" data-i18n="console.mitre.search_placeholder">
+                    <button type="button" class="btn btn-export" id="mitre-export" disabled data-i18n="console.mitre.export">Export Layer JSON</button>
+                </div>
+                <p id="mitre-state" role="status" aria-live="polite"></p>
+                <div class="mitre-matrix-scroll" tabindex="0" role="region" aria-label="MITRE tactics matrix" data-i18n-aria-label="console.mitre.matrix_aria">
+                    <div id="mitre-matrix-grid" class="mitre-matrix-grid" aria-busy="false"></div>
+                </div>
+                <div class="hud-legend mitre-legend" aria-label="Detection frequency" data-i18n-aria-label="console.mitre.frequency">
+                    <span data-heat="1">1–4</span><span data-heat="2">5–19</span><span data-heat="3">20–49</span><span data-heat="4">50–99</span><span data-heat="5">100+</span>
+                </div>
+            </div>
+            <dialog id="mitre-detail" class="mitre-detail" aria-labelledby="mitre-detail-title">
+                <h3 id="mitre-detail-title"></h3>
+                <dl id="mitre-detail-body"></dl>
+                <form method="dialog"><button class="btn" data-i18n="console.mitre.close">Close</button></form>
+            </dialog>
         </section>
 
         <!-- AI Analyzer Tab -->

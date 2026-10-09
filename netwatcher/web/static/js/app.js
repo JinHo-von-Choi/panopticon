@@ -21,6 +21,10 @@ import { initOnboarding, loadOnboarding } from './modules/onboarding.js';
 import { initOverview, loadOverview } from './modules/overview.js';
 import { initReplay, loadReplay } from './modules/replay.js';
 import { loadCapabilities, featureEnabled } from './core/capabilities.js';
+import { initTheme } from './modules/theme.js';
+import { loadTopology, registerTopologyListeners } from './modules/topology.js';
+import { loadCompliance, registerComplianceListeners } from './modules/compliance.js';
+import { loadMitreMatrix, registerMitreListeners } from './modules/mitre.js';
 import { loadUsers } from './modules/users.js';
 import { showToast } from './core/utils.js';
 
@@ -140,6 +144,9 @@ function registerListeners() {
     registerIncidentListeners();
     registerDefenseListeners();
     registerHuntListeners();
+    registerTopologyListeners();
+    registerComplianceListeners();
+    registerMitreListeners();
 
     // Tabs
     document.querySelectorAll(".tab").forEach(tab => {
@@ -154,6 +161,9 @@ function registerListeners() {
             if (target === "events")       loadEvents(0);
             if (target === "devices")      loadDevices();
             if (target === "users")        loadUsers();
+            if (target === "topology")     loadTopology();
+            if (target === "compliance")   loadCompliance();
+            if (target === "mitre")        loadMitreMatrix();
             if (target === "traffic")      loadCharts();
             if (target === "engines")      loadEngines();
             if (target === "incidents")    loadIncidents();
@@ -346,6 +356,7 @@ function registerListeners() {
 window.addEventListener("DOMContentLoaded", () => {
     registerListeners();
     initConsole();
+    initTheme();
     initI18n(() => { if (isAuthEnabled()) { loadEvents(); loadEngines(); loadConsoleState(); } }).then(async () => {
         initOnboarding();
         initReplay();

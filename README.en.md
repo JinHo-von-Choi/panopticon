@@ -24,6 +24,10 @@ Start with the [installation guide](docs/INSTALL.md) and [user guide](docs/USER-
 | Decisions and collaboration | Track assignees, case status, handoff notes, and review history with separate admin, analyst, and viewer permissions |
 | Evidence retention | Inspect original alerts and investigation evidence; retained packets are available in direct capture deployments |
 | Tuning proposals and approval | Compare normal and attack samples before an administrator approves a change in a supported sensor deployment |
+| Lightweight host agent | Collect Linux TCP sockets, load and memory with a Rust executable; the local release build is about 1.6 MiB. A systemd installer and HMAC-SHA256 gateway support consecutive event sequences and idempotent retries. See [agent installation](docs/INSTALL.md#호스트-에이전트-설치) |
+| Tenant isolation foundation | PostgreSQL RLS and transaction tenant contexts cover `events`, `devices`, `incidents` and `audit_log`; HTTP tenant selection and isolation of all project data require further integration |
+| Hash-chained audit trail | SHA-256 `prev_hash` and `entry_hash` fields with `verify_chain(tenant_id)` detect content/link mismatches and identify the first broken row. See [verification scope](docs/API.md#감사-로그-무결성과-테넌트-컨텍스트) |
+| Cybernetic console | Operator, Auditor and Cinematic themes; Canvas2D topology; NIST CSF / PCI DSS coverage and KPIs; a tactic-grouped MITRE ATT&CK frequency heatmap with Navigator Layer JSON export |
 
 Press `Ctrl+K` or `Cmd+K` to find a console screen.
 

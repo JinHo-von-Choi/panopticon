@@ -28,6 +28,99 @@ HTTP 401이면 로그인과 토큰 만료를, 403이면 역할을 확인합니�
 
 비밀값은 제외하고 설정의 자유 서술값은 해시로 기록합니다. `requires_reconciliation=true`이면 감사만으로 적용 여부를 확정할 수 없으므로 대상의 실제 상태를 확인해야 합니다. 감사 저장소 장애는 빈 이력 대신 503으로 응답합니다.
 
+## 에이전트 게이트웨이
+
+에이전트는 콘솔 로그인 토큰과 별도 자격 증명을 사용합니다. 게이트웨이는 `agent_gateway.database` 경로의 SQLite에 등록·하트비트·이벤트 배치를 보존하며, 기본 경로는 `data/agent-gateway.sqlite3`입니다. 이 저장소는 PostgreSQL 사건 테이블이나 RLS 테넌트에 자동 연결되지 않습니다.
+
+### 등록 — `POST /api/agent/enroll`
+
+콘솔 시작 전에 `PANOPTICON_ENROLLMENT_TOKEN`을 설정합니다. 토큰은 게이트웨이가 처음 등록한 시점부터 900초 동안 유효하며 호스트 한 대만 등록할 수 있습니다. 콘솔을 재시작해도 만료·소비 상태는 초기화되지 않습니다. 다음 호스트에는 새 토큰을 설정하고 콘솔을 재시작합니다.
+
+```json
+{
+  "enrollment_token": "<등록 토큰>",
+  "hostname": "host-01",
+  "platform": "linux"
+}
+```
+
+성공은 HTTP 201이며 `agent_uuid`, `auth_token`, `signing_key`, `heartbeat_interval_seconds: 5`를 반환합니다. `signing_key`는 32바이트 키의 16진수 표현입니다. 자격 증명은 호스트의 보호된 상태 디렉터리에 보관합니다. 토큰 불일치·만료·재사용은 401, 등록 토큰 미설정은 503입니다.
+
+### 서명 인증
+
+하트비트와 이벤트에는 다음 헤더를 모두 보냅니다.
+
+```http
+Authorization: Bearer <auth_token>
+X-Agent-UUID: <agent_uuid>
+X-Agent-Timestamp: <Unix 초 정수>
+X-Agent-Signature: <소문자 16진수 HMAC-SHA256>
+Content-Type: application/json
+```
+
+서명 입력은 `timestamp` 헤더 문자열의 UTF-8 바이트, 줄바꿈 한 바이트(`0x0a`), 전송할 JSON 본문의 원본 바이트를 순서대로 연결한 값입니다. 키는 `signing_key`를 16진수 디코딩한 바이트입니다. 서명 후 JSON 공백이나 키 순서를 바꾸지 마세요. 서버 시각과의 차이가 60초를 넘으면 401입니다. 본문의 `agent_uuid`와 인증된 헤더 UUID가 다르면 403입니다.
+
+### 하트비트 — `POST /api/agent/heartbeat`
+
+```json
+{
+  "agent_uuid": "<등록 시 받은 UUID>",
+  "latency_ms": 12.5,
+  "resources": {
+    "load_1": 0.25,
+    "memory_total_bytes": 8589934592,
+    "memory_available_bytes": 4294967296,
+    "agent_rss_bytes": 3985408
+  }
+}
+```
+
+`latency_ms`는 0~3,600,000, `load_1`은 0 이상입니다. 메모리 값은 0 이상의 정수 바이트입니다. 성공은 HTTP 200이며 `ok: true`, `received_at`(Unix 초), `heartbeat_interval_seconds: 5`를 반환합니다.
+
+### 이벤트 — `POST /api/agent/events`
+
+```json
+{
+  "agent_uuid": "<등록 시 받은 UUID>",
+  "seq": 1,
+  "events": [{
+    "kind": "connection",
+    "local_address": "192.0.2.10:50000",
+    "remote_address": "198.51.100.20:443",
+    "state": "ESTABLISHED",
+    "inode": 12345,
+    "observed_at": 1791504000,
+    "detail": ""
+  }]
+}
+```
+
+`seq`는 1부터 시작하는 연속 정수이며 최대 `9223372036854775807`입니다. 배치당 이벤트는 1~256개입니다. `kind`는 `connection` 또는 `anomaly`, `inode`·`observed_at`은 0 이상의 정수이며 `observed_at`의 단위는 Unix 초입니다. `detail`만 생략할 수 있습니다. 주소는 최대 128자, 상태는 최대 32자, 상세는 최대 1,024자입니다. 등록·하트비트·이벤트 본문의 알 수 없는 필드는 422로 거절합니다.
+
+성공 응답은 `{"ok":true,"seq":1,"duplicate":false,"accepted":1}`입니다. 같은 `(agent_uuid, seq)`와 같은 정규화 본문을 다시 보내면 `duplicate:true`, `accepted:0`입니다. 본문이 다르거나 다음 시퀀스를 건너뛰면 409입니다. 인증 단계의 본문 상한은 256KiB이며 초과 시 413입니다. 재전송 때는 같은 배치·시퀀스를 유지하고 새 시각으로 서명을 생성합니다.
+
+## 감사 로그 무결성과 테넌트 컨텍스트
+
+마이그레이션 038은 `events`, `devices`, `incidents`, `audit_log`에 `tenant_id UUID NOT NULL`과 RLS 정책을 추가합니다. 기존 행과 테넌트 미지정 INSERT의 기본값은 `00000000-0000-0000-0000-000000000000`입니다. `Database.tenant_transaction(tenant_id)`는 트랜잭션 동안 `app.current_tenant_id`를 설정하며, 반환받은 같은 연결에서 쿼리를 실행해야 합니다. 커밋·롤백 후에는 설정이 복원됩니다.
+
+컨텍스트 미설정은 RLS 적용 역할의 행 접근을 거절합니다. 신뢰된 내부 작업은 `system` 컨텍스트로 전체 행에 접근할 수 있습니다. 현재 정책은 `ENABLE ROW LEVEL SECURITY`이며 `FORCE`는 적용하지 않습니다. 테이블 소유자·슈퍼유저·BYPASSRLS 역할의 우회를 고려해야 합니다. HTTP의 `X-Tenant-ID` 헤더나 로그인 계정에서 테넌트 컨텍스트를 설정하는 기능은 아직 없으므로 헤더를 보내는 것만으로 격리되지 않습니다.
+
+마이그레이션 039은 감사 행에 `prev_hash`와 `entry_hash`를 추가합니다. `AuditLogger.verify_chain(tenant_id)`는 ID 순서로 연결과 내용을 재계산합니다. 테넌트를 생략하면 연결에서 보이는 전체 행을 검증합니다. 테넌트별 첫 행이 다른 테넌트의 최신 행을 참조할 수 있으므로 필요한 전체 이력이 보이는 연결에서 호출해야 합니다.
+
+- 성공: `{"valid":true,"count":42}`.
+- 불일치: `{"valid":false,"broken_id":17,"count":16,"reason":"entry_hash_mismatch"}`. `count`는 불일치 전까지 검증한 대상 행 수입니다.
+- `reason`은 `prev_hash_mismatch`, `entry_hash_mismatch`, `invalid_payload` 중 하나입니다. DB 조회 오류는 호출자에게 전달합니다.
+
+`GET /api/audit/verify-chain`은 현재 라우터에 등록되지 않았으며 사용할 수 없습니다. 검증 기능은 위 Python 메서드로 제공합니다. 기존 감사 행의 0 해시는 마이그레이션에서 재계산하지 않으며 검증 성공으로 취급하지 않습니다. 체인 검증은 변경 탐지 수단입니다. 외부 신뢰 기준점 없이 전체 체인을 다시 쓰거나 마지막 행을 삭제한 경우까지 보장하지 않습니다.
+
+## MITRE Navigator 레이어
+
+`GET /api/hunting/navigator?hours=24&name=NetWatcher%20Coverage`는 콘솔 인증으로 조회합니다. `hours`는 정수 시간(기본 24), `name`은 레이어 이름(기본 `NetWatcher Coverage`)입니다. 화면의 1시간·24시간·7일은 각각 `hours=1`, `24`, `168`입니다. 서버는 해당 시각 이후 최근 이벤트를 최대 10,000건 조회하고 `mitre_attack_id`별로 집계합니다.
+
+HTTP 200 응답은 Navigator Layer JSON입니다. `domain: enterprise-attack`, `versions`(ATT&CK 14, Navigator 4.9.1, Layer 4.5), `name`, `description`, `techniques`, `gradient` 등을 포함합니다. 각 기법은 `techniqueID`, `tactic`, `color`, `score`, `comment`, `metadata`, `enabled`, `showSubtechniques`를 담습니다. `metadata`의 `Technique name`과 `Detection count`가 기법명과 탐지 횟수입니다. `score`는 횟수 구간을 0~100으로 변환한 값으로 실제 탐지 횟수나 탐지율이 아닙니다.
+
+탐지가 없는 기간은 `techniques: []`입니다. 전체 ATT&CK 기법 목록이나 전수 탐지 커버리지를 반환하지 않습니다. 화면의 JSON 내보내기는 마지막으로 조회한 레이어 전체를 저장하며 기법 검색 필터로 줄이지 않습니다.
+
 ## 센서의 탐지 엔진
 
 분리 Native 콘솔에서는 `GET /api/engines`로 엔진 목록을, `GET /api/engines/{name}`으로 현재 설정과 `base_version`을 조회합니다. 관리자는 `PATCH /api/engines/{name}/toggle`로 실행 상태를 지정합니다.

@@ -84,6 +84,44 @@ python3 -m venv .venv
 
 Suricata 로그를 수신하는 EVE 모드 구동 시에는 프로세스 실행에 `sudo` 관리자 권한이 요구되지 않습니다. 호스트 데몬 등록은 [EVE systemd 안내](EVE.md#systemd) 문서와 저장소 내 `deploy/panopticon-eve.service` 템플릿을 활용해 등록합니다. EVE 파싱 대신 네이티브 패킷 수집 방식을 선택하는 환경이라면 호스트에 libpcap 라이브러리를 설치하고 인터페이스 패킷 캡처 권한을 서비스 계정에 부여하는 사전 작업을 별도로 진행합니다.
 
+## 호스트 에이전트 설치
+
+Panopticon Agent는 Linux `/proc/net/tcp`, `/proc/net/tcp6`, `/proc/loadavg`, `/proc/meminfo`, `/proc/self/status`에서 TCP 소켓과 부하·메모리 지표를 수집하는 Rust 단일 바이너리입니다. Rust 런타임 설치는 필요 없습니다. 5초 간격으로 하트비트와 연결 상태 변경을 전송하며, 샘플링은 간격당 최대 256개·리스닝 소켓 제외입니다. 로컬 release 빌드는 1,674,960바이트(약 1.6MiB)이며 플랫폼·빌드에 따라 크기는 달라질 수 있습니다.
+
+대상은 x86_64 또는 aarch64 Linux이고 systemd가 실행 중이어야 합니다. 콘솔은 HTTPS로 접근할 수 있어야 하며 HTTP는 개발용 loopback 주소만 허용합니다. 먼저 콘솔 프로세스 환경에 `PANOPTICON_ENROLLMENT_TOKEN`을 설정하고 시작합니다. 토큰은 16~512자의 URL-safe 문자열이며 게이트웨이 최초 등록부터 15분간·호스트 한 대에만 사용합니다. 다음 호스트에는 새 토큰을 설정하고 콘솔을 재시작해야 합니다.
+
+대상 호스트에서 루트 셸을 열고 콘솔 주소, 바이너리 URL, 신뢰된 경로에서 받은 SHA-256을 설정합니다. 등록 토큰은 화면에 표시하지 않고 입력합니다.
+
+```bash
+sudo -i
+cd /home/nirna/jobs/panopticon
+export PANOPTICON_CONSOLE_URL='https://console.example'
+read -r -s -p 'Enrollment token: ' PANOPTICON_ENROLLMENT_TOKEN
+export PANOPTICON_ENROLLMENT_TOKEN
+export PANOPTICON_AGENT_BINARY_URL='https://artifacts.example/linux-x86_64/panopticon-agent'
+export PANOPTICON_AGENT_SHA256='<신뢰된 64자리 SHA-256>'
+bash scripts/agent/install.sh
+```
+
+작업 경로와 아키텍처별 바이너리 URL은 실제 배포 환경으로 바꿉니다. 바이너리를 직접 빌드했다면 `cargo build --release --manifest-path agent/Cargo.toml`로 생성한 실행 파일 경로를 `PANOPTICON_AGENT_BINARY`에 지정합니다. 이 경우 다운로드 URL·체크섬 환경변수 대신 로컬 파일을 사용합니다.
+
+검증한 설치 스크립트를 별도 HTTPS 호스트에 배포한 경우 같은 루트 셸의 환경변수로 원라인 설치할 수 있습니다.
+
+```bash
+curl -fsSL https://<artifact-host>/install.sh | bash
+```
+
+현재 저장소는 콘솔의 `/install.sh`나 바이너리 배포 엔드포인트를 제공하지 않습니다. 설치기는 환경변수를 사용하며 `bash -s -- --token <token>` 인자 형식은 지원하지 않습니다. HTTPS 배포 주소와 바이너리 체크섬을 먼저 준비해야 합니다.
+
+설치기는 바이너리를 `/usr/local/bin/panopticon-agent`에 배치하고 DynamicUser systemd 서비스를 등록합니다. 환경 파일 `/etc/panopticon-agent/agent.env`는 0600, 상태 디렉터리는 `/var/lib/panopticon-agent`입니다. `MemoryHigh=15M`는 메모리 압력 제어 설정이며 실제 RSS나 강제 상한을 뜻하지 않습니다.
+
+```bash
+systemctl status panopticon-agent
+journalctl -u panopticon-agent
+```
+
+게이트웨이의 등록·서명 인증과 순차 배치 규칙은 [에이전트 API](API.md#에이전트-게이트웨이)를 참고하십시오. 재시작 시 기존 자격 증명과 시퀀스를 재사용합니다. 미전송 배치 하나를 fsync와 원자적 저장으로 보존하며 전달될 때까지 새 소켓 샘플링을 멈춥니다. 전체 오프라인 WAL이 아니므로 단절 중 모든 연결 이력을 보존하지 않습니다. Netlink/eBPF, mTLS, 에이전트 침묵 경보와 원격 호스트 격리는 후속 계획입니다.
+
 ## 기존 설치 업데이트하기
 
 운영체제 환경 업데이트를 진행하기 전에 [DB·설정·증거 백업](OPERATIONS-GUIDE.md#백업) 절차에 따라 전체 데이터베이스 덤프와 설정 파일, 증거 아카이브를 온전히 백업하고 릴리스 변경 기록의 버전 간 호환성 주의사항을 검토합니다. 이전 설정 파일에서 입력 모드 옵션을 생략한 채 운영해 왔다면 패킷 직접 캡처 모드가 기본 동작으로 유지됩니다. 새로 배포된 기본 설정 템플릿은 EVE 모드를 기준으로 작성되어 있으므로, 기존에 사용 중이던 운영 설정 파일을 최신 템플릿 파일로 무단 덮어쓰지 않도록 주의합니다.

@@ -6,7 +6,10 @@ import asyncio
 import json
 import logging
 import ssl
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
+from uuid import UUID
 
 import asyncpg
 
@@ -151,3 +154,26 @@ class Database:
         if self._pool is None:
             raise RuntimeError("Database not connected. Call connect() first.")
         return self._pool
+
+    async def set_tenant_id(
+        self, tenant_id: UUID | str, *, connection: asyncpg.Connection,
+    ) -> None:
+        """활성 트랜잭션의 커넥션에 UUID 또는 신뢰된 system 컨텍스트를 설정한다.
+
+        이후 쿼리도 같은 커넥션에서 실행해야 한다. 커밋·롤백 시 설정은 복원된다.
+        """
+        value = "system" if tenant_id == "system" else str(UUID(str(tenant_id)))
+        if not connection.is_in_transaction():
+            raise RuntimeError("Tenant context requires an active transaction")
+        # SET LOCAL은 바인드 변수를 받지 않으므로 같은 의미의 set_config를 사용한다.
+        await connection.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)", value,
+        )
+
+    @asynccontextmanager
+    async def tenant_transaction(self, tenant_id: UUID | str) -> AsyncIterator[asyncpg.Connection]:
+        """테넌트 컨텍스트가 적용된 트랜잭션과 그 커넥션을 제공한다."""
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                await self.set_tenant_id(tenant_id, connection=connection)
+                yield connection

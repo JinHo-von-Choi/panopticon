@@ -16,7 +16,7 @@ from netwatcher.web.routes.devices import create_devices_router
 from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
-def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False, pcap_writer=None, sensor_control=None, incident_repository=None):
+def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False, pcap_writer=None, sensor_control=None, incident_repository=None, topology_mapper=None, risk_scorer=None, compliance_mapper=None, kpi_calc=None, report_gen=None):
     if sensor_control is not None:
         if (config.get("input.mode", "native") != "native" or registry is not None or yaml_editor is not None
                 or auth_manager is None or not auth_manager.enabled or auth_manager.multi_user is not True
@@ -62,7 +62,8 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     )
     app.add_middleware(RequestGuard, limiter=limiter, audit_logger=audit_logger)
     if auth_manager:
-        app.add_middleware(AuthMiddleware, auth_manager=auth_manager)
+        app.add_middleware(AuthMiddleware, auth_manager=auth_manager,
+                           delegated_paths=("/api/agent/enroll", "/api/agent/heartbeat", "/api/agent/events"))
         if auth_manager.multi_user:
             app.add_event_handler('startup',auth_manager.initialize)
 
@@ -76,6 +77,11 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
     # API Routers (Standardized Prefix)
     api_prefix = "/api"
+    from netwatcher.web.routes.agent_gateway import AgentGatewayStore, create_agent_gateway_router
+    app.state.agent_gateway = AgentGatewayStore(
+        config.get("agent_gateway.database", "data/agent-gateway.sqlite3"),
+    )
+    app.include_router(create_agent_gateway_router(app.state.agent_gateway), prefix=api_prefix)
     from netwatcher.web.rbac import Role, require_role
 
     @app.get("/api/capabilities", dependencies=[Depends(require_role(Role.VIEWER))])
@@ -154,6 +160,30 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     schedules = WorkSchedules(event_repo._db) if isinstance(event_repo, EventRepository) else None
     app.include_router(create_work_schedules_router(schedules), prefix=api_prefix)
     app.include_router(create_devices_router(device_repo), prefix=api_prefix)
+    from netwatcher.inventory.topology_mapper import TopologyMapper
+    from netwatcher.inventory.dynamic_risk import DynamicRiskScorer
+    from netwatcher.web.routes.topology import create_topology_router
+    if topology_mapper is None:
+        topology_mapper = TopologyMapper()
+    if risk_scorer is None:
+        risk_scorer = DynamicRiskScorer()
+    app.include_router(create_topology_router(topology_mapper, risk_scorer), prefix=api_prefix)
+
+    from netwatcher.compliance.framework_mapper import FrameworkMapper
+    from netwatcher.compliance.kpi_calculator import KPICalculator
+    from netwatcher.compliance.report_generator import ReportGenerator
+    from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.web.routes.compliance import create_compliance_router
+    if compliance_mapper is None:
+        compliance_mapper = FrameworkMapper()
+    if kpi_calc is None:
+        kpi_calc = KPICalculator(event_repo)
+    if report_gen is None:
+        report_gen = ReportGenerator(compliance_mapper, kpi_calc)
+    compliance_registry = registry if registry is not None else EngineRegistry(config)
+    app.include_router(create_compliance_router(
+        compliance_mapper, kpi_calc, report_gen, compliance_registry,
+    ), prefix=api_prefix)
     from netwatcher.web.routes.onboarding import create_onboarding_router
     app.include_router(create_onboarding_router(config, app.state.health_checker,
                        observation_service, auth_manager, yaml_editor), prefix=api_prefix)

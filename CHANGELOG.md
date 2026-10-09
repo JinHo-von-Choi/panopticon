@@ -1,5 +1,26 @@
 # 변경 기록
 
+## 0.6.0 — 2026-10-10
+
+### 추가
+
+- Linux TCP 소켓과 호스트 부하·메모리를 수집하는 Rust Panopticon Agent를 추가했습니다. 로컬 release 바이너리는 1,674,960바이트(약 1.6MiB)이며, `scripts/agent/install.sh`로 systemd 서비스를 설치합니다.
+- `POST /api/agent/enroll`, `/api/agent/heartbeat`, `/api/agent/events` 게이트웨이와 HMAC-SHA256 서명 인증을 추가했습니다. 등록 토큰은 15분 유효·1회용입니다.
+- `events`, `devices`, `incidents`, `audit_log`에 PostgreSQL RLS 멀티테넌시 기반을 추가했습니다. 마이그레이션 038과 테넌트 트랜잭션 컨텍스트를 제공합니다.
+- 마이그레이션 039에 Hash-Chained Audit Trail의 `prev_hash`·`entry_hash`를 추가했습니다. `verify_chain(tenant_id)`로 SHA-256 연결과 내용을 검사하고 `broken_id`를 반환합니다.
+- Operator·Auditor·Cinematic Tri-Theme HUD와 선택형 스캔라인·효과음을 추가했습니다.
+- Canvas2D 토폴로지와 NIST CSF·PCI DSS 커버리지·컴플라이언스 KPI 패널을 추가했습니다. 토폴로지는 합성 5,000노드·4,999연결 브라우저 검사로 확인했습니다.
+- MITRE ATT&CK Matrix Heatmap 탭을 추가했습니다. 전술별 그룹, 기법 검색, 1시간·24시간·7일 필터와 Navigator Layer JSON 내보내기를 지원합니다.
+
+### 개선
+
+- 게이트웨이는 `(agent_uuid, seq)`의 동일 배치 재전송을 중복 처리하고, 내용 충돌이나 순서 건너뛰기를 HTTP 409로 거절합니다. 에이전트는 미전송 배치 하나와 시퀀스를 원자적으로 보존합니다.
+- Operator·Auditor의 검사 대상 텍스트·배지 색상은 최소 대비율 5.46:1로 WCAG AA 텍스트 기준인 4.5:1 이상을 충족합니다. 전체 화면 접근성 인증이나 Cinematic 테마 검증을 뜻하지 않습니다.
+
+### 적용 범위
+
+환경변수 기반 설치기를 제공합니다. 콘솔의 `/install.sh` 배포와 `--token` 인자, 전체 오프라인 WAL, mTLS, HTTP 테넌트 선택, `GET /api/audit/verify-chain`은 아직 제공하지 않습니다. RLS에는 `FORCE ROW LEVEL SECURITY`를 적용하지 않았으며, 감사 체인은 재계산 권한을 가진 관리자의 전체 체인 재작성이나 마지막 행 삭제를 독립적으로 증명하지 못합니다.
+
 ## 0.5.8 — 2026-10-09
 
 ### 추가

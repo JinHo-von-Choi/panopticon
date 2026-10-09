@@ -1,0 +1,644 @@
+/* ===========================================================================
+   Tri-Theme 토큰 체계 — Operator / Auditor / Cinematic
+   ---------------------------------------------------------------------------
+   콘솔(load order: style.css → console.css → themes.css)은 이 파일보다 먼저
+   같은 이름의 토큰을 :root 에 선언한다. 이 파일이 마지막에 로드되므로 아래
+   규칙이 항상 이긴다. 테마를 바꾸어도 기존 규칙을 덮어쓰지 않기 위해
+   토큰 이름은 재사용하고, 테마별 값만 교체한다.
+
+   테마 계약
+   - Operator  : 기본값. 저채도 슬레이트 그레이(#0f172a), 본문 13px 이상,
+                 WCAG 2.1 AA(본문 4.5:1 이상) 기준. 24x7 교대근무용.
+   - Auditor   : 백색/고대비 배경 + 대형 폰트. 감사 로그·증적·인쇄/PDF 전용.
+   - Cinematic : 사이버네틱 네온 HUD. 월보드·시연용이며, CRT 스캔라인과 사운드는
+                 기본 OFF(헤더 토글로만 활성화).
+
+   상태 표시는 색상 단독으로 인코딩하지 않는다. `.badge-sev-*` 계열은
+   [색상] + [고유 형태의 아이콘] + [텍스트 라벨] 3중 인코딩을 함께 쓴다.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   1. Operator (기본값)
+   이전 콘솔 팔레트를 슬레이트 계열로 정규화하고 본문 크기를 13px 이상으로
+   고정한다. 낮은 채도의 시안/코퍼 액센트는 브랜드 식별자로 유지한다.
+   --------------------------------------------------------------------------- */
+:root,
+html[data-theme="operator"] {
+    color-scheme: dark;
+
+    --bg:            #0f172a;   /* 슬레이트 900 — 저채도 다크 베이스 */
+    --surface:       #16203a;
+    --surface2:      #1e293b;
+    --surface3:      #293650;
+    --border:        #33415c;
+    --border-focus:  #7dd3fc;
+    --text:          #e2e8f0;   /* 본문 대비 ≈ 14:1 */
+    --text-dim:      #a3b1c6;   /* 보조 텍스트 대비 ≈ 7.5:1 */
+    --text-faint:    #a3b1c6;
+
+    --accent:        #63dae8;
+    --accent-dim:    #2b8f9e;
+    --accent-bg:     rgba(99, 218, 232, .10);
+    --accent-glow:   rgba(99, 218, 232, .20);
+    --copper:        #ff9a62;
+
+    /* 심각도 — 본문 대비가 모두 4.5:1 이상 */
+    --critical:      #f87171;
+    --critical-bg:   rgba(248, 113, 113, .12);
+    --warning:       #fbbf24;
+    --warning-bg:    rgba(251, 191, 36, .12);
+    --info:          #38bdf8;
+    --info-bg:       rgba(56, 189, 248, .12);
+    --green:         #34d399;
+    --green-bg:      rgba(52, 211, 153, .12);
+
+    /* 타이포그래피 스케일 — Operator 는 읽기 최우선 */
+    --theme-body-size:   14px;
+    --theme-small-size:  13px;   /* 표/메타 텍스트 하한선 */
+    --theme-micro-size:  13px;   /* 배지·eyebrow 도 12px 아래로 내려가지 않는다 */
+    --theme-row-h:       38px;
+    --theme-line:        1.65;
+    --theme-focus-width: 2px;
+
+    /* HUD 장식 — Operator 는 모두 꺼짐 */
+    --font-size-body: var(--theme-body-size);
+    --font-size-table: var(--theme-small-size);
+    --table-header-bg: var(--surface2);
+    --table-row-hover: var(--accent-bg);
+    --table-row-selected: var(--accent-bg);
+    --bg-card: var(--surface);
+    --border-color: var(--border);
+
+    --hud-scanline: none;
+    --hud-glow: none;
+    --hud-sound: none;
+
+    --shadow-xs: 0 1px 4px rgba(0, 0, 0, .30);
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, .35);
+    --shadow-md: 0 4px 20px rgba(0, 0, 0, .45);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, .55);
+}
+
+/* ---------------------------------------------------------------------------
+   2. Auditor — 백색 배경, 고대비, 대형 폰트
+   인쇄/PDF 증적과 감사 로그 검토용. 어두운 테마와 대비되는 라이트 테마이므로
+   그림자와 표면 경계를 넉넉히 벌려 명도 의존만으로 경계를 만들지 않는다.
+   --------------------------------------------------------------------------- */
+html[data-theme="auditor"] {
+    color-scheme: light;
+
+    --bg:            #ffffff;
+    --surface:       #ffffff;
+    --surface2:      #f1f5f9;
+    --surface3:      #e2e8f0;
+    --border:        #94a3b8;
+    --border-focus:  #1d4ed8;
+    --text:          #0b1220;   /* 본문 대비 ≈ 19:1 */
+    --text-dim:      #334155;   /* 보조 텍스트 대비 ≈ 10:1 */
+    --text-faint:    #475569;
+
+    --accent:        #1d4ed8;
+    --accent-dim:    #1e40af;
+    --accent-bg:     rgba(29, 78, 216, .08);
+    --accent-glow:   rgba(29, 78, 216, .18);
+    --copper:        #9a3412;
+
+    --critical:      #b91c1c;
+    --critical-bg:   rgba(185, 28, 28, .10);
+    --warning:       #92400e;
+    --warning-bg:    rgba(146, 64, 14, .10);
+    --info:          #1d4ed8;
+    --info-bg:       rgba(29, 78, 216, .10);
+    --green:         #166534;
+    --green-bg:      rgba(21, 128, 61, .10);
+
+    --theme-body-size:   18px;
+    --theme-small-size:  16px;
+    --theme-micro-size:  15px;
+    --theme-row-h:       48px;
+    --theme-line:        1.8;
+    --theme-focus-width: 3px;
+
+    --hud-scanline: none;
+    --hud-glow: none;
+    --hud-sound: none;
+
+    --shadow-xs: 0 1px 2px rgba(15, 23, 42, .12);
+    --shadow-sm: 0 2px 6px rgba(15, 23, 42, .14);
+    --shadow-md: 0 4px 14px rgba(15, 23, 42, .16);
+    --shadow-lg: 0 8px 28px rgba(15, 23, 42, .18);
+}
+
+/* ---------------------------------------------------------------------------
+   3. Cinematic — 사이버네틱 네온 HUD
+   데모/월보드 전용. 장식 효과는 전부 선택 사항이며 기본값은 꺼짐이다.
+   스캔라인은 사용자가 명시적으로 켠 경우에만, 그리고 prefers-reduced-motion
+   을 존중하는 환경에서는 절대 렌더링되지 않는다.
+   --------------------------------------------------------------------------- */
+html[data-theme="cinematic"] {
+    color-scheme: dark;
+
+    /* 계획서 §3-4 지정 팔레트 */
+    --hud-cyan:     #00f0ff;
+    --hud-red:      #ff003c;
+    --hud-emerald:  #00ff66;
+
+    --bg:            #04060f;
+    --surface:       #070d1c;
+    --surface2:      #0b1428;
+    --surface3:      #122040;
+    --border:        #1c3560;
+    --border-focus:  var(--hud-cyan);
+    --text:          #d7f9ff;
+    --text-dim:      #8fb8cc;
+    --text-faint:    #6d94ab;
+
+    --accent:        var(--hud-cyan);
+    --accent-dim:    #0891b2;
+    --accent-bg:     rgba(0, 240, 255, .10);
+    --accent-glow:   rgba(0, 240, 255, .30);
+    --copper:        #ffb000;
+
+    --critical:      var(--hud-red);
+    --critical-bg:   rgba(255, 0, 60, .14);
+    --warning:       #ffb000;
+    --warning-bg:    rgba(255, 176, 0, .14);
+    --info:          var(--hud-cyan);
+    --info-bg:       rgba(0, 240, 255, .12);
+    --green:         var(--hud-emerald);
+    --green-bg:      rgba(0, 255, 102, .12);
+
+    --theme-body-size:   15px;
+    --theme-small-size:  14px;
+    --theme-micro-size:  13px;
+    --theme-row-h:       42px;
+    --theme-line:        1.7;
+    --theme-focus-width: 2px;
+
+    /* 기본 OFF. [data-hud-scanlines="on"] 이 켜는 유일한 통로다. */
+    --hud-scanline: none;
+    --hud-glow: none;
+    --hud-sound: none;
+
+    --shadow-xs: 0 0 8px rgba(0, 240, 255, .10);
+    --shadow-sm: 0 0 14px rgba(0, 240, 255, .16);
+    --shadow-md: 0 0 24px rgba(0, 240, 255, .22);
+    --shadow-lg: 0 0 40px rgba(0, 240, 255, .28);
+}
+
+/* Cinematic 에서만 글로우를 허용한다. Operator/Auditor 의 box-shadow 를
+   무조건 네온으로 바꾸지 않고 토큰만 교체해 대비를 유지한다. */
+html[data-theme="cinematic"][data-hud-scanlines="on"] {
+    --hud-glow: 0 0 12px rgba(0, 240, 255, .35);
+}
+
+/* ---------------------------------------------------------------------------
+   4. 토큰을 실제 요소에 배선
+   테마 토큰은 :root 에 머무는 것만으로 아무 효과가 없다. 아래에서 각 테마의
+   타이포그래피·행 높이·포커스 링을 실제 규칙에 연결한다.
+   --------------------------------------------------------------------------- */
+body {
+    font-size: var(--theme-body-size, 14px);
+    line-height: var(--theme-line, 1.65);
+    /* 뷰포트 영역 넘침 방지: 큰 폰트 Auditor 에서 좌측 사이드바가 밀리지 않도록 */
+    overflow-wrap: break-word;
+}
+
+table, th, td, .input-search, .btn, .tab, .stat-label {
+    font-size: var(--theme-small-size, 13px);
+}
+
+tr, .table-row, .scope-table tbody tr { min-height: var(--theme-row-h, 38px); }
+
+.console-eyebrow, .response-eyebrow, .event-context-window, .events-live-pending,
+.badge-sev, .modal-close, .pagination button {
+    font-size: var(--theme-micro-size, 13px);
+}
+
+.console-eyebrow, .response-eyebrow, .badge-sev {
+    letter-spacing: .8px;
+}
+
+:is(button, input, select, a, summary, [tabindex]):focus-visible {
+    outline: var(--theme-focus-width, 2px) solid var(--accent);
+    outline-offset: 3px;
+}
+
+/* Auditor 는 얇은 경계를 경계선 폭으로 보강한다(명도 대비에만 의존하지 않음). */
+html[data-theme="auditor"] .tab,
+html[data-theme="auditor"] .stat-card,
+html[data-theme="auditor"] .detail-section,
+html[data-theme="auditor"] .overview-panel {
+    border-width: 2px;
+}
+
+/* Cinematic 전용 테두리 발광. 고대비 모드에서는 꺼진다. */
+@media (forced-colors: active) {
+    html[data-theme="cinematic"] { --hud-glow: none; }
+    .badge-sev { border: 1px solid CanvasText; }
+    html[data-theme="cinematic"][data-hud-scanlines="on"] body::after { display: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   5. 3중 인코딩 상태 뱃지
+   ---------------------------------------------------------------------------
+   계약: 색상 단독 인코딩 금지. 각 뱃지는 반드시 다음 셋을 함께 가진다.
+     [1] 색상      — 아래 CSS 변수
+     [2] 고유 형태 — ::before 픽토그램(색맹 환경에서 형태만으로도 구분 가능)
+     [3] 텍스트    — data-i18n 라벨(스크린리더와 텍스트 선택 모두 지원)
+
+   사용 형태:
+     <span class="badge badge-sev badge-sev-critical"
+           data-i18n="console.badge.critical">CRITICAL</span>
+
+   라벨이 없는 상태 값을 만들지 않는다. 라벨 텍스트는 i18n 키로 교체된다.
+   --------------------------------------------------------------------------- */
+.badge-sev {
+    display: inline-flex;
+    align-items: center;
+    gap: .4em;
+    padding: .18em .6em;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    line-height: 1.5;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+/* 픽토그램은 장식이 아니라 인코딩의 일부다. 보조 기술에 중복 노출되지 않도록
+   aria-hidden 으로 감싸는 것을 권장하며, 여기서는 CSS 로만 주입한다. */
+.badge-sev::before {
+    font-family: var(--font-mono);
+    font-size: 1em;
+    line-height: 1;
+}
+
+.badge-sev-critical { color: var(--critical); background: var(--critical-bg); }
+.badge-sev-critical::before { content: "\2716"; }        /* ✖ 닫힌 X — 즉각적 위험 */
+
+.badge-sev-high { color: var(--critical); background: var(--critical-bg); }
+.badge-sev-high::before { content: "\25B2"; }             /* ▲ 위쪽 삼각형 */
+
+.badge-sev-warning { color: var(--warning); background: var(--warning-bg); }
+.badge-sev-warning::before { content: "\25C6"; }         /* ◆ 마름모 — 주의 */
+
+.badge-sev-info { color: var(--info); background: var(--info-bg); }
+.badge-sev-info::before { content: "\25CF"; }            /* ● 원 — 정보 */
+
+.badge-sev-ok,
+.badge-sev-ready { color: var(--green); background: var(--green-bg); }
+.badge-sev-ok::before,
+.badge-sev-ready::before { content: "\2714"; }           /* ✔ 체크 — 정상 */
+
+.badge-sev-unknown { color: var(--text-dim); background: var(--surface2); }
+.badge-sev-unknown::before { content: "\003F"; }         /* ? 물음표 — 미확인 */
+
+.badge-sev-muted { color: var(--text-faint); background: var(--surface2); }
+.badge-sev-muted::before { content: "\25CB"; }           /* ○ 빈 원 — 중립/비활성 */
+
+/* 상태 칩(새로 고침 주기, 커버리지 등)을 담는 컨테이너 */
+.badge-slot {
+    display: inline-flex;
+    align-items: center;
+    gap: .35em;
+    min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   6. Cinematic HUD 장식 — 전부 기본 OFF
+   ---------------------------------------------------------------------------
+   스캔라인과 사운드는 사용자가 명시적으로 활성화해야만 동작한다.
+   - 스캔라인: html[data-hud-scanlines="on"][data-theme="cinematic"]
+   - 사운드:    html[data-hud-sound="on"][data-theme="cinematic"] (+ JS 재생)
+   헤더 토글이 이 두 속성의 유일한 쓰기자다. prefers-reduced-motion 과
+   forced-colors 환경에서는 장식이 렌더링되지 않는다.
+   --------------------------------------------------------------------------- */
+
+/* CRT 스캔라인 — 오버레이이며, 클릭/스크롤을 가로채지 않는다. */
+html[data-theme="cinematic"][data-hud-scanlines="on"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(
+            to bottom,
+            rgba(0, 240, 255, .05) 0 1px,
+            transparent 1px 3px
+        ),
+        radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0, 0, 0, .45) 100%);
+    mix-blend-mode: screen;
+    opacity: .55;
+}
+
+html[data-theme="cinematic"][data-hud-scanlines="on"] .tabs,
+html[data-theme="cinematic"][data-hud-scanlines="on"] .tab.active,
+html[data-theme="cinematic"][data-hud-scanlines="on"] .stat-card {
+    box-shadow: inset 0 0 0 1px rgba(0, 240, 255, .18), var(--hud-glow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html[data-theme="cinematic"][data-hud-scanlines="on"] body::after {
+        display: none;
+    }
+}
+
+/* 사운드는 JS(WebAudio)가 재생하며, CSS 는 상태 표시에만 쓰인다.
+   기본 상태 표시는 음소거 아이콘이며 소리를 내지 않는다. */
+.hud-sound-state { color: var(--text-dim); font-family: var(--font-mono); }
+html[data-theme="cinematic"][data-hud-sound="on"] .hud-sound-state {
+    color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+   7. 헤더 테마 컨트롤
+   --------------------------------------------------------------------------- */
+.theme-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    margin-right: 8px;
+}
+
+.theme-switch > label {
+    color: var(--text-dim);
+    font: 500 var(--theme-small-size) var(--font-mono);
+    letter-spacing: .8px;
+    white-space: nowrap;
+}
+
+.theme-switch select {
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: var(--theme-small-size);
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+/* HUD 토글은 Cinematic 에서만 의미가 있으므로 그때만 노출한다. */
+.hud-fx-toggles {
+    display: none;
+    align-items: center;
+    gap: .5rem;
+    margin-right: 8px;
+    font-size: var(--theme-small-size);
+}
+
+html[data-theme="cinematic"] .hud-fx-toggles { display: inline-flex; }
+
+.hud-fx-toggles label {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    min-height: 32px;
+    color: var(--text-dim);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.hud-fx-toggles input[type="checkbox"] { accent-color: var(--accent); }
+
+@media (max-width: 768px) {
+    .theme-switch > label { display: none; }
+    .theme-switch, .hud-fx-toggles { margin-right: 0; }
+    .hud-fx-toggles label { min-height: 44px; }
+}
+
+/* ---------------------------------------------------------------------------
+   8. 신규 탭 — 토폴로지 / 컴플라이언스 스캐폴딩
+   --------------------------------------------------------------------------- */
+.hud-panel {
+    display: grid;
+    gap: 16px;
+}
+
+.hud-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.hud-panel-head h3 { margin: 0; }
+
+.hud-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    color: var(--text-dim);
+    font: var(--theme-small-size) var(--font-mono);
+}
+
+.hud-canvas-frame {
+    position: relative;
+    width: 100%;
+    min-height: 420px;
+    height: clamp(420px, 60vh, 720px);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    overflow: hidden;
+}
+
+.hud-canvas-frame > canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* 데이터가 없을 때와 로딩 중에도 캔버스 프레임 높이를 유지해 레이아웃이
+   탭 전환 시 튀지 않게 한다. */
+.hud-canvas-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-dim);
+    background: var(--surface);
+    line-height: 1.8;
+}
+
+.hud-canvas-state[hidden] { display: none; }
+
+.hud-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    color: var(--text-dim);
+    font: var(--theme-small-size) var(--font-mono);
+}
+
+.hud-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+    gap: 14px;
+}
+
+/* 컴플라이언스 KPI 게이지 */
+.hud-kpi {
+    display: grid;
+    gap: 10px;
+    padding: 18px;
+    min-width: 0;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.hud-kpi-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.hud-kpi-title { font-weight: 600; overflow-wrap: anywhere; }
+
+.hud-kpi-score {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 26px;
+    line-height: 1;
+}
+
+/* 게이지 트랙 — 색상 외에 폭과 텍스트 수치로 진행도를 표현한다. */
+.hud-gauge {
+    height: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    overflow: hidden;
+}
+
+.hud-gauge > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+}
+
+.hud-kpi-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    color: var(--text-dim);
+    font: var(--theme-small-size) var(--font-mono);
+}
+
+@media (max-width: 768px) {
+    .hud-canvas-frame { min-height: 320px; height: clamp(320px, 55vh, 520px); }
+    .hud-kpi-score { font-size: 22px; }
+}
+.header-left .console-eyebrow, #console-ready-reason, .tab::before,
+.console-description, .scope-hint, .badge, .filter-group label,
+.response-state, .response-facts dd { font-size: var(--theme-small-size); }
+
+header { height: auto; min-height: 84px; padding-block: 12px; }
+.theme-switch select { border-color: var(--text-dim); }
+.theme-switch select:focus-visible { outline-color: var(--border-focus); }
+
+/* MITRE matrix: frequency accents preserve the theme's text/surface contrast. */
+.mitre-matrix-scroll {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    background: var(--bg);
+}
+.mitre-matrix-grid {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(180px, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 12px;
+}
+.mitre-tactic-col { min-width: 0; display: grid; gap: 10px; }
+.mitre-tactic-col h4 {
+    min-height: 3.5em;
+    margin: 0;
+    padding: 8px;
+    color: var(--text);
+    background: var(--surface2);
+    border-bottom: 2px solid var(--accent);
+    font-size: var(--theme-small-size);
+    overflow-wrap: anywhere;
+}
+.mitre-technique-card {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+    min-height: 110px;
+    padding: 12px;
+    text-align: start;
+    color: var(--text);
+    background: var(--surface2);
+    border: 1px solid var(--text-dim);
+    border-left: 5px solid var(--mitre-heat, var(--text-dim));
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--theme-small-size);
+    overflow-wrap: anywhere;
+}
+[data-heat="1"] { --mitre-heat: var(--text-dim); }
+[data-heat="2"] { --mitre-heat: var(--accent); }
+[data-heat="3"] { --mitre-heat: var(--warning); }
+[data-heat="4"] { --mitre-heat: color-mix(in srgb, var(--copper) 65%, var(--critical)); }
+[data-heat="5"] { --mitre-heat: var(--critical); }
+.mitre-technique-id { font-family: var(--font-mono); }
+.mitre-frequency {
+    padding: 3px 6px;
+    color: var(--text);
+    background: var(--surface3);
+    border-bottom: 2px solid var(--mitre-heat, var(--text-dim));
+    font-variant-numeric: tabular-nums;
+}
+.mitre-empty { color: var(--text-dim); font-size: var(--theme-small-size); }
+.mitre-technique-card:hover { border-color: var(--accent); box-shadow: var(--hud-glow); }
+.mitre-technique-card:focus-visible, .mitre-matrix-scroll:focus-visible,
+.mitre-toolbar :focus-visible, .mitre-detail button:focus-visible {
+    outline: var(--theme-focus-width) solid var(--border-focus);
+    outline-offset: 3px;
+}
+.mitre-toolbar { flex-wrap: wrap; }
+.mitre-toolbar input { min-width: 0; max-width: 100%; }
+.mitre-toolbar input, .mitre-toolbar select, .mitre-toolbar .btn {
+    color: var(--text);
+    background: var(--surface2);
+    border-color: var(--text-dim);
+    font-size: var(--theme-small-size);
+}
+.mitre-toolbar input::placeholder { color: var(--text-dim); opacity: 1; }
+.mitre-legend span { border-left: 5px solid var(--mitre-heat); padding-left: 8px; }
+.mitre-detail {
+    width: min(560px, calc(100vw - 40px));
+    max-height: 80vh;
+    overflow: auto;
+    padding: 24px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    box-shadow: var(--hud-glow);
+}
+.mitre-detail::backdrop { background: rgba(0, 0, 0, .65); }
+.mitre-detail dt { color: var(--text-dim); margin-top: 12px; }
+.mitre-detail dd { margin: 4px 0; overflow-wrap: anywhere; }
+@media (max-width: 768px) {
+    .mitre-toolbar input { width: 100%; }
+    .mitre-toolbar .btn, .mitre-toolbar select { min-height: 44px; }
+}
+@media (forced-colors: active) {
+    .mitre-technique-card { border-color: ButtonText; }
+    .mitre-technique-card:hover { box-shadow: none; }
+}

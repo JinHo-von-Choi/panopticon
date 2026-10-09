@@ -57,6 +57,10 @@ class TestMITRENavigator:
         assert techniques[0]["techniqueID"] == "T1046"
         assert techniques[0]["score"] == 25  # 2 detections -> score 25
         assert techniques[0]["comment"] == "Detected 2 time(s)"
+        assert techniques[0]["metadata"] == [
+            {"name": "Technique name", "value": "Network Service Discovery"},
+            {"name": "Detection count", "value": "2"},
+        ]
 
     def test_multiple_techniques(self):
         events = [

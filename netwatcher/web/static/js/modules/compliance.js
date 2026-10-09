@@ -1,0 +1,117 @@
+import { authFetch, isAuthEnabled } from '../core/api.js';
+
+let requestId = 0;
+let registered = false;
+let coverage = null;
+let kpis = null;
+let state = '';
+const t = key => window.i18next.t(`console.compliance.${key}`);
+const number = value => typeof value === 'number' && Number.isFinite(value);
+
+async function read(url) {
+    const response = await authFetch(url);
+    if (!response.ok) throw new Error('Compliance unavailable');
+    return response.json();
+}
+
+function render() {
+    document.getElementById('compliance-state').textContent = state ? t(state) : '';
+    const grid = document.getElementById('compliance-kpis');
+    grid.replaceChildren();
+    const gauge = document.getElementById('compliance-coverage');
+    const score = coverage && number(coverage.coverage_score)
+        ? Math.min(1, Math.max(0, coverage.coverage_score)) * 100 : null;
+    document.getElementById('compliance-coverage-score').textContent = score === null ? '—' : `${score.toFixed(1)}%`;
+    document.getElementById('compliance-coverage-bar').style.width = `${score ?? 0}%`;
+    if (score === null) gauge.removeAttribute('aria-valuenow');
+    else gauge.setAttribute('aria-valuenow', String(score));
+    if (!kpis) return;
+    const format = new Intl.NumberFormat(window.i18next.language, { maximumFractionDigits: 2 });
+    const cards = [
+        ['alert_volume', number(kpis.alert_volume) ? format.format(kpis.alert_volume) : '—'],
+        ['mttd', number(kpis.mttd_seconds) ? `${format.format(kpis.mttd_seconds)} ${t('seconds')}` : t('insufficient')],
+        // FrameworkMapper's weighted controls score is the engine-based coverage estimate.
+        ['engine_coverage', score === null ? '—' : `${score.toFixed(1)}%`]
+    ];
+    for (const [key, value] of cards) {
+        const card = document.createElement('article');
+        card.className = 'hud-kpi';
+        const label = document.createElement('h4');
+        label.className = 'hud-kpi-title';
+        label.textContent = t(key);
+        const metric = document.createElement('strong');
+        metric.className = 'hud-kpi-score';
+        metric.textContent = value;
+        card.append(label, metric);
+        if (key === 'engine_coverage' || key === 'mttd') {
+            const foot = document.createElement('p');
+            foot.className = 'hud-kpi-foot';
+            foot.textContent = t(key === 'mttd' ? 'mttd_hint' : 'coverage_hint');
+            card.append(foot);
+        }
+        grid.append(card);
+    }
+}
+
+export async function loadCompliance() {
+    if (!isAuthEnabled()) return;
+    const id = ++requestId;
+    const select = document.getElementById('compliance-framework');
+    const requested = select.value;
+    state = 'loading';
+    coverage = null; kpis = null;
+    render();
+    try {
+        const [frameworks, metrics] = await Promise.all([
+            read('/api/compliance/frameworks'), read('/api/compliance/kpis')
+        ]);
+        if (id !== requestId || !isAuthEnabled()) return;
+        if (!Array.isArray(frameworks.frameworks) || !metrics || typeof metrics !== 'object') {
+            throw new Error('Invalid compliance response');
+        }
+        select.replaceChildren();
+        for (const framework of frameworks.frameworks) {
+            if (typeof framework.id !== 'string') continue;
+            select.add(new Option(framework.name || framework.id, framework.id));
+        }
+        select.disabled = !select.options.length;
+        if (!select.options.length) {
+            state = 'empty'; render(); return;
+        }
+        if ([...select.options].some(option => option.value === requested)) select.value = requested;
+        const data = await read(`/api/compliance/coverage/${encodeURIComponent(select.value)}`);
+        if (id !== requestId || !isAuthEnabled()) return;
+        if (!number(data.coverage_score)) throw new Error('Invalid coverage response');
+        coverage = data; kpis = metrics; state = '';
+        const badge = document.getElementById('compliance-source-badge');
+        badge.removeAttribute('data-i18n');
+        badge.textContent = 'SNAPSHOT';
+        badge.className = 'badge badge-sev badge-sev-info';
+        render();
+    } catch (_) {
+        if (id !== requestId || !isAuthEnabled()) return;
+        coverage = null; kpis = null; state = 'unavailable';
+        const badge = document.getElementById('compliance-source-badge');
+        badge.removeAttribute('data-i18n');
+        badge.textContent = window.i18next.t('console.source.unchecked');
+        badge.className = 'badge badge-sev badge-sev-unknown';
+        render();
+    }
+}
+
+export function registerComplianceListeners() {
+    if (registered) return;
+    registered = true;
+    document.getElementById('compliance-state').removeAttribute('data-i18n');
+    document.getElementById('compliance-refresh').addEventListener('click', loadCompliance);
+    document.getElementById('compliance-framework').addEventListener('change', loadCompliance);
+    window.i18next.on('languageChanged', render);
+    window.addEventListener('nw-session-ended', () => {
+        ++requestId; coverage = null; kpis = null; state = 'empty'; render();
+        const select = document.getElementById('compliance-framework');
+        select.replaceChildren(); select.disabled = true;
+        const badge = document.getElementById('compliance-source-badge');
+        badge.textContent = window.i18next.t('console.source.unchecked');
+        badge.className = 'badge badge-sev badge-sev-unknown';
+    });
+}

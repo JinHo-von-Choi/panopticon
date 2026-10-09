@@ -79,6 +79,10 @@ class MITRENavigator:
                 "color": _count_to_color(count),
                 "score": _count_to_score(count),
                 "comment": f"Detected {count} time(s)",
+                "metadata": [
+                    {"name": "Technique name", "value": ttp_info.name if ttp_info else tid},
+                    {"name": "Detection count", "value": str(count)},
+                ],
                 "enabled": True,
                 "showSubtechniques": False,
             })

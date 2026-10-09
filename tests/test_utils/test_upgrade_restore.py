@@ -152,8 +152,16 @@ def test_previous_release_upgrade_and_backup_restore(config, tmp_path):
         assert after["revision"] == ScriptDirectory.from_config(migration_config).get_current_head()
         for table in TABLES:
             if table != "audit_log":
-                assert after[table] == before[table], f"Previous records changed: {table}"
+                expected = deepcopy(before[table])
+                if table in ("events", "devices"):
+                    for row in expected:
+                        row["tenant_id"] = str(uuid.UUID(int=0))
+                assert after[table] == expected, f"Previous records changed: {table}"
         expected_audit = deepcopy(before["audit_log"])
+        for row in expected_audit:
+            row["tenant_id"] = str(uuid.UUID(int=0))
+            row["prev_hash"] = "0" * 64
+            row["entry_hash"] = "0" * 64
         expected_audit[1]["details"] = json.loads(expected_audit[1]["details"])
         assert after["audit_log"] == expected_audit
         restore(databases[1], old_backup)

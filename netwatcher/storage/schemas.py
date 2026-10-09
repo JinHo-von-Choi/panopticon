@@ -3,6 +3,7 @@
 EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS events (
     id          BIGSERIAL       PRIMARY KEY,
+    tenant_id   UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     timestamp   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     engine      VARCHAR(64)     NOT NULL,
     severity    VARCHAR(16)     NOT NULL,
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 EVENTS_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_events_tenant_id ON events USING btree(tenant_id);",
     "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);",
     "CREATE INDEX IF NOT EXISTS idx_events_engine ON events(engine);",
     "CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);",
@@ -34,6 +36,7 @@ EVENTS_INDEXES = [
 DEVICES_TABLE = """
 CREATE TABLE IF NOT EXISTS devices (
     id               BIGSERIAL    PRIMARY KEY,
+    tenant_id        UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     mac_address      MACADDR      UNIQUE NOT NULL,
     ip_address       INET,
     hostname         VARCHAR(255),
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS devices (
 """
 
 DEVICES_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_devices_tenant_id ON devices USING btree(tenant_id);",
     "CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(mac_address);",
     "CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip_address) WHERE ip_address IS NOT NULL;",
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen DESC);",
@@ -105,6 +109,7 @@ TRAFFIC_STATS_INDEXES = [
 INCIDENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS incidents (
     id                BIGSERIAL       PRIMARY KEY,
+    tenant_id         UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     severity          VARCHAR(16)     NOT NULL,
     title             VARCHAR(512)    NOT NULL,
     description       TEXT            NOT NULL DEFAULT '',
@@ -120,6 +125,7 @@ CREATE TABLE IF NOT EXISTS incidents (
 """
 
 INCIDENTS_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_incidents_tenant_id ON incidents USING btree(tenant_id);",
     "CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_incidents_resolved ON incidents(resolved) WHERE resolved = FALSE;",
 ]
@@ -138,16 +144,20 @@ CREATE TABLE IF NOT EXISTS users (
 AUDIT_LOG_TABLE = """
 CREATE TABLE IF NOT EXISTS audit_log (
     id          SERIAL          PRIMARY KEY,
+    tenant_id   UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     user_id     VARCHAR(100),
     action      VARCHAR(50)     NOT NULL,
     resource    VARCHAR(200),
     details     JSONB,
     ip          VARCHAR(45),
-    created_at  TIMESTAMPTZ     DEFAULT NOW()
+    created_at  TIMESTAMPTZ     DEFAULT NOW(),
+    prev_hash   VARCHAR(64) NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+    entry_hash  VARCHAR(64) NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000'
 );
 """
 
 AUDIT_LOG_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_id ON audit_log USING btree(tenant_id);",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_request ON audit_log((details->>'request_id'), created_at, id);",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id);",
@@ -650,6 +660,24 @@ CREATE TABLE IF NOT EXISTS sensor_control_claims (
 );
 """
 
+TENANT_TABLES = ("events", "devices", "incidents", "audit_log")
+
+# CASE는 system 값을 UUID로 변환하지 않는다. 미설정·빈 컨텍스트는 접근을 거절한다.
+TENANT_RLS_SCHEMAS = [
+    f"""
+ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation_{table} ON {table};
+CREATE POLICY tenant_isolation_{table} ON {table}
+    USING (
+        CASE WHEN current_setting('app.current_tenant_id', true) = 'system'
+             THEN TRUE
+             ELSE tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        END
+    );
+"""
+    for table in TENANT_TABLES
+]
+
 from netwatcher.storage.account_access import ACCOUNT_LOCK_FUNCTION_SQL
 from netwatcher.storage.sensor_claim_retention import SENSOR_CLAIM_RETENTION_SQL
 
@@ -700,4 +728,5 @@ ALL_SCHEMAS = [
     RESPONSE_PROPOSALS_TABLE,
     *RESPONSE_PROPOSALS_INDEXES,
     EVENT_STREAM_NOTIFICATION_SCHEMA,
+    *TENANT_RLS_SCHEMAS,
 ]

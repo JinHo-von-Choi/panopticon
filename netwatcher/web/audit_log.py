@@ -9,14 +9,31 @@ API 호출에 대한 사용자 행위를 PostgreSQL에 기록한다.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 import asyncpg
 
 logger = logging.getLogger("netwatcher.web.audit_log")
+
+
+GENESIS_HASH = "0" * 64
+ZERO_TENANT = UUID(int=0)
+
+
+def _entry_hash(prev_hash, tenant_id, user_id, action, resource, details, ip, created_at):
+    # JSONB 키 순서와 연결 세션의 시간대에 독립적인 표현을 사용한다.
+    details_json = json.dumps(details, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+    timestamp = created_at.astimezone(timezone.utc).isoformat()
+    payload = "".join((prev_hash, str(tenant_id), user_id or "", action,
+                       resource or "", details_json, ip or "", timestamp))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _details(value):
@@ -62,23 +79,42 @@ class AuditLogger:
         resource: str,
         details: dict[str, Any] | None = None,
         ip: str = "",
+        tenant_id: UUID | str | None = None,
     ) -> bool:
-        """감사 이벤트를 audit_log 테이블에 기록한다."""
-        sql = """
-            INSERT INTO audit_log (user_id, action, resource, details, ip, created_at)
-            VALUES ($1, $2, $3, $4::text::jsonb, $5, $6)
-        """
-        now = datetime.now(timezone.utc)
+        """감사 이벤트와 테넌트별 해시 연결을 원자적으로 저장한다."""
         try:
-            async with self._pool.acquire() as conn:
+            async with self._pool.acquire() as conn, conn.transaction():
+                # 새 테넌트의 첫 행은 전체 최신 행에 연결되므로 전체 기록을 직렬화한다.
                 await conn.execute(
-                    sql,
-                    user,
-                    action[:50],
-                    resource[:200] if resource else "",
-                    json.dumps(details or {}),
-                    ip[:45] if ip else "",
-                    now,
+                    "SELECT pg_advisory_xact_lock(hashtext(current_schema()), "
+                    "hashtext('audit_log_hash_chain'))"
+                )
+                if tenant_id is None:
+                    context = await conn.fetchval("SELECT current_setting('app.current_tenant_id', true)")
+                    tenant = UUID(context) if context and context != "system" else ZERO_TENANT
+                else:
+                    tenant = UUID(str(tenant_id))
+                prev_hash = await conn.fetchval(
+                    "SELECT entry_hash FROM audit_log WHERE tenant_id=$1 ORDER BY id DESC LIMIT 1", tenant,
+                )
+                if prev_hash is None:
+                    prev_hash = await conn.fetchval("SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1")
+                prev_hash = prev_hash if prev_hash is not None else GENESIS_HASH
+                action = action[:50]
+                resource = resource[:200] if resource else ""
+                ip = ip[:45] if ip else ""
+                # PostgreSQL의 숫자 정규화까지 반영한 JSON으로 해시와 INSERT를 맞춘다.
+                details_json = await conn.fetchval(
+                    "SELECT $1::text::jsonb::text", json.dumps(details or {}, allow_nan=False),
+                )
+                now = datetime.now(timezone.utc)
+                entry_hash = _entry_hash(prev_hash, tenant, user, action, resource,
+                                         json.loads(details_json), ip, now)
+                await conn.execute(
+                    """INSERT INTO audit_log
+                       (tenant_id,user_id,action,resource,details,ip,created_at,prev_hash,entry_hash)
+                       VALUES ($1,$2,$3,$4,$5::text::jsonb,$6,$7,$8,$9)""",
+                    tenant, user, action, resource, details_json, ip, now, prev_hash, entry_hash,
                 )
             return True
         except asyncpg.UndefinedTableError:
@@ -86,6 +122,40 @@ class AuditLogger:
         except Exception:
             logger.exception("Failed to write audit log entry")
         return False
+
+    async def verify_chain(self, tenant_id: UUID | str | None = None) -> dict[str, Any]:
+        """ID 순서로 연결과 내용을 검증한다. DB 오류는 호출자에게 전달한다.
+
+        테넌트의 첫 행은 다른 테넌트의 최신 행을 참조할 수 있어 보이는 전체
+        이력을 읽는다. 0 해시인 기존 행도 검증 성공으로 취급하지 않는다.
+        """
+        tenant = UUID(str(tenant_id)) if tenant_id is not None else None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM audit_log ORDER BY id")
+        heads = {}
+        latest = GENESIS_HASH
+        count = 0
+        for row in rows:
+            key = UUID(str(row["tenant_id"]))
+            expected_prev = heads.get(key, latest)
+            if tenant is None or key == tenant:
+                if row["prev_hash"] != expected_prev:
+                    return {"valid": False, "broken_id": row["id"], "count": count,
+                            "reason": "prev_hash_mismatch"}
+                try:
+                    details = json.loads(row["details"]) if isinstance(row["details"], str) else row["details"]
+                    expected = _entry_hash(expected_prev, key, row["user_id"], row["action"],
+                                           row["resource"], details, row["ip"], row["created_at"])
+                except (TypeError, ValueError, AttributeError):
+                    return {"valid": False, "broken_id": row["id"], "count": count,
+                            "reason": "invalid_payload"}
+                if row["entry_hash"] != expected:
+                    return {"valid": False, "broken_id": row["id"], "count": count,
+                            "reason": "entry_hash_mismatch"}
+                count += 1
+            heads[key] = row["entry_hash"]
+            latest = row["entry_hash"]
+        return {"valid": True, "count": count}
 
     async def query(
         self,

@@ -192,10 +192,11 @@ class AuthManager:
 class AuthMiddleware(BaseHTTPMiddleware):
     """HTTP API 요청에 JWT Bearer 토큰 인증을 적용하는 미들웨어."""
 
-    def __init__(self, app, auth_manager: AuthManager) -> None:
+    def __init__(self, app, auth_manager: AuthManager, delegated_paths=()) -> None:
         """AuthManager를 주입받아 미들웨어를 초기화한다."""
         super().__init__(app)
         self._auth = auth_manager
+        self._delegated_paths = frozenset(delegated_paths)
 
     async def dispatch(self, request: Request, call_next):
         """요청 경로에 따라 JWT 인증을 수행하거나 면제한다."""
@@ -203,6 +204,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
+        if request.method == "POST" and path in self._delegated_paths:
+            return await call_next(request)
 
         # 공개 엔드포인트 면제
         for prefix in _PUBLIC_PREFIXES:
