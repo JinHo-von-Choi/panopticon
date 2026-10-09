@@ -57,6 +57,9 @@ async def test_backlog_and_unknown_position_reach_actual_console(db, config, tmp
             for phase in ('backlog', 'unknown'):
                 if phase == 'unknown':
                     path.write_bytes(b'')
+                capabilities = await client.get('/api/capabilities')
+                assert capabilities.status_code == 200
+                assert capabilities.json()['features']['eve_observations'] is True
                 response = await client.get('/api/observation')
                 source = response.json()['sources'][0]
                 assert source['gaps'] == source['rejected'] == 0
@@ -75,7 +78,7 @@ async def test_backlog_and_unknown_position_reach_actual_console(db, config, tmp
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 async with asyncio.timeout(45):
                     stdout, stderr = await child.communicate()
-                assert child.returncode == 0, stderr.decode()[-2000:]
+                assert child.returncode == 0, stderr.decode()[-4000:]
                 assert b'EVE backlog browser checks passed' in stdout
     finally:
         if child is not None and child.returncode is None:
