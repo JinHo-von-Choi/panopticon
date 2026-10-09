@@ -29,7 +29,7 @@ def create_remote_engines_router(control):
 
     async def run(operation):
         try:
-            async with asyncio.timeout(8):
+            async with asyncio.timeout(20):
                 result = await operation()
             if result.get("status") == "unknown":
                 raise SensorControlError("sensor_result_unknown", 503)
