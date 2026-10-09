@@ -40,7 +40,6 @@ jobs:
       NETWATCHER_SKIP_DOTENV: '1'
       PANOPTICON_NATIVE_SENSOR_IMAGE: panopticon-native-release:test
       PANOPTICON_NATIVE_CONSOLE_IMAGE: panopticon-console-release:test
-      PANOPTICON_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -67,6 +66,8 @@ jobs:
       - name: Apply migrations
         run: python -m alembic upgrade head
       - name: Verify release gates
+        env:
+          PANOPTICON_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: python scripts/gates.py
 
   package:
