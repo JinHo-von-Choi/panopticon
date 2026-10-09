@@ -7,6 +7,7 @@ import asyncio
 import heapq
 import ipaddress
 import logging
+import os
 from pathlib import Path
 
 import aiohttp
@@ -18,7 +19,6 @@ from netwatcher.threatintel.sources import (
     load_feed_sources,
     parse_feed,
     parse_ja3_feed,
-    parse_text_feed,
 )
 from netwatcher.utils.config import Config
 from netwatcher.utils.network import validate_outbound_url
@@ -104,6 +104,17 @@ class _FeedAccumulator:
         self.outcomes[name] = "failed"
 
 
+def _cache_directory(config: Config) -> Path:
+    """피드 캐시 디렉터리. 작업 디렉터리가 읽기 전용인 서비스도 쓸 수 있는 곳을 고른다."""
+    configured = config.get("threatfeeds.cache_dir")
+    if configured:
+        return Path(configured)
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    if cache_home:
+        return Path(cache_home) / "threatfeeds"
+    return Path("data/threatfeeds")
+
+
 class FeedManager:
     """위협 인텔리전스 피드를 다운로드, 파싱, 캐싱한다."""
 
@@ -111,7 +122,7 @@ class FeedManager:
         self._config = config
         feed_config_path = config.get("threatfeeds.config_path", "config/threatfeeds.yaml")
         self._sources = load_feed_sources(feed_config_path)
-        self._cache_dir = Path("data/threatfeeds")
+        self._cache_dir = _cache_directory(config)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._meta_file = self._cache_dir / "_meta.json"

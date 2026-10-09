@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
+from types import SimpleNamespace
 from netwatcher import __version__
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -173,7 +173,6 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     from netwatcher.compliance.framework_mapper import FrameworkMapper
     from netwatcher.compliance.kpi_calculator import KPICalculator
     from netwatcher.compliance.report_generator import ReportGenerator
-    from netwatcher.detection.registry import EngineRegistry
     from netwatcher.web.routes.compliance import create_compliance_router
     if compliance_mapper is None:
         compliance_mapper = FrameworkMapper()
@@ -181,7 +180,9 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
         kpi_calc = KPICalculator(event_repo)
     if report_gen is None:
         report_gen = ReportGenerator(compliance_mapper, kpi_calc)
-    compliance_registry = registry if registry is not None else EngineRegistry(config)
+    # 엔진이 없는 구성(EVE 콘솔)은 활성 엔진 0개로 커버리지를 계산한다.
+    # 여기서 EngineRegistry를 만들면 scapy를 불러오고 엔진 22종을 적재한다.
+    compliance_registry = registry if registry is not None else SimpleNamespace(engines=[])
     app.include_router(create_compliance_router(
         compliance_mapper, kpi_calc, report_gen, compliance_registry,
     ), prefix=api_prefix)

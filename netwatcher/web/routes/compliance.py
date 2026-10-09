@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from netwatcher.compliance.framework_mapper import FrameworkMapper
 from netwatcher.compliance.kpi_calculator import KPICalculator
 from netwatcher.compliance.report_generator import ReportGenerator
-from netwatcher.detection.registry import EngineRegistry
+
+if TYPE_CHECKING:
+    # 레지스트리는 scapy를 끌어온다. 캡처 없는 EVE 콘솔도 이 라우터를 쓴다.
+    from netwatcher.detection.registry import EngineRegistry
 
 
 def create_compliance_router(

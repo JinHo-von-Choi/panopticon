@@ -46,6 +46,7 @@ netwatcher:
     pool_size: 5
     ssl_mode: "disable"
     search_path: "test_{uuid.uuid4().hex[:8]},public"
+    tenant_id: ""
   auth:
     enabled: false
     username: "admin"

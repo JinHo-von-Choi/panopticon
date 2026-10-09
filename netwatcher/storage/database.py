@@ -69,6 +69,14 @@ class Database:
         self._pg_password = pg["password"]
         self._pool_size = pg.get("pool_size", 20)
         self._search_path = pg.get("search_path", "netwatcher,public")
+        self._server_settings = {"search_path": self._search_path}
+        # 단일 테넌트 설치는 모든 행이 0 테넌트로 저장된다. 테이블 소유자가 아닌
+        # 런타임 역할은 RLS를 받으므로 연결 기본값으로 같은 테넌트를 지정한다.
+        # 접속 파라미터로 넘겨야 풀 반납 시의 RESET ALL 뒤에도 유지된다.
+        # 빈 값은 기본 컨텍스트 없이 tenant_transaction만 허용한다.
+        tenant = pg.get("tenant_id", str(UUID(int=0)))
+        if tenant not in (None, ""):
+            self._server_settings["app.current_tenant_id"] = str(UUID(str(tenant)))
         self._pool: asyncpg.Pool | None = None
         mode = pg.get("ssl_mode", "disable")
         if mode not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
@@ -97,7 +105,7 @@ class Database:
                     ssl=self._ssl,
                     min_size=2,
                     max_size=self._pool_size,
-                    server_settings={"search_path": self._search_path},
+                    server_settings=self._server_settings,
                     init=_init_connection,
                 )
 

@@ -57,6 +57,7 @@ netwatcher:
     max_overflow: 40
     ssl_mode: "disable"  # disable, allow, prefer, require, verify-ca, verify-full
     ssl_ca_file: ""       # verify-ca/full의 CA PEM. 빈 값이면 시스템 신뢰 저장소
+    tenant_id: "00000000-0000-0000-0000-000000000000"  # 연결 기본 테넌트(RLS). 빈 값이면 끔
 
   logging:
     level: "INFO"
@@ -341,13 +342,6 @@ netwatcher:
     enabled: true
     check_interval_seconds: 60      # 기기 변경 감지 주기 (초)
     offline_threshold_minutes: 60   # 미관찰 후 오프라인 간주 시간 (분)
-
-  analysis:
-    enabled: false
-    extract_files: true
-    output_dir: "data/extracted"
-    max_file_size: 10485760    # 10MB
-    yara_rules_dir: "config/yara"
 
   redis:
     enabled: false

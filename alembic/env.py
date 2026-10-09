@@ -21,7 +21,8 @@ if not os.environ.get("NETWATCHER_SKIP_DOTENV"):
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # 앱 프로세스와 시험 안에서 실행될 때 이미 만든 로거를 끄지 않는다.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _build_database_url() -> str:

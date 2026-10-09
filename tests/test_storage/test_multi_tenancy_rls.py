@@ -1,5 +1,6 @@
 """실제 PostgreSQL에서 테넌트 DDL, RLS 및 풀 컨텍스트 수명을 검증한다."""
 
+import copy
 from contextlib import closing
 from uuid import UUID, uuid4
 
@@ -11,7 +12,9 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config as AlembicConfig
 
+from netwatcher.storage.database import Database
 from netwatcher.storage.schemas import TENANT_RLS_SCHEMAS, TENANT_TABLES
+from netwatcher.utils.config import Config
 
 ZERO_TENANT = UUID(int=0)
 INSERTS = {
@@ -223,3 +226,45 @@ def test_migration_preserves_legacy_rows_and_partition_indexes(config, monkeypat
         finally:
             with connection.cursor() as cursor:
                 cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+
+
+def _config_with_tenant(config, **postgresql):
+    data = copy.deepcopy(config._data)
+    data["postgresql"].pop("tenant_id", None)
+    data["postgresql"].update(postgresql)
+    return Config(data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("table", TENANT_TABLES)
+async def test_default_tenant_survives_pool_release_for_non_owner_role(db, config, rls_role, table):
+    """기본 설정의 비소유 런타임 역할은 연결을 반납·재대여해도 0 테넌트를 읽고 쓴다."""
+    other = uuid4()
+    async with db.tenant_transaction("system") as connection:
+        await insert_row(connection, table, other, "02:00:00:00:00:09")
+    runtime = Database(_config_with_tenant(config))
+    await runtime.connect(max_retries=1)
+    try:
+        for round_ in range(3):
+            async with runtime.pool.acquire() as connection:
+                async with connection.transaction():
+                    await connection.execute(f"SET LOCAL ROLE {rls_role}")
+                    await insert_row(connection, table, ZERO_TENANT, f"02:00:00:00:01:0{round_}")
+                    assert await connection.fetchval(f"SELECT count(*) FROM {table}") == round_ + 1
+                    assert await connection.fetchval(
+                        f"SELECT count(*) FROM {table} WHERE tenant_id=$1", other,
+                    ) == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_tenant_id_setting_rejects_invalid_and_allows_opt_out(config):
+    with pytest.raises(ValueError):
+        Database(_config_with_tenant(config, tenant_id="system"))
+    with pytest.raises(ValueError):
+        Database(_config_with_tenant(config, tenant_id="not-a-uuid"))
+    assert "app.current_tenant_id" not in Database(_config_with_tenant(config, tenant_id=""))._server_settings
+    tenant = uuid4()
+    assert Database(_config_with_tenant(config, tenant_id=str(tenant)))._server_settings[
+        "app.current_tenant_id"] == str(tenant)
