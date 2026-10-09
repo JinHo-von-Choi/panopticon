@@ -21,9 +21,7 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
             (await import('/js/core/api.js')).isAuthEnabled() &&
             (await import('/js/core/capabilities.js')).featureEnabled('eve_observations'));
         stage = "select-governance";
-        const navigation = page.locator('[data-tab="governance"]');
-        await navigation.waitFor({state:'visible'});
-        await navigation.press('Enter');
+        await page.locator('#console-readiness').click();
         await page.locator('#tab-governance.active').waitFor({state:'visible'});
         stage = "observation";
         const box = page.locator('#observation-box');

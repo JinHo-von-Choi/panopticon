@@ -65,6 +65,8 @@ jobs:
           docker build --target native-console -t "$PANOPTICON_NATIVE_CONSOLE_IMAGE" .
       - name: Apply migrations
         run: python -m alembic upgrade head
+      - name: Check EVE browser startup after full test collection
+        run: python -m pytest tests/ -k test_backlog_and_unknown_position_reach_actual_console -q -p no:cacheprovider
       - name: Verify release gates
         env:
           PANOPTICON_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
