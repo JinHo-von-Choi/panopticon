@@ -366,3 +366,29 @@ def test_interrupted_temporary_link_does_not_block_next_recovery(tmp_path):
     assert install.current.resolve() == old
     assert install.calls == ['stop', 'restore', 'start:0.4.0', 'health']
     assert not (tmp_path / 'recovery.json').exists()
+
+
+def test_actual_verifier_uses_generated_service_paths_with_protected_home(tmp_path):
+    import os
+    import shutil
+    import subprocess
+
+    image = os.environ.get('PANOPTICON_NATIVE_SENSOR_IMAGE')
+    gh = os.environ.get('PANOPTICON_GH_VERIFIER') or shutil.which('gh')
+    if not image or not gh or not shutil.which('docker'):
+        pytest.skip('Provide an owned runtime image and attestation verifier')
+    binary = tmp_path / 'gh'
+    shutil.copyfile(gh, binary)
+    binary.chmod(0o755)
+    service, _ = timer_units('/tmp/updater.py', '/tmp/update-settings/installation.json', '/usr/bin/python3')
+    environment = [line.removeprefix('Environment=') for line in service.splitlines() if line.startswith('Environment=')]
+    command = ['docker', 'run', '--rm', '--user', '0', '--cap-drop=ALL', '--read-only',
+               '--tmpfs', '/root:ro,mode=000', '--tmpfs', '/tmp:rw,mode=1777',
+               '--mount', 'type=bind,source=' + str(binary) + ',target=/usr/local/bin/gh,readonly',
+               '--entrypoint', '/usr/local/bin/gh']
+    # No credentials or accessible home directory: use the unit's generated paths.
+    for value in environment:
+        command.extend(['--env', value])
+    result = subprocess.run(command + [image, 'attestation', 'trusted-root', '--verify-only'],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr[-1500:]

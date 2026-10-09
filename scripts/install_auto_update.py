@@ -23,6 +23,7 @@ def path_value(value):
 
 
 def timer_units(script, config, python):
+    settings = Path(config).parent
     service = f'''[Unit]
 Description=Panopticon verified automatic update
 Wants=network-online.target
@@ -33,6 +34,8 @@ Type=oneshot
 User=root
 Group=root
 UMask=0077
+Environment=GH_CONFIG_DIR={settings}/gh
+Environment=XDG_CACHE_HOME={settings}/cache
 ExecStart={python} {script} --config {config}
 TimeoutStartSec=2h
 NoNewPrivileges=true
@@ -128,6 +131,8 @@ def register(args):
     (state / 'backups').mkdir(mode=0o700)
     (state / 'owner').write_text('Panopticon managed updater\n')
     config_dir.mkdir(mode=0o700)
+    (config_dir / 'gh').mkdir(mode=0o700)
+    (config_dir / 'cache').mkdir(mode=0o700)
     initial = state / 'releases' / ('initial-' + number)
     # Same filesystem is required so enrollment can undo a failed rename without copying secrets.
     created_units = []
