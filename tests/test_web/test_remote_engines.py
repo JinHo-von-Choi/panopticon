@@ -9,7 +9,9 @@ import pytest
 import pytest_asyncio
 
 from netwatcher.alerts.stream import EventStream
+from netwatcher.services import sensor_control
 from netwatcher.services.remote_sensor_control import RemoteSensorControl
+from netwatcher.services.sensor_control import SensorControlError
 from netwatcher.storage.repositories import DeviceRepository, EventRepository, TrafficStatsRepository
 from netwatcher.web.audit_log import AuditLogger
 from netwatcher.web.auth import AuthManager
@@ -115,3 +117,143 @@ async def test_http_sensor_disconnection_and_expired_lease_do_not_fall_back(db, 
     await db.pool.execute("UPDATE sensor_runtime_state SET lease_expires_at=clock_timestamp()-INTERVAL '1 second'")
     assert (await client.get("/api/engines/port_scan", headers=header)).status_code == 503
     assert not stopped and editor.get_engine_config("port_scan")["threshold"] == 15
+
+
+@pytest.mark.asyncio
+async def test_engine_list_uses_one_sensor_round_trip(db, engine_api):
+    """엔진 목록 조회가 센서 왕복 1회로 끝나야 한다.
+
+    이전 구현은 카탈로그 1회 뒤 엔진마다 engine.read를 순차 전송해
+    카탈로그 1 + 엔진 N 회를 왕복했다. 인증 쿼리와 설정 파일 파싱도 같은
+    횟수로 반복되므로 이 계약을 그대로 지킨다.
+    """
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    engine_count = len(registry.get_all_engine_info())
+    assert engine_count > 1, "검증할 다중 엔진 구성이어야 한다"
+
+    operations = []
+    original = service.__call__
+
+    async def counting(command):
+        operations.append(command.operation)
+        return await original(command)
+
+    server.handler = counting
+    result = await client.get("/api/engines", headers=header)
+    assert result.status_code == 200, result.text
+    assert len(result.json()["engines"]) == engine_count
+    assert operations == ["engine.states"], f"단일 일괄 왕복이어야 한다: {operations}"
+
+
+@pytest.mark.asyncio
+async def test_engine_states_match_single_engine_reads(db, engine_api):
+    """일괄 응답이 단건 조회와 엔진별 상태·버전에서 동일해야 한다."""
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    bulk = (await client.get("/api/engines", headers=header)).json()["engines"]
+    assert bulk
+    for entry in bulk:
+        name = entry["name"]
+        base = entry["base_version"]
+        state = {key: value for key, value in entry.items() if key != "base_version"}
+        single = await client.get(f"/api/engines/{name}", headers=header)
+        assert single.status_code == 200, single.text
+        detail = single.json()
+        assert detail["engine"] == state, name
+        assert detail["base_version"] == base, name
+
+
+@pytest.mark.asyncio
+async def test_engine_states_fall_back_when_response_would_exceed_limit(db, engine_api, monkeypatch):
+    """일괄 응답이 한계를 넘으면 단건 경로로 되돌아가야 한다."""
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    operations = []
+    original = service.__call__
+
+    async def counting(command):
+        operations.append(command.operation)
+        return await original(command)
+
+    server.handler = counting
+    monkeypatch.setattr(sensor_control, "MAX_ENGINE_STATES_BYTES", 256)
+    result = await client.get("/api/engines", headers=header)
+    assert result.status_code == 200, result.text
+    assert len(result.json()["engines"]) == len(registry.get_all_engine_info())
+    # 실제로 단건 경로(catalog 1회 + read N회)로 내려갔는지 확인한다.
+    assert operations[0] == "engine.states" and operations[1] == "engine.catalog"
+    assert operations.count("engine.read") == len(registry.get_all_engine_info())
+
+
+@pytest.mark.asyncio
+async def test_engine_list_does_not_swallow_permission_failure(db, engine_api, monkeypatch):
+    """폴백이 권한 실패까지 삼키면 안 된다 — 단건 경로도 같은 거부를 낸다."""
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    original = service.__call__
+
+    async def refuse(command):
+        raise SensorControlError("sensor_control_forbidden", 403)
+
+    server.handler = refuse
+    result = await client.get("/api/engines", headers=header)
+    assert result.status_code == 403, result.text
+    assert result.json()["detail"]["code"] == "sensor_control_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_engine_states_load_configuration_once(db, engine_api, monkeypatch):
+    """일괄 조회는 설정 파일을 엔진마다 다시 파싱하지 않아야 한다."""
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    engine_count = len(registry.get_all_engine_info())
+    loads = []
+    original = editor._load
+    monkeypatch.setattr(editor, "_load", lambda: (loads.append(1), original())[1])
+    assert (await client.get("/api/engines", headers=header)).status_code == 200
+    assert len(loads) == 1, f"YAML 파싱이 {len(loads)}회 — 엔진당 1회면 회귀다 ({engine_count}개 엔진)"
+
+
+@pytest.mark.asyncio
+async def test_engine_states_include_every_registered_engine_once(db, engine_api):
+    """모든 등록 엔진이 정확히 한 번씩 와야 한다 (누락·중복 금지)."""
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    names = [info["name"] for info in registry.get_all_engine_info()]
+    engines = (await client.get("/api/engines", headers=header)).json()["engines"]
+    seen = [engine["name"] for engine in engines]
+    assert sorted(seen) == sorted(names)
+    assert len(seen) == len(set(seen)), "같은 엔진이 두 번 들어왔다"
+    for engine in engines:
+        assert isinstance(engine["enabled"], bool) and isinstance(engine["config"], dict)
+
+
+@pytest.mark.asyncio
+async def test_engine_states_tolerate_empty_registry(db, engine_api, monkeypatch):
+    """엔진이 하나도 없을 때도 폴백 없이 정상 응답해야 한다."""
+    client, header, service, registry, editor, accounts, server, stopped = engine_api
+    monkeypatch.setattr(registry, "get_all_engine_info", lambda: [])
+    result = await client.get("/api/engines", headers=header)
+    assert result.status_code == 200, result.text
+    assert result.json()["engines"] == []
+
+
+@pytest.mark.asyncio
+async def test_engine_states_reject_disabled_account_and_stale_lease(db, control):
+    """일괄 경로도 센서 측 권한·세대 검사를 그대로 받아야 한다.
+
+    HTTP로 접근하면 콘솔 계층이 먼저 계정을 막으므로(401), 전송 계층을
+    직접 써서 센서가 스스로 거부하는지 확인한다.
+    """
+    service, registry, editor, request, send, stopped, accounts, server = control
+    admin = await accounts.authenticate("control-admin", "a-strong-test-password-123")
+    assert admin is not None
+    assert (await send(request("engine.states", engine="states", actor=admin)))["engines"]
+
+    await accounts.create("standby-admin", "a-strong-test-password-123", "admin", "test")
+    await accounts.update(admin["id"], admin["version"], role="admin", enabled=False, actor="test")
+    with pytest.raises(SensorControlError) as forbidden:
+        await send(request("engine.states", engine="states", actor=admin))
+    assert forbidden.value.code == "sensor_control_forbidden" and forbidden.value.status == 403
+
+    live = await accounts.authenticate("standby-admin", "a-strong-test-password-123")
+    await db.pool.execute("UPDATE sensor_runtime_state SET stopped=true")
+    with pytest.raises(SensorControlError) as stopped_sensor:
+        await send(request("engine.states", engine="states", actor=live))
+    assert stopped_sensor.value.code == "sensor_generation_changed"
+    assert not stopped

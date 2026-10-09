@@ -93,7 +93,27 @@ class RemoteSensorControl:
                                 base=base_version, updates=updates)
 
     async def list(self, actor):
+        """모든 엔진 상태를 한 번의 센서 요청으로 가져온다.
+
+        엔진마다 ``engine.read``를 따로 보내면 인증 쿼리·행 잠금·설정 파일
+        파싱이 엔진 수만큼 반복되어 목록 1건에 수십 초가 걸렸다.
+
+        조회는 읽기 전용이므로 실패해도 상태를 잃지 않는다. 그래서 일괄이
+        거절되면(응답이 한계를 넘었거나, 이전 버전 센서가 연산을 모르는 경우)
+        조용히 단건 경로로 되돌아간다. 콘솔이 센서보다 먼저 갱신되어
+        세대만 어긋난 경우에도 목록은 계속 보인다.
+        """
         owner = await self._owner()
+        try:
+            result = await self._send("engine.states", "states", actor, owner=owner)
+        except SensorControlError:
+            return await self._list_sequential(actor, owner)
+        engines = [{**entry["engine"], "base_version": entry["base_version"]}
+                   for entry in result["engines"]]
+        return {"engines": engines, "control_process": "separate"}
+
+    async def _list_sequential(self, actor, owner):
+        """일괄 조회를 쓸 수 없을 때의 기존 단건 경로."""
         catalog = await self._send("engine.catalog", "catalog", actor, owner=owner)
         engines = []
         for name in catalog["engines"]:

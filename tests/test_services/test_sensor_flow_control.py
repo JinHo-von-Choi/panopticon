@@ -29,6 +29,37 @@ def bind_flow(control):
 
 
 @pytest.mark.asyncio
+async def test_flow_engine_states_cover_packet_and_flow_engines(db, control, monkeypatch):
+    """패킷·흐름 엔진이 섞인 구성에서도 일괄 조회가 정확해야 한다.
+
+    흐름 엔진의 설정은 netflow 섹션에서, 패킷 엔진의 설정은 engines 섹션에서
+    읽어야 한다. 같은 이름이 두 섹션에 있어도 섹션을 혼동하지 않고, 일괄
+    조회가 단건 조회와 같은 상태·버전을 내야 한다.
+    """
+    bind_flow(control)
+    service, registry, editor, request, send, stopped, *_ = control
+    loads = []
+    original = editor._load
+    monkeypatch.setattr(editor, "_load", lambda: (loads.append(1), original())[1])
+
+    bulk = await send(request("engine.states", engine="states"))
+    assert len(loads) == 1, "패킷·흐름 섹션을 함께 읽어도 파싱은 1회여야 한다"
+    names = [entry["engine"]["name"] for entry in bulk["engines"]]
+    assert "flow_port_scan" in names and "port_scan" in names
+    assert len(names) == len(set(names)), "같은 엔진이 두 번 들어왔다"
+
+    by_name = {entry["engine"]["name"]: entry for entry in bulk["engines"]}
+    for name in names:
+        single = await send(request(engine=name))
+        assert by_name[name] == {"engine": single["engine"],
+                                 "base_version": single["base_version"]}, name
+    # 흐름 엔진은 netflow 섹션 설정을, 패킷 엔진은 engines 섹션 설정을 쓴다.
+    flow = by_name["flow_port_scan"]["engine"]
+    assert flow["config"]["threshold"] == 20
+    assert by_name["port_scan"]["engine"]["config"]["threshold"] == 15
+
+
+@pytest.mark.asyncio
 async def test_flow_socket_changes_real_detection_and_persists_only_netflow(db, control):
     processor = bind_flow(control)
     service, registry, editor, request, send, stopped, *_ = control

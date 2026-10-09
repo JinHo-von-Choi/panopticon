@@ -76,7 +76,7 @@ async def send_sensor_control(path: Path, payload: bytes, *, expected_uid: int):
                     raise ValueError("invalid error response")
                 raise SensorControlError(error["code"], error["status"])
             if (not isinstance(value, dict) or value.get("request_id") != request.request_id
-                    or value.get("status") not in {"catalog", "read", "applied", "unknown"}):
+                    or value.get("status") not in {"catalog", "states", "read", "applied", "unknown"}):
                 raise ValueError("invalid sensor result")
             if value["status"] == "catalog":
                 names = value.get("engines")
@@ -84,6 +84,26 @@ async def send_sensor_control(path: Path, payload: bytes, *, expected_uid: int):
                         or not isinstance(names, list) or len(names) > 64 or len(set(names)) != len(names)
                         or any(not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name) for name in names)):
                     raise ValueError("invalid catalog")
+            elif value["status"] == "states":
+                entries = value.get("engines")
+                if (request.operation != "engine.states" or set(value) != {"status", "request_id", "engines"}
+                        or not isinstance(entries, list) or len(entries) > 64):
+                    raise ValueError("invalid engine states")
+                seen = set()
+                for entry in entries:
+                    # 단건 조회 검증(:136-139)과 같은 강도로 검사해 상태가
+                    # 웹까지 그대로 전달되게 한다.
+                    if (not isinstance(entry, dict) or set(entry) != {"engine", "base_version"}
+                            or not isinstance(entry["engine"], dict)
+                            or not isinstance(entry["engine"].get("name"), str)
+                            or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", entry["engine"]["name"])
+                            or entry["engine"]["name"] in seen
+                            or type(entry["engine"].get("enabled")) is not bool
+                            or not isinstance(entry["engine"].get("config"), dict)
+                            or not isinstance(entry["base_version"], str)
+                            or not re.fullmatch(r"[a-f0-9]{64}", entry["base_version"])):
+                        raise ValueError("invalid engine states")
+                    seen.add(entry["engine"]["name"])
             elif value["status"] == "unknown":
                 if request.operation in READ_OPERATIONS or set(value) != {"status", "request_id"}:
                     raise ValueError("invalid unknown result")

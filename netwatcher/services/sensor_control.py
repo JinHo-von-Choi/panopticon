@@ -18,7 +18,11 @@ from netwatcher.services.sensor_whitelist import candidate as whitelist_candidat
 MAX_REQUEST_BYTES = 8192
 MAX_RESULT_BYTES = 65536
 MAX_CLAIMS = 10000
-READ_OPERATIONS = {"engine.catalog", "engine.read", "whitelist.read", "blocklist.list", "blocklist.stats", "blocklist.entry", "rules.list", "rules.entry", "evidence.read", "evidence.chunk", "feeds.health", "ai.status", "proposal.list", "proposal.entry"}
+READ_OPERATIONS = {"engine.catalog", "engine.states", "engine.read", "whitelist.read", "blocklist.list", "blocklist.stats", "blocklist.entry", "rules.list", "rules.entry", "evidence.read", "evidence.chunk", "feeds.health", "ai.status", "proposal.list", "proposal.entry"}
+MAX_ENGINE_STATES_BYTES = 60000
+
+# _state()에 설정을 생략했을 때와 "설정이 None"을 구분하기 위한 표식
+_UNSET = object()
 
 
 class SensorControlError(RuntimeError):
@@ -112,8 +116,8 @@ class SensorControlRequest:
         if value["operation"] in READ_OPERATIONS:
             if value["base_version"] != "" or (value["updates"] and not value["operation"].startswith(("blocklist.", "rules.", "evidence.", "proposal."))):
                 raise ValueError("read operation cannot change configuration")
-            if value["operation"] == "engine.catalog" and value["engine"] != "catalog":
-                raise ValueError("invalid catalog request")
+            if value["operation"] in ("engine.catalog", "engine.states") and value["engine"] != value["operation"].split(".")[1]:
+                raise ValueError("invalid engine collection request")
         elif not isinstance(value["base_version"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["base_version"]):
             raise ValueError("invalid base version")
         if value["operation"] == "engine.toggle" and (
@@ -185,9 +189,15 @@ class SensorControlService:
             return self.editor.get_flow_engine_config(name)
         return self.editor.get_engine_config(name)
 
-    def _state(self, engine):
+    def _state(self, engine, *, config=_UNSET):
+        """엔진 하나의 현재 상태와 base_version을 계산한다.
+
+        ``config``를 넘기면 편집기를 다시 읽지 않고 그 값을 사용한다.
+        일괄 조회는 YAML 파싱을 한 번만 하기 위해 이 경로를 쓴다.
+        """
         info = self._engine_registry(engine).get_engine_info(engine)
-        config = self._engine_config(engine)
+        if config is _UNSET:
+            config = self._engine_config(engine)
         if info is None:
             raise SensorControlError("engine_not_found", 404)
         info = {**info, "configuration_available": config is not None}
@@ -197,6 +207,31 @@ class SensorControlService:
         version = hashlib.sha256(_json({"owner": str(self.owner), "generation": generation,
                                        "configuration": config, "runtime": info})).hexdigest()
         return {"engine": info, "base_version": version}, config
+
+    def _engine_states(self):
+        """등록된 모든 엔진 상태를 인증·설정 파싱 각 1회로 계산한다.
+
+        엔진마다 ``engine.read``를 따로 보내면 인증 쿼리와 설정 파일 파싱이
+        엔진 수만큼 반복된다. 여기서는 카탈로그 순서대로 상태를 한 번에 만든다.
+        """
+        names = [info["name"] for info in self.registry.get_all_engine_info()]
+        if self.flow_processor is not None:
+            names.extend(info["name"] for info in self.flow_processor.get_all_engine_info())
+        if len(names) > 64 or len(set(names)) != len(names):
+            raise SensorControlError("engine_catalog_unavailable", 503)
+        configs = self._engine_configs(names)
+        return [self._state(name, config=configs.get(name))[0] for name in names]
+
+    def _engine_configs(self, names):
+        """일괄 조회를 위해 패킷·흐름 설정을 YAML 파싱 한 번으로 함께 읽는다."""
+        names = list(names)
+        if not names:
+            return {}
+        if self.editor is None:
+            return {name: None for name in names}
+        packet, flow = self.editor.get_all_engine_configs(names)
+        return {name: (flow[name] if self._engine_registry(name) is self.flow_processor else packet[name])
+                for name in names}
 
     def _candidate(self, request, *, writable=True):
         if request.operation == "whitelist.set":
@@ -449,6 +484,18 @@ class SensorControlService:
                         if len(names) > 64 or any(not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name) for name in names):
                             raise SensorControlError("engine_catalog_unavailable", 503)
                         return {"status": "catalog", "request_id": request.request_id, "engines": names}
+                    if request.operation == "engine.states":
+                        result = {"status": "states", "request_id": request.request_id,
+                                  "engines": self._engine_states()}
+                        try:
+                            size = len(_json(result))
+                        except (TypeError, ValueError):
+                            # 크기 초과와 직렬화 실패는 원인이 다르므로 구분한다.
+                            raise SensorControlError("engine_states_not_serializable", 503) from None
+                        if size > MAX_ENGINE_STATES_BYTES:
+                            # 일괄은 최적화다. 넘치면 기존 단건 경로로 되돌린다.
+                            raise SensorControlError("engine_states_too_large", 503)
+                        return result
                     state, _ = self._state(request.engine)
                     return {"status": "read", "request_id": request.request_id, **state}
             digest = hashlib.sha256(request.to_bytes()).hexdigest()

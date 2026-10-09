@@ -10,6 +10,7 @@ let needsRefresh = false;
 let remoteControl = false;
 let sessionEpoch = 0;
 let loadAttempt = 0;
+let inflight = null;
 const tr = key => window.i18next.t('console.engine_control.' + key);
 
 function notice(key) {
@@ -33,19 +34,42 @@ function render() {
     }
 }
 
-export async function loadEngines() {
+/**
+ * 엔진 목록 요청 1회를 공유한다.
+ *
+ * 로그인 직후 loadEngines()와 populateEngineFilter()가 같은 목록을 동시에
+ * 요청해 센서 왕복과 HTTP 요청이 각각 두 번 나가던 것을 하나로 합친다.
+ * 상태를 건드리지 않으므로 이름만 필요한 호출자도 그대로 재사용한다.
+ * 캐시는 두지 않는다 — 거절·응답 유실 뒤의 새로고침이 옛 값을 보여 주면 안 된다.
+ */
+function fetchEngineList(options) {
+    const fresh = !!(options && options.fresh);
+    if (!fresh && inflight) return inflight;
+    const run = (async () => {
+        const resp = await authFetch("/api/engines");
+        if (!resp || !resp.ok) throw new Error('Engine list unavailable');
+        const data = await resp.json();
+        if (!Array.isArray(data.engines) || data.engines.length > 64) throw new Error('Invalid engine list');
+        return data;
+    })();
+    // fresh도 진행 중 슬롯을 차지해야 한다. 이전 조회를 무효로 만든 뒤
+    // 슬롯을 비워 두면, 그 사이 들어온 호출이 죽은 조회에 붙어
+    // 새 요청 없이 false만 받는다.
+    inflight = run;
+    const clear = () => { if (inflight === run) inflight = null; };
+    run.then(clear, clear);
+    return run;
+}
+
+export async function loadEngines(options) {
     if (busy) return false;
     const attempt = ++loadAttempt;
     const epoch = sessionEpoch;
     const token = getAuthToken();
     const current = () => epoch === sessionEpoch && token === getAuthToken() && attempt === loadAttempt;
     try {
-        const resp = await authFetch("/api/engines");
+        const data = await fetchEngineList(options);
         if (!current()) return false;
-        if (!resp || !resp.ok) throw new Error('Engine list unavailable');
-        const data = await resp.json();
-        if (!current()) return false;
-        if (!Array.isArray(data.engines) || data.engines.length > 64) throw new Error('Invalid engine list');
         remoteControl = data.control_process === 'separate' || data.engines.some(engine => engine.base_version !== undefined);
         if (remoteControl && data.engines.some(engine => !/^[a-f0-9]{64}$/.test(engine.base_version))) {
             throw new Error('Missing engine version');
@@ -137,7 +161,7 @@ async function changeEngine(name, operation, updates, method) {
             throw new Error('Unconfirmed result');
         }
         busy = false;
-        if (await loadEngines()) {
+        if (await loadEngines({ fresh: true })) {
             if (current()) {
                 notice('saved');
                 showToast(tr('title'), tr('saved'), 'info');
@@ -264,6 +288,7 @@ async function saveEngineConfig(name, updates) {
 window.addEventListener('nw-session-ended', () => {
     sessionEpoch++;
     loadAttempt++;
+    inflight = null;
     enginesData = [];
     selectedEngine = null;
     busy = false;
@@ -275,7 +300,10 @@ window.addEventListener('nw-session-ended', () => {
     render();
 });
 
-document.getElementById('engine-control-refresh')?.addEventListener('click', () => loadEngines());
+// 거절·응답 유실 뒤의 수동 새로고침은 진행 중인 예전 조회를 재사용하면 안 된다.
+// 변경이 적용되기 전에 시작한 조회가 그대로 공유되면 needsRefresh가 다시 내려가
+// 같은 오래된 base_version으로 재시도할 수 있다.
+document.getElementById('engine-control-refresh')?.addEventListener('click', () => loadEngines({ fresh: true }));
 
 export async function populateEngineFilter() {
     const epoch = sessionEpoch;
@@ -283,9 +311,7 @@ export async function populateEngineFilter() {
     const filter = document.getElementById("filter-engine");
     if (!filter) return;
     try {
-        const resp = await authFetch("/api/engines");
-        if (!resp?.ok || epoch !== sessionEpoch || token !== getAuthToken()) return;
-        const data = await resp.json();
+        const data = await fetchEngineList();
         if (epoch !== sessionEpoch || token !== getAuthToken() || !Array.isArray(data.engines)) return;
         while (filter.options.length > 1) filter.remove(1);
         data.engines.forEach(eng => {

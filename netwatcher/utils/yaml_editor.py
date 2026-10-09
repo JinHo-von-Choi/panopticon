@@ -14,7 +14,7 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from ruamel.yaml import YAML
 
@@ -58,6 +58,37 @@ class YamlConfigEditor:
         if engine_section is None:
             return None
         return dict(engine_section)
+
+    def get_all_engine_configs(self, engine_names: Sequence[str]
+                           ) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
+        """패킷·흐름 엔진 설정을 YAML 파싱 한 번으로 함께 가져온다.
+
+        일괄 상태 조회는 엔진마다 이 편집기를 부른다. 엔진별로 ``_load()``를
+        반복하면 ruamel round-trip 파싱 비용이 엔진 수만큼 곱해지므로,
+        요청된 이름 전체를 한 번의 파싱으로 처리한다. 패킷과 흐름 섹션은 같은
+        파일의 같은 스냅샷이어야 하므로 한 문서에서 양쪽을 뽑는다.
+        """
+        names = list(engine_names)
+        if not names:
+            return {}, {}
+        with self._lock:
+            document = self._load().get("netwatcher", {})
+            return ({name: self._engine_entry(document, name) for name in names},
+                    {name: self._flow_entry(document, name) for name in names})
+
+    @staticmethod
+    def _engine_entry(document: Any, name: str) -> dict | None:
+        """단건 경로와 같은 의미를 유지한다 (None 이 아니면 dict 변환)."""
+        engines = document.get("engines", {})
+        entry = engines.get(name) if isinstance(engines, dict) else None
+        return None if entry is None else dict(entry)
+
+    @staticmethod
+    def _flow_entry(document: Any, name: str) -> dict | None:
+        section = document.get("netflow", {})
+        engines = section.get("engines", {}) if isinstance(section, dict) else {}
+        entry = engines.get(name) if isinstance(engines, dict) else None
+        return None if entry is None else dict(entry)
 
     def ensure_writable(self) -> None:
         """런타임 적용 전에 읽기 전용 파일/볼륨을 명시적으로 거부한다."""
