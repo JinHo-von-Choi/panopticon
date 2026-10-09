@@ -14,7 +14,9 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
         await page.getByLabel('비밀번호',{exact:true}).fill(fixture.password);
         await page.getByRole('button',{name:'로그인',exact:true}).click();
         await page.locator('#login-overlay.hidden').waitFor({state:'attached'});
-        await page.waitForFunction(async () => (await import('/js/core/api.js')).isAuthEnabled());
+        await page.waitForFunction(async () =>
+            (await import('/js/core/api.js')).isAuthEnabled() &&
+            (await import('/js/core/capabilities.js')).featureEnabled('engines'));
         await page.locator('[data-tab="governance"]').click();
         await page.locator(`[data-feed-status="${fixture.phase==='escape' ? 'ok' : fixture.phase}"]`).waitFor();
         const box = page.locator('#support-profile-box');
