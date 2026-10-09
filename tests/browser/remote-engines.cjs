@@ -10,6 +10,7 @@ async function login(page, username) {
     await page.getByLabel('비밀번호', {exact: true}).fill(fixture.password);
     await page.getByRole('button', {name: '로그인', exact: true}).click();
     await page.locator('#login-overlay.hidden').waitFor({state: 'attached'});
+    await page.locator('#connection-status.connected').waitFor({state:'visible'});
     await page.locator('[data-tab="engines"]').click();
     await page.locator('[data-engine="port_scan"]').waitFor({state:'attached'});
 }

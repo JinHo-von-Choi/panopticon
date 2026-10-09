@@ -14,6 +14,7 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
         await page.getByLabel('비밀번호',{exact:true}).fill(fixture.password);
         await page.getByRole('button',{name:'로그인',exact:true}).click();
         await page.locator('#login-overlay.hidden').waitFor({state:'attached'});
+    await page.locator('#connection-status.connected').waitFor({state:'visible'});
         await page.waitForFunction(async () =>
             (await import('/js/core/api.js')).isAuthEnabled() &&
             (await import('/js/core/capabilities.js')).featureEnabled('engines'));

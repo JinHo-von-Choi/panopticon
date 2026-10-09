@@ -8,6 +8,7 @@ async function login(page,user) {
     await page.locator('#login-password').fill(fixture.password);
     await page.getByRole('button',{name:'로그인',exact:true}).click();
     await page.locator('#login-overlay.hidden').waitFor({state:'attached'});
+    await page.locator('#connection-status.connected').waitFor({state:'visible'});
     await page.locator('[data-tab="governance"]').click();
     await page.evaluate(async()=>{window.proposalVerification=await import('/js/modules/proposals.js');});
     await ready(page);

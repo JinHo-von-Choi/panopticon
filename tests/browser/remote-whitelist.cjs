@@ -9,6 +9,7 @@ async function login(page, username) {
     await page.getByLabel('비밀번호', {exact:true}).fill(fixture.password);
     await page.getByRole('button', {name:'로그인', exact:true}).click();
     await page.locator('#login-overlay.hidden').waitFor({state:'attached'});
+    await page.locator('#connection-status.connected').waitFor({state:'visible'});
     await page.locator('[data-tab="whitelist"]').click();
     await page.evaluate(async () => {window.whitelistVerification = await import('/js/core/whitelist-state.js');});
     await page.waitForFunction(() => window.whitelistVerification.whitelistStatus().loaded);
