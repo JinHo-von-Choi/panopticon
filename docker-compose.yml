@@ -44,6 +44,9 @@ services:
     restart: unless-stopped
     profiles:
       - db
+      # demo 는 install.sh demo 가 함께 켠다. Suricata 없이 샘플 EVE로
+      # 화면까지 가는 검토용 묶음이며, 운영 경로의 보안 모델을 완화하지 않는다.
+      - demo
     environment:
       POSTGRES_DB: ${NETWATCHER_DB_NAME:-netwatcher}
       POSTGRES_USER: ${NETWATCHER_DB_USER:-netwatcher}
@@ -64,6 +67,7 @@ services:
       target: eve
     profiles:
       - migrate
+      - demo
     cap_drop:
       - ALL
     security_opt:
