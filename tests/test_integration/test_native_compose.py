@@ -264,8 +264,12 @@ with psycopg2.connect(host=os.environ['NETWATCHER_DB_HOST'],port=os.environ['NET
                 assert int(status['CapAmb'],16)==0 and status['NoNewPrivs']=='1'
             for name in ('netwatcher','native-sensor'):
                 process_env=json.loads(await command(['docker','inspect','--format','{{json .Config.Env}}',ids[name]]))
+                runtime_values=dict(item.split('=',1) for item in process_env if '=' in item)
+                expected_kind='console' if name=='netwatcher' else 'sensor'
+                assert runtime_values['NETWATCHER_DB_PASSWORD']==credentials[expected_kind]['NETWATCHER_DB_PASSWORD']
+                assert not any(key.startswith('PANOPTICON_DB_') and key.endswith('_PASSWORD') for key in runtime_values)
                 for kind in ('bootstrap','migrate','grants'):
-                    assert not any(credentials[kind]['NETWATCHER_DB_PASSWORD'] in item for item in process_env)
+                    assert not any(credentials[kind]['NETWATCHER_DB_PASSWORD'] == item.partition('=')[2] for item in process_env)
 
     finally:
         for name in ('netwatcher','native-sensor','native-init','native-db-roles','native-db-grants','db-migrate'):

@@ -5,14 +5,16 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 (async () => {
     const browser = await chromium.launch({executablePath:process.env.PANOPTICON_CHROME || '/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
     const errors = [];
+    let page;
     try {
-        const page = await browser.newPage({viewport:{width:1440,height:1000}});
+        page = await browser.newPage({viewport:{width:1440,height:1000}});
         page.on('pageerror',error => errors.push(error.message));
         await page.goto(fixture.url);
         await page.getByLabel('사용자 이름',{exact:true}).fill('feed-viewer');
         await page.getByLabel('비밀번호',{exact:true}).fill(fixture.password);
         await page.getByRole('button',{name:'로그인',exact:true}).click();
         await page.locator('#login-overlay.hidden').waitFor({state:'attached'});
+        await page.waitForFunction(async () => (await import('/js/core/api.js')).isAuthEnabled());
         await page.locator('[data-tab="governance"]').click();
         await page.locator(`[data-feed-status="${fixture.phase==='escape' ? 'ok' : fixture.phase}"]`).waitFor();
         const box = page.locator('#support-profile-box');
@@ -54,5 +56,13 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
         }
         assert.deepEqual(errors,[]);
         process.stdout.write('feed health browser checks passed\n');
+    } catch (error) {
+        if (page) process.stderr.write(JSON.stringify(await page.evaluate(() => ({
+            activeTab: document.querySelector('.tab.active')?.dataset.tab,
+            observation: document.getElementById('observation-box')?.innerText.slice(0,500),
+            support: document.getElementById('support-profile-box')?.innerText.slice(0,500),
+            loginVisible: !document.getElementById('login-overlay')?.classList.contains('hidden')
+        })))+'\n'+JSON.stringify(errors)+'\n');
+        throw error;
     } finally {await browser.close();}
 })().catch(error => {process.stderr.write(error.stack+'\n');process.exit(1);});

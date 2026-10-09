@@ -220,17 +220,16 @@ def read_env(path):
 
 
 def activate(link, destination):
-    temporary = link.with_name(link.name + '.update-link')
-    temporary.symlink_to(destination, target_is_directory=True)
-    try:
+    # Unique directories prevent an interrupted previous swap from blocking recovery.
+    with tempfile.TemporaryDirectory(prefix='.panopticon-update-', dir=link.parent) as directory:
+        temporary = Path(directory) / 'source'
+        temporary.symlink_to(destination, target_is_directory=True)
         os.replace(temporary, link)
         descriptor = os.open(link.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 class Installation:

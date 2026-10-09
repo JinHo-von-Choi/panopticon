@@ -94,6 +94,14 @@ def test_generated_paths_are_resolved_by_real_compose(tmp_path):
     app = model["services"]["netwatcher"]
     # Compose의 재사용 가능한 출력은 리터럴 $를 $$로 이스케이프한다.
     assert next(volume for volume in app["volumes"] if volume["target"] == "/app/config")["source"] == str(destination / "config").replace("$", "$$")
-    assert app["env_file"][0]["path"] == str(environment).replace("$", "$$")
+    # Verify actual env-file resolution rather than a Compose-version-specific metadata field.
+    resolved = subprocess.run(["docker", "compose", "--env-file", str(environment), "-f", "docker-compose.yml",
+                               "--profile", "db", "config", "--format", "json"],
+                              env=env, capture_output=True, text=True, check=True)
+    runtime = json.loads(resolved.stdout)["services"]["netwatcher"]["environment"]
+    generated = dotenv_values(environment)
+    assert runtime["NETWATCHER_LOGIN_ENABLED"] == "true"
+    assert runtime["NETWATCHER_LOGIN_USERNAME"] == generated["NETWATCHER_LOGIN_USERNAME"]
+    assert runtime["NETWATCHER_DB_PASSWORD"] == generated["NETWATCHER_DB_PASSWORD"]
     assert app["environment"]["NETWATCHER_DB_HOST"] == "db"
     assert model["services"]["db"]["ports"][0]["published"] == dotenv_values(environment)["PANOPTICON_DB_PUBLISH_PORT"]

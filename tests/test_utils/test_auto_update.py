@@ -348,3 +348,21 @@ def test_unsafe_credentials_are_rejected(tmp_path):
     link.symlink_to(file)
     with pytest.raises(ValueError):
         updater.read_env(link)
+
+
+def test_interrupted_temporary_link_does_not_block_next_recovery(tmp_path):
+    install = Installation(tmp_path)
+    old = install.current.resolve()
+    new = tmp_path / 'releases/new'
+    new.mkdir()
+    # The former implementation reused this name and failed before entering its cleanup block.
+    stale = install.current.with_name(install.current.name + '.update-link')
+    stale.symlink_to(new)
+    (tmp_path / '.panopticon-update-interrupted').mkdir()
+    backup = tmp_path / 'backups/old.dump'
+    backup.write_bytes(b'backup')
+    updater.atomic_json(tmp_path / 'recovery.json', {'old': str(old), 'new': str(new), 'backup': str(backup), 'phase': 'migrating'})
+    updater.recover(install)
+    assert install.current.resolve() == old
+    assert install.calls == ['stop', 'restore', 'start:0.4.0', 'health']
+    assert not (tmp_path / 'recovery.json').exists()
