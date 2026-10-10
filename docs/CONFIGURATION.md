@@ -186,8 +186,37 @@ netwatcher:
 | --- | --- | --- |
 | 알림 | `.env`에 채널 접속 정보, `alerts.channels`에서 채널 활성화 | 값이 빠지면 알림 상태 패널에 오류 표시 |
 | NetFlow/IPFIX | `netflow.enabled: true`, 수신 주소·포트 지정 | 패킷 본문은 받지 않음 |
-| AI 분석 | 외부 CLI 설치, `ai_analyzer.enabled: true`, `apply_mode: propose` | 외부로 나가는 자료 범위를 먼저 검토 |
+| AI 분석 | `ai_analyzer.enabled: true`, `apply_mode: propose`, 공급자 선택 | 외부로 나가는 자료 범위를 먼저 검토 |
 | API 문서 | `web.enable_docs: true` | `/docs`, `/openapi.json` 노출 |
+
+### AI 분석 공급자
+
+`ai_analyzer.provider`로 하나를 고릅니다.
+
+| 종류 | 값 | 준비 |
+| --- | --- | --- |
+| CLI | `copilot`, `claude`, `codex`, `gemini`, `agent` | 센서 서비스 계정에 CLI 설치·로그인 |
+| HTTP | `anthropic` | `model`, 환경변수 `ANTHROPIC_API_KEY` |
+| HTTP | `openai_compatible` | `model`, 환경변수 `OPENAI_API_KEY`. 호환 서버면 `endpoint` |
+
+```yaml
+ai_analyzer:
+  enabled: true
+  apply_mode: propose
+  provider: anthropic
+  model: claude-sonnet-5-5
+  api_key_env: ANTHROPIC_API_KEY   # 키 값은 설정 파일에 쓰지 않는다
+  daily_call_limit: 96             # 하루 최대 호출 수
+  mask_internal_ips: true          # 사설 주소를 host-N으로 바꿔 보낸다
+  copilot_timeout_seconds: 60      # CLI·HTTP 공통 응답 시간 제한
+```
+
+- 모르는 공급자 이름은 기본값으로 바꾸지 않고 시작을 거부합니다.
+- HTTP 공급자는 고정 JSON 형식(판정, 엔진, 근거, 조정값, 근거 사건 ID)으로 답해야 합니다. 형식이 틀린 답은 적용하지 않고 "응답 형식 불일치"로 남깁니다.
+- `endpoint`는 https여야 합니다. 같은 호스트의 추론 서버(루프백 주소)만 http를 허용합니다.
+- 입력이 지난번과 같으면 다시 보내지 않습니다. 같은 제안이 중복되지 않습니다.
+- 공급자에게 보내는 내용은 경보의 엔진, 심각도, 제목, 출발지 주소, 시각, 사건 ID입니다. 판정 기록에는 요청·응답 원문 대신 SHA-256만 남깁니다.
+- 분석은 센서 프로세스에서 돕니다. API 키 환경변수는 센서 서비스에 넣습니다.
 
 ### NetFlow
 

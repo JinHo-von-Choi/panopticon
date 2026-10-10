@@ -407,7 +407,48 @@ Content-Type: application/json
 
 `seq`는 1부터 시작하는 연속 정수이며 최대 `9223372036854775807`입니다. 배치당 이벤트는 1~256개입니다. `kind`는 `connection` 또는 `anomaly`, `inode`·`observed_at`은 0 이상의 정수이며 `observed_at`의 단위는 Unix 초입니다. `detail`만 생략할 수 있습니다. 주소는 최대 128자, 상태는 최대 32자, 상세는 최대 1,024자입니다. 등록·하트비트·이벤트 본문의 알 수 없는 필드는 422로 거절합니다.
 
+`kind=anomaly` 이벤트는 `host_agent` 엔진의 WARNING 사건으로도 저장합니다. 사건 ID는 `(agent_uuid, seq, 배치 안 순번)`에서 정해지므로 같은 배치를 다시 보내도 사건이 늘지 않습니다. 이벤트는 저장했지만 사건 저장에 실패하면 503을 돌려줍니다. 에이전트는 같은 배치를 다시 보내면 됩니다.
+
 성공 응답은 `{"ok":true,"seq":1,"duplicate":false,"accepted":1}`입니다. 같은 `(agent_uuid, seq)`와 같은 정규화 본문을 다시 보내면 `duplicate:true`, `accepted:0`입니다. 본문이 다르거나 다음 시퀀스를 건너뛰면 409입니다. 인증 단계의 본문 상한은 256KiB이며 초과 시 413입니다. 재전송 때는 같은 배치·시퀀스를 유지하고 새 시각으로 서명을 생성합니다.
+
+### 조회 — `GET /api/agents`
+
+조회 권한 이상의 콘솔 토큰으로 호출합니다. 응답에 인증 토큰 해시와 서명 키는 들어 있지 않습니다.
+
+| 경로 | 내용 |
+| --- | --- |
+| `GET /api/agents?limit=50&offset=0` | 에이전트 목록(`limit` 최대 200), `total`, 서버 시각 `now` |
+| `GET /api/agents/{agent_uuid}` | 한 에이전트. 없으면 404, UUID 형식이 아니면 422 |
+| `GET /api/agents/{agent_uuid}/events?limit=20&before_seq=` | 최근 이벤트 배치(`limit` 최대 100). 응답의 `next_before_seq`로 이전 배치를 이어서 조회 |
+
+## 관측 대시보드 API
+
+`GET /api/observability/panels`는 패널 목록과 이 설치에서 쓸 수 있는지(`supported`)를 돌려줍니다.
+
+`GET /api/observability/query?panels=alerts_by_severity,top_sources&from=2026-10-10T00:00:00Z&to=2026-10-10T01:00:00Z&tz=Asia/Seoul`
+
+- `panels`는 쉼표로 구분한 1~24개 패널 이름입니다. 모르는 이름이나 중복은 422입니다.
+- `from`, `to`는 시간대가 붙은 ISO 8601 시각입니다. 범위는 0초 초과 92일 이하입니다.
+- `tz`는 IANA 시간대 이름이며 요일·시간 열지도에 씁니다.
+- 기간에 따라 버킷 폭(`bucket_seconds`)이 정해집니다. 1시간이면 60초, 24시간이면 900초입니다.
+
+응답의 패널마다 `state`가 붙습니다. `ok`는 값이 있는 결과, `unsupported`는 이 모드에서 원천 자료가 없음, `timeout`은 5초 안에 집계하지 못함입니다. `kind`에 따라 값 모양이 다릅니다.
+
+| kind | 값 |
+| --- | --- |
+| `timeseries` | `series`: 이름별 `[[버킷 시각, 값], ...]`. 기록 없는 버킷은 빠짐 |
+| `bar`, `histogram` | `rows`: `[{label, value}, ...]` |
+| `heatmap` | `cells`: `[{x: 요일 1~7, y: 시 0~23, value}, ...]` |
+
+동시 조회는 두 건으로 묶고 읽기 전용 트랜잭션에서 실행합니다.
+
+## Suricata가 관측한 주소
+
+`GET /api/observed-assets?limit=100&offset=0&search=10.0.0.0/24`는 EVE 기록에서 모은 내부 주소를 마지막 관측 순으로 돌려줍니다. `limit` 최대 500, `search`는 IP나 CIDR이며 그 밖의 값은 422입니다. 항목은 `ip`, `mac`(없으면 null), `first_seen`, `last_seen`, `evidence`(이벤트 종류별 기록 수), `sensor_id`, `source_id`입니다.
+
+## 기능 상태
+
+`GET /api/capabilities`의 `states`는 화면별 상태를 `{state, reason}`으로 알려 줍니다. `state`는 `available`, `limited`, `unsupported`, `unconfigured`, `unknown` 중 하나입니다. 빈 화면이 "기록 0건"인지 "이 구성에서 지원하지 않음"인지 구분할 때 씁니다.
 
 ## 감사 로그 무결성과 테넌트 컨텍스트
 
@@ -427,7 +468,9 @@ Content-Type: application/json
 
 ## MITRE Navigator 레이어
 
-`GET /api/hunting/navigator?hours=24&name=NetWatcher%20Coverage`는 콘솔 인증으로 조회합니다. `hours`는 정수 시간(기본 24), `name`은 레이어 이름(기본 `NetWatcher Coverage`)입니다. 화면의 1시간·24시간·7일은 각각 `hours=1`, `24`, `168`입니다. 서버는 해당 시각 이후 최근 이벤트를 최대 10,000건 조회하고 `mitre_attack_id`별로 집계합니다.
+`GET /api/hunting/navigator?hours=24&name=NetWatcher%20Coverage`는 콘솔 인증으로 조회합니다. `hours`는 정수 시간(기본 24), `name`은 레이어 이름(기본 `NetWatcher Coverage`)입니다. 화면의 1시간·24시간·7일은 각각 `hours=1`, `24`, `168`입니다. 서버는 해당 시각 이후 이벤트 전체를 `mitre_attack_id`별로 DB에서 집계합니다.
+
+`GET /api/hunting/coverage?hours=24`는 네트워크로 관측할 수 있는 기법 중 그 기간에 탐지가 없는 기법을 `gaps`(`technique_id`, `name`, `tactic`)로 돌려줍니다.
 
 HTTP 200 응답은 Navigator Layer JSON입니다. `domain: enterprise-attack`, `versions`(ATT&CK 14, Navigator 4.9.1, Layer 4.5), `name`, `description`, `techniques`, `gradient` 등을 포함합니다. 각 기법은 `techniqueID`, `tactic`, `color`, `score`, `comment`, `metadata`, `enabled`, `showSubtechniques`를 담습니다. `metadata`의 `Technique name`과 `Detection count`가 기법명과 탐지 횟수입니다. `score`는 횟수 구간을 0~100으로 변환한 값으로 실제 탐지 횟수나 탐지율이 아닙니다.
 

@@ -1,6 +1,6 @@
 [project]
 name = "netwatcher"
-version = "0.6.1"
+version = "0.7.0"
 description = "Suricata EVE 로그 기반 보안 조사 콘솔"
 requires-python = ">=3.12"
 

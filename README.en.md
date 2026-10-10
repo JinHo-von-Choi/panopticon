@@ -56,7 +56,8 @@ The console opens at `http://127.0.0.1:38585`. The [installation guide](docs/INS
 | Tuning review | Compares a proposed change against normal and attack samples before administrator approval |
 | Host agent | Rust executable (about 1.6 MiB) sends TCP connections, load, and memory with HMAC signatures |
 | Audit trail | Stores administrative changes in a SHA-256 hash chain |
-| Visualization | Topology, NIST CSF and PCI DSS coverage, MITRE ATT&CK heatmap with Navigator export |
+| Observability dashboard | 20 panels for alerts, EVE ingest, traffic, case handling and sensor health. One shared range and reference time; click through to the event list |
+| Visualization | Topology, NIST CSF and PCI DSS coverage and gaps, MITRE ATT&CK heatmap with Navigator export |
 
 The console supports Korean and English. Press `Ctrl+K` (`Cmd+K` on macOS) to search screens.
 

@@ -56,7 +56,8 @@ PANOPTICON_EVE_FILE=/var/log/suricata/eve.json ./install.sh eve
 | 탐지 설정 검토 | 변경 후보를 정상·공격 샘플로 비교한 뒤 관리자 승인 |
 | 호스트 에이전트 | Rust 단일 바이너리(약 1.6MiB)가 TCP 연결·부하·메모리를 HMAC 서명으로 전송 |
 | 감사 기록 | 관리 변경을 SHA-256 해시 체인으로 저장 |
-| 시각화 | 토폴로지, NIST CSF·PCI DSS 커버리지, MITRE ATT&CK 히트맵과 Navigator 내보내기 |
+| 관측 대시보드 | 경보·EVE 수집·트래픽·사건 처리·센서 상태 그래프 20종. 같은 기간·기준 시각, 그래프에서 사건 목록으로 이동 |
+| 시각화 | 토폴로지, NIST CSF·PCI DSS 커버리지와 격차, MITRE ATT&CK 히트맵과 Navigator 내보내기 |
 
 콘솔은 한국어와 영어를 지원합니다. `Ctrl+K`(macOS는 `Cmd+K`)로 화면을 검색합니다.
 
