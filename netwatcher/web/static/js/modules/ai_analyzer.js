@@ -41,7 +41,7 @@ function validHealth(health) {
     return time(health.last_attempt_at) && time(health.last_success_at)
         && Number.isSafeInteger(health.consecutive_failures) && health.consecutive_failures >= 0
         && [null,'not_installed','timeout','exit_status','empty_output','error','auth','rate_limited','http_status',
-            'invalid_output','credential_missing','budget_exhausted'].includes(health.last_failure);
+            'invalid_output','credential_missing','budget_exhausted','service_account'].includes(health.last_failure);
 }
 
 function renderStatus() {

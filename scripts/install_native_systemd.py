@@ -178,6 +178,9 @@ TimeoutStopSec=15
 '''
         if kind == 'sensor':
             body += f'RuntimeDirectory={prefix}\nRuntimeDirectoryMode=0710\nRuntimeDirectoryPreserve=yes\n'
+            # 엔진·위협 피드를 메모리에 올리는 센서는 공통 상한(384M)에 걸리면 회수 지연으로 멈추고
+            # 실행 소유권(리스)을 잃는다. 나중 값이 앞의 공통 값을 덮는다.
+            body += 'MemoryHigh=1536M\nMemoryMax=2G\n'
         else:
             body += f'BindReadOnlyPaths={runtime}\nInaccessiblePaths={sensor_state}\n'
         unit(kind, body, init+' '+grants, True)

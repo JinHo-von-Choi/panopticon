@@ -1632,6 +1632,7 @@
       "source_changed": "현재 설정이 바뀌었습니다. 새 설정을 확인하고 다시 제안하세요."
     },
     "ai_status": {
+      "failure_service_account": "분석 계정 사용 불가",
       "credential_configured": "키 설정됨",
       "credential_missing": "키 없음",
       "failure_auth": "인증 실패",

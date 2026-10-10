@@ -29,7 +29,8 @@ def create_ai_analyzer_router(ai_analyzer=None, *, sensor_control=None) -> APIRo
     @router.get("/ai-analyzer/status")
     async def get_status(actor=Depends(require_role(Role.VIEWER))):
         try:
-            if sensor_control is not None:
+            # 분리 콘솔이 직접 분석을 돌리면 콘솔의 상태가 실제 상태다.
+            if sensor_control is not None and ai_analyzer is None:
                 async with asyncio.timeout(8):
                     return (await sensor_control.ai_status(actor))["ai"]
             return status(ai_analyzer)

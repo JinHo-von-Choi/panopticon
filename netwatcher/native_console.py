@@ -77,6 +77,11 @@ class NativeConsole:
         from netwatcher.services.maintenance import MaintenanceService
         self.maintenance = MaintenanceService(config, EventRepository(self.db), TrafficStatsRepository(self.db),
             IncidentRepository(self.db), None, None)
+        # AI 분석은 권한 없는 콘솔에서 돌린다. 센서에는 지정한 분석가 계정으로 제안만 낸다.
+        self.ai = None
+        if (config.section("ai_analyzer") or {}).get("enabled"):
+            from netwatcher.services.console_ai import ConsoleAIAnalyzer
+            self.ai = ConsoleAIAnalyzer(config, EventRepository(self.db), self.control, self.accounts)
         self.app = None
 
     def build_app(self):
@@ -86,7 +91,8 @@ class NativeConsole:
             sensor_control=self.control, incident_repository=IncidentRepository(self.db),
             response_repository=ResponseActionRepository(self.db),
             response_proposal_repo=ResponseProposalRepository(self.db),
-            audit_logger=AuditLogger(self.db.pool), audit_required=True, replay_service=self.replay)
+            audit_logger=AuditLogger(self.db.pool), audit_required=True, replay_service=self.replay,
+            ai_analyzer=self.ai)
         return self.app
 
     async def run(self):
@@ -115,6 +121,8 @@ class NativeConsole:
                 await self.reader.start()
                 await self.stream.start()
                 await self.maintenance.start()
+                if self.ai is not None:
+                    await self.ai.start()
                 await server.serve()
             finally:
                 for sig, handler in previous.items():
@@ -123,6 +131,8 @@ class NativeConsole:
         finally:
             self.replay.stop_accepting()
             try:
+                if self.ai is not None:
+                    await self.ai.stop()
                 await self.maintenance.stop()
                 await self.stream.stop()
             finally:

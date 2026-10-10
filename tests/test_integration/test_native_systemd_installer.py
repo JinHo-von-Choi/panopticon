@@ -57,6 +57,9 @@ def test_generate_and_verify_units_with_separate_users_and_credentials(tmp_path)
     console_unit=(result/'systemd/panopticon-systemd-test-console.service').read_text()
     assert f'User={sensor.pw_uid}\n' in sensor_unit and 'AmbientCapabilities=CAP_NET_RAW' in sensor_unit
     assert f'User={console.pw_uid}\n' in console_unit and 'AmbientCapabilities=\n' in console_unit
+    # systemd는 같은 키의 마지막 값을 쓴다. 센서만 큰 메모리 상한을 받는다.
+    assert sensor_unit.rsplit('MemoryHigh=',1)[1].startswith('1536M') and 'MemoryMax=2G' in sensor_unit
+    assert console_unit.rsplit('MemoryHigh=',1)[1].startswith('384M')
     assert 'EnvironmentFile=' not in all_units
     with pytest.raises(ValueError):
         prepare_systemd_installation(output,'lo',database_env=database_file(tmp_path),

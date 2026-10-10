@@ -9,7 +9,7 @@ FIELDS = {"enabled", "running", "state", "provider", "interval_minutes", "lookba
 PROVIDERS = {*CLI_COMMANDS, *HTTP_KINDS}
 HEALTH_FIELDS = {"last_attempt_at", "last_success_at", "consecutive_failures", "last_failure"}
 FAILURES = {None, "not_installed", "timeout", "exit_status", "empty_output", "error", "auth", "rate_limited",
-            "http_status", "invalid_output", "credential_missing", "budget_exhausted"}
+            "http_status", "invalid_output", "credential_missing", "budget_exhausted", "service_account"}
 EMPTY_HEALTH = {"last_attempt_at": None, "last_success_at": None, "consecutive_failures": 0, "last_failure": None}
 
 

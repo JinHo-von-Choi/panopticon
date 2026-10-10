@@ -1632,6 +1632,7 @@
       "source_changed": "Settings changed. Check the current settings and submit a new proposal."
     },
     "ai_status": {
+      "failure_service_account": "analysis account unusable",
       "credential_configured": "key set",
       "credential_missing": "key missing",
       "failure_auth": "authentication failed",

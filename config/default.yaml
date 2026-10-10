@@ -341,6 +341,7 @@ netwatcher:
     model: null                    # 예: claude-sonnet-5-5, gpt-4.1-mini
     endpoint: null                 # 생략하면 공급자 기본 주소. 평문 http는 루프백만 허용
     api_key_env: null              # 생략하면 ANTHROPIC_API_KEY 또는 OPENAI_API_KEY
+    service_account: null          # 분리 콘솔에서 분석할 때 쓸 분석가 계정 이름
     max_tokens: 1024
 
   daily_report:
