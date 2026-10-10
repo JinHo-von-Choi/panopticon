@@ -11,7 +11,7 @@ function fixture(url) {
  if(url.startsWith('/api/topology/device/')) return {device:{id:decodeURIComponent(url.split('/').pop()),hostname:'<script>bad()</script>'},neighbors:['10.0.0.2'],risk:{risk_score:9.5}};
  if(url==='/api/compliance/frameworks') return {frameworks:[{id:'nist_csf',name:'NIST CSF'},{id:'pci_dss',name:'PCI DSS'}]};
  if(url.startsWith('/api/compliance/coverage/')) return {coverage_score:url.endsWith('pci_dss')?.5:.875,active_engines:['suricata'],controls:{}};
- if(url==='/api/compliance/kpis') return {alert_volume:1234,mttd_seconds:mttd,period_days:30};
+ if(url==='/api/compliance/kpis') return {alert_volume:1234,mean_alert_interval_seconds:mttd,period_days:30};
 }
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost');

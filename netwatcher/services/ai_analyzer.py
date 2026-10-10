@@ -165,11 +165,10 @@ class AIAnalyzerService:
         self._timeout:          int = int(ai_cfg.get("copilot_timeout_seconds", 60))
 
         if self._provider not in self._PROVIDER_COMMANDS:
-            logger.warning(
-                "[ai_analyzer] 알 수 없는 프로바이더 '%s' — 'copilot'으로 폴백",
-                self._provider,
+            raise ValueError(
+                f"ai_analyzer.provider must be one of {sorted(self._PROVIDER_COMMANDS)} "
+                f"(got {self._provider!r})"
             )
-            self._provider = "copilot"
 
         self._mt_threshold:    int = int(ai_cfg.get("consecutive_mt_threshold",    2))
         self._max_decrease_pct: int = int(ai_cfg.get("max_threshold_decrease_pct", 10))

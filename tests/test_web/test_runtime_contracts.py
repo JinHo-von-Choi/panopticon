@@ -223,3 +223,13 @@ async def test_failed_state_queries_report_unknown_without_exception_details(run
     assert response.json()["observation"]["state"] == "unknown"
     assert response.json()["feeds"]["status"] == "unknown"
     assert "do-not-expose" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_serves_prometheus_text_without_login(runtime_app):
+    app, _, _, _ = runtime_app
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "netwatcher_" in response.text

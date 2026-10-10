@@ -106,3 +106,12 @@ class TestMITRENavigator:
         assert "gradient" in layer
         assert "legendItems" in layer
         assert "filters" in layer
+
+
+def test_layer_and_gaps_from_aggregated_counts_match_event_list():
+    """DB 집계 건수로 만든 레이어가 이벤트 목록으로 만든 레이어와 같다."""
+    navigator = MITRENavigator()
+    events = [{"mitre_attack_id": "T1046"}] * 3 + [{"mitre_attack_id": "T1557"}]
+    counts = {"T1046": 3, "T1557": 1}
+    assert navigator.generate_layer(name="x", technique_counts=counts) == navigator.generate_layer(events, name="x")
+    assert navigator.get_coverage_gaps(technique_counts=counts) == navigator.get_coverage_gaps(events)

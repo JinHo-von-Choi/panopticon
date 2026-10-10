@@ -1,5 +1,7 @@
 """Tests for storage repositories."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 
@@ -95,7 +97,7 @@ async def test_device_open_ports(device_repo):
 @pytest.mark.asyncio
 async def test_traffic_stats(stats_repo):
     await stats_repo.insert(
-        timestamp="2024-01-01T00:00:00Z",
+        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:00Z"),
         total_packets=100,
         total_bytes=50000,
         tcp_count=60,
@@ -110,3 +112,16 @@ async def test_traffic_stats(stats_repo):
     summary = await stats_repo.summary()
     assert summary["total_packets"] == 100
     assert summary["tcp_count"] == 60
+
+
+@pytest.mark.asyncio
+async def test_traffic_recent_uses_time_window_in_ascending_order(stats_repo):
+    """최근 N분은 행 수가 아니라 시각으로 자르고, 시각 오름차순으로 반환한다."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    for minutes_ago, packets in ((180, 1), (5, 2), (1, 3)):
+        await stats_repo.insert(
+            timestamp=(now - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:00Z"),
+            total_packets=packets, total_bytes=0, tcp_count=0, udp_count=0, arp_count=0, dns_count=0,
+        )
+    rows = await stats_repo.recent(minutes=60)
+    assert [row["total_packets"] for row in rows] == [2, 3]

@@ -49,7 +49,10 @@ def mock_repo() -> AsyncMock:
             {"ip": "10.0.0.5", "count": 30},
         ],
     )
-    # list_recent: 시간순 이벤트 (MTTD 계산용)
+    repo.count_by_day_since = AsyncMock(
+        return_value={"2026-10-08": 40, "2026-10-09": 110},
+    )
+    # list_recent: 시간순 이벤트 (평균 경보 간격 계산용)
     events = [
         _make_event(severity="CRITICAL", ts_offset_hours=i)
         for i in range(10)
@@ -70,7 +73,7 @@ async def test_calculate_returns_all_keys(mock_repo: AsyncMock):
     assert "top_engines" in result
     assert "top_sources" in result
     assert "trend" in result
-    assert "mttd_seconds" in result
+    assert "mean_alert_interval_seconds" in result
 
 
 @pytest.mark.asyncio
@@ -95,25 +98,25 @@ async def test_top_engines_limited(mock_repo: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_mttd_calculation(mock_repo: AsyncMock):
-    """이벤트 간 평균 간격이 MTTD로 반환되는지 확인한다."""
+async def test_mean_alert_interval_calculation(mock_repo: AsyncMock):
+    """경보 사이 평균 간격이 반환되는지 확인한다."""
     calc   = KPICalculator(mock_repo)
     result = await calc.calculate(days=30)
 
-    mttd = result["mttd_seconds"]
+    mttd = result["mean_alert_interval_seconds"]
     assert mttd is not None
     # 10개 이벤트, 각 1시간 간격 -> 평균 3600초
     assert 3500 <= mttd <= 3700
 
 
 @pytest.mark.asyncio
-async def test_mttd_none_when_insufficient_data(mock_repo: AsyncMock):
-    """이벤트가 부족하면 MTTD가 None이다."""
+async def test_mean_alert_interval_none_when_insufficient_data(mock_repo: AsyncMock):
+    """이벤트가 부족하면 평균 경보 간격이 None이다."""
     mock_repo.list_recent = AsyncMock(return_value=[])
     calc   = KPICalculator(mock_repo)
     result = await calc.calculate(days=30)
 
-    assert result["mttd_seconds"] is None
+    assert result["mean_alert_interval_seconds"] is None
 
 
 @pytest.mark.asyncio
@@ -122,11 +125,10 @@ async def test_daily_trend_computation(mock_repo: AsyncMock):
     calc   = KPICalculator(mock_repo)
     result = await calc.calculate(days=30)
 
-    trend = result["trend"]
-    assert isinstance(trend, list)
-    for entry in trend:
-        assert "date" in entry
-        assert "count" in entry
+    assert result["trend"] == [
+        {"date": "2026-10-08", "count": 40},
+        {"date": "2026-10-09", "count": 110},
+    ]
 
 
 @pytest.mark.asyncio

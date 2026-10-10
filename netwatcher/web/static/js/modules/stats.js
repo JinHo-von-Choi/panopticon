@@ -109,7 +109,7 @@ export async function loadCharts() {
 
         if (trafficResp.ok) {
             const data = await trafficResp.json();
-            renderTrafficChart(data.traffic);
+            renderTrafficChart(data.traffic, data.window_seconds || 60);
         }
         if (trendsResp.ok) {
             const data = await trendsResp.json();
@@ -119,7 +119,7 @@ export async function loadCharts() {
     } catch (e) { console.error("Failed to load charts", e); }
 }
 
-function renderTrafficChart(data) {
+function renderTrafficChart(data, windowSeconds) {
     const ctx = document.getElementById('chart-traffic')?.getContext('2d');
     if (!ctx) return;
     if (trafficChart) trafficChart.destroy();
@@ -128,8 +128,9 @@ function renderTrafficChart(data) {
         data: {
             labels: data.map(d => new Date(d.timestamp).toLocaleTimeString()),
             datasets: [{
-                label: 'Packets/min',
-                data: data.map(d => d.total_packets),
+                // 행마다 기록 주기만큼 누적된 수라 관측 구간으로 나눠 초당 값으로 맞춘다.
+                label: 'Packets/s',
+                data: data.map(d => Math.round((d.total_packets / windowSeconds) * 10) / 10),
                 borderColor: token('--info', '#3498db'),
                 fill: true,
                 tension: 0.4

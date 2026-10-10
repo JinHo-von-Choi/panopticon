@@ -29,7 +29,7 @@ function render() {
     const format = new Intl.NumberFormat(window.i18next.language, { maximumFractionDigits: 2 });
     const cards = [
         ['alert_volume', number(kpis.alert_volume) ? format.format(kpis.alert_volume) : '—'],
-        ['mttd', number(kpis.mttd_seconds) ? `${format.format(kpis.mttd_seconds)} ${t('seconds')}` : t('insufficient')],
+        ['alert_interval', number(kpis.mean_alert_interval_seconds) ? `${format.format(kpis.mean_alert_interval_seconds)} ${t('seconds')}` : t('insufficient')],
         // FrameworkMapper's weighted controls score is the engine-based coverage estimate.
         ['engine_coverage', score === null ? '—' : `${score.toFixed(1)}%`]
     ];
@@ -43,10 +43,10 @@ function render() {
         metric.className = 'hud-kpi-score';
         metric.textContent = value;
         card.append(label, metric);
-        if (key === 'engine_coverage' || key === 'mttd') {
+        if (key === 'engine_coverage' || key === 'alert_interval') {
             const foot = document.createElement('p');
             foot.className = 'hud-kpi-foot';
-            foot.textContent = t(key === 'mttd' ? 'mttd_hint' : 'coverage_hint');
+            foot.textContent = t(key === 'alert_interval' ? 'alert_interval_hint' : 'coverage_hint');
             card.append(foot);
         }
         grid.append(card);

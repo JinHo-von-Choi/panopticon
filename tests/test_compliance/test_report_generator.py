@@ -54,7 +54,7 @@ def mock_kpi_calc() -> KPICalculator:
         "top_engines":          [{"engine": "port_scan", "count": 60}],
         "top_sources":          [{"ip": "10.0.0.1", "count": 20}],
         "trend":                [{"date": "2026-03-01", "count": 10}],
-        "mttd_seconds":         1800.0,
+        "mean_alert_interval_seconds": 1800.0,
         "alerts_per_day":       3.33,
     })
     return calc

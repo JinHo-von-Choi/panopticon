@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from netwatcher import __version__
 from fastapi import FastAPI, Depends
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -289,6 +289,13 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     async def health_check():
         """프로세스 liveness. 센서·DB 준비 상태는 /ready에서 조회한다."""
         return {"status": "healthy", "version": __version__}
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint():
+        """이 프로세스의 Prometheus 지표. 분리 설치에서 센서 지표는 포함하지 않는다."""
+        from prometheus_client import CONTENT_TYPE_LATEST
+        from netwatcher.web.metrics import get_metrics_output
+        return Response(get_metrics_output(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/ready")
     async def ready():

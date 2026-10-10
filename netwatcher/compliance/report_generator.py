@@ -92,8 +92,8 @@ class ReportGenerator:
             )
 
         kpis = report.get("kpis", {})
-        mttd = kpis.get("mttd_seconds")
-        mttd_str = f"{mttd:.0f}s" if mttd is not None else "N/A"
+        interval = kpis.get("mean_alert_interval_seconds")
+        interval_str = f"{interval:.0f}s" if interval is not None else "N/A"
 
         return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -132,7 +132,7 @@ th {{ background: #f5f5f5; font-weight: 600; }}
 <div class="summary-grid">
 <div class="summary-card"><div class="label">Alert Volume</div><div class="value">{kpis.get('alert_volume', 0)}</div></div>
 <div class="summary-card"><div class="label">Alerts/Day</div><div class="value">{kpis.get('alerts_per_day', 0)}</div></div>
-<div class="summary-card"><div class="label">MTTD</div><div class="value">{mttd_str}</div></div>
+<div class="summary-card"><div class="label">평균 경보 간격</div><div class="value">{interval_str}</div></div>
 </div>
 
 <h2>Control Coverage</h2>

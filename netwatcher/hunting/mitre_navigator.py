@@ -61,14 +61,16 @@ class MITRENavigator:
 
     def generate_layer(
         self,
-        events: list[dict[str, Any]],
+        events: list[dict[str, Any]] | None = None,
         name: str = "NetWatcher Coverage",
+        technique_counts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        """탐지 이벤트 목록에서 Navigator 레이어 JSON을 생성한다.
+        """탐지 이벤트 목록 또는 기법별 집계에서 Navigator 레이어 JSON을 생성한다.
 
         각 technique의 색상은 탐지 횟수에 비례한다.
         """
-        technique_counts = self._count_techniques(events)
+        if technique_counts is None:
+            technique_counts = self._count_techniques(events or [])
 
         techniques: list[dict[str, Any]] = []
         for tid, count in technique_counts.items():
@@ -95,7 +97,7 @@ class MITRENavigator:
                 "layer": "4.5",
             },
             "domain": "enterprise-attack",
-            "description": f"Auto-generated from {len(events)} events",
+            "description": f"Auto-generated from {sum(technique_counts.values())} events",
             "filters": {"platforms": ["Linux", "macOS", "Windows", "Network"]},
             "sorting": 3,
             "layout": {
@@ -126,9 +128,15 @@ class MITRENavigator:
 
         return layer
 
-    def get_coverage_gaps(self, events: list[dict[str, Any]]) -> list[str]:
-        """이벤트에서 탐지되지 않은 네트워크 관련 기법 ID를 반환한다."""
-        covered = set(self._count_techniques(events).keys())
+    def get_coverage_gaps(
+        self,
+        events: list[dict[str, Any]] | None = None,
+        technique_counts: dict[str, int] | None = None,
+    ) -> list[str]:
+        """탐지되지 않은 네트워크 관련 기법 ID를 반환한다."""
+        if technique_counts is None:
+            technique_counts = self._count_techniques(events or [])
+        covered = set(technique_counts)
         gaps = _NETWORK_RELEVANT_TECHNIQUES - covered
         return sorted(gaps)
 

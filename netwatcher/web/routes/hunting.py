@@ -50,8 +50,8 @@ def create_hunting_router(
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         since_str = since.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-        events = await event_repo.list_recent(limit=10000, since=since_str)
-        layer = navigator.generate_layer(events, name=name)
+        counts = await event_repo.count_by_mitre_since(since_str)
+        layer = navigator.generate_layer(name=name, technique_counts=counts)
         return JSONResponse(layer)
 
     @router.get("/timeline/{entity_type}/{entity_value}")
@@ -73,8 +73,8 @@ def create_hunting_router(
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         since_str = since.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-        events = await event_repo.list_recent(limit=10000, since=since_str)
-        gaps = navigator.get_coverage_gaps(events)
+        counts = await event_repo.count_by_mitre_since(since_str)
+        gaps = navigator.get_coverage_gaps(technique_counts=counts)
 
         from netwatcher.detection.attack_mapping import TTP_REGISTRY
         gap_details = []
@@ -88,12 +88,8 @@ def create_hunting_router(
             })
 
         return JSONResponse({
-            "total_techniques": len(gaps) + len(set(
-                ev.get("mitre_attack_id") for ev in events if ev.get("mitre_attack_id")
-            )),
-            "covered": len(set(
-                ev.get("mitre_attack_id") for ev in events if ev.get("mitre_attack_id")
-            )),
+            "total_techniques": len(gaps) + len(counts),
+            "covered": len(counts),
             "gaps": gap_details,
         })
 

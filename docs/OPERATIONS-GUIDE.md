@@ -13,7 +13,7 @@
 | `/api/health` | 구성요소별 상태와 실패 원인 | 필요 |
 | `/api/observation` | 관측 구간, 단계별 수신·누락 수 | 필요 |
 | `/api/support-profile` | 지원 범위와 구성 오류 | 필요 |
-| `/metrics` | Prometheus 형식 운영 지표 | 불필요 |
+| `/metrics` | 이 프로세스의 Prometheus 지표. 분리 설치에서 콘솔의 `/metrics`에는 센서 지표가 없음 | 불필요 |
 
 ```bash
 curl --fail http://127.0.0.1:38585/ready

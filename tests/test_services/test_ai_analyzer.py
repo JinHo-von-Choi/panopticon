@@ -234,6 +234,10 @@ class TestRunAI:
             yaml_editor=MagicMock(),
         )
 
+    def test_unknown_provider_is_rejected_instead_of_falling_back(self):
+        with pytest.raises(ValueError, match="ai_analyzer.provider"):
+            self._make_service(provider="not-a-provider")
+
     @pytest.mark.asyncio
     async def test_copilot_uses_gh_command(self):
         svc = self._make_service(provider="copilot")
@@ -304,10 +308,6 @@ class TestRunAI:
             result = await svc._run_ai("prompt")
         assert result == ""
 
-    def test_unknown_provider_falls_back_to_copilot(self):
-        """알 수 없는 프로바이더는 'copilot'으로 폴백한다."""
-        svc = self._make_service(provider="unknown_provider")
-        assert svc._provider == "copilot"
 
 
 class TestBuildPrompt:

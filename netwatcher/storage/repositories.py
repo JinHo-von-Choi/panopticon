@@ -237,6 +237,25 @@ class EventRepository:
         )
         return {row["severity"]: row["cnt"] for row in rows}
 
+    async def count_by_day_since(self, since: str) -> dict[str, int]:
+        """특정 타임스탬프 이후 UTC 날짜별 이벤트 수를 DB에서 전부 집계한다."""
+        rows = await self._db.pool.fetch(
+            """SELECT to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, COUNT(*) AS cnt
+               FROM events WHERE timestamp >= $1 GROUP BY day ORDER BY day""",
+            since,
+        )
+        return {row["day"]: row["cnt"] for row in rows}
+
+    async def count_by_mitre_since(self, since: str) -> dict[str, int]:
+        """특정 타임스탬프 이후 ATT&CK 기법별 이벤트 수를 DB에서 전부 집계한다."""
+        rows = await self._db.pool.fetch(
+            """SELECT mitre_attack_id, COUNT(*) AS cnt FROM events
+               WHERE timestamp >= $1 AND mitre_attack_id IS NOT NULL AND mitre_attack_id <> ''
+               GROUP BY mitre_attack_id""",
+            since,
+        )
+        return {row["mitre_attack_id"]: row["cnt"] for row in rows}
+
     async def count_by_engine_since(self, since: str) -> dict[str, int]:
         """특정 타임스탬프 이후 엔진별로 이벤트 수를 집계한다."""
         rows = await self._db.pool.fetch(
@@ -843,10 +862,12 @@ class TrafficStatsRepository:
         )
 
     async def recent(self, minutes: int = 60) -> list[dict]:
-        """최근 N분간의 트래픽 통계를 반환한다."""
+        """최근 N분 안의 트래픽 통계를 시각 오름차순으로 반환한다."""
         rows = await self._db.pool.fetch(
             """SELECT * FROM traffic_stats
-               ORDER BY timestamp DESC LIMIT $1""",
+               WHERE timestamp >= clock_timestamp() - make_interval(mins => $1)
+                 AND timestamp <= clock_timestamp()
+               ORDER BY timestamp ASC""",
             minutes,
         )
         return [dict(row) for row in rows]
