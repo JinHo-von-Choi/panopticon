@@ -219,6 +219,20 @@ def read_env(path):
     return values
 
 
+def make_readable(root):
+    """준비한 릴리스를 서비스 계정이 읽고 실행할 수 있게 한다.
+
+    갱신기는 umask 077로 돌아서 venv와 바이트코드 캐시가 root 전용으로 생긴다.
+    읽기·실행 권한만 더하고 다른 계정의 쓰기 권한은 뺀다. 릴리스에는 비밀값이 없다.
+    """
+    for path in [root, *root.rglob('*')]:
+        if path.is_symlink():
+            continue
+        mode = path.stat().st_mode
+        extra = 0o055 if path.is_dir() or mode & 0o100 else 0o044
+        path.chmod((mode | extra) & ~0o022)
+
+
 def activate(link, destination):
     # Unique directories prevent an interrupted previous swap from blocking recovery.
     with tempfile.TemporaryDirectory(prefix='.panopticon-update-', dir=link.parent) as directory:
@@ -250,6 +264,17 @@ class Installation:
             raise ValueError('Use a dedicated database and a backup account with simple identifiers')
         if self.db['PGDATABASE'] in {'postgres', 'template0', 'template1'}:
             raise ValueError('System databases cannot be managed')
+        # schema 범위는 다른 서비스와 같은 DB를 쓰는 설치용이다. 백업·복원이 이 스키마만 다룬다.
+        self.scope = config.get('database_scope', 'database')
+        self.schema = config.get('schema') if self.scope == 'schema' else None
+        if self.scope not in {'database', 'schema'}:
+            raise ValueError('database_scope must be database or schema')
+        if self.scope == 'schema' and (not isinstance(self.schema, str)
+                or not re.fullmatch(r'[a-z_][a-z0-9_]{0,62}', self.schema)
+                or self.schema == 'public' or self.schema.startswith('pg_')):
+            raise ValueError('Specify the managed application schema')
+        if self.scope == 'schema' and self.mode.startswith('compose') and config.get('local_database', True):
+            raise ValueError('Schema scope is for external shared databases')
         self.services = config.get('services', [])
         if self.mode not in {'compose-eve', 'compose-native', 'systemd-eve', 'systemd-native'}:
             raise ValueError('Unsupported installation mode')
@@ -297,7 +322,12 @@ class Installation:
         return command
 
     def validate_recovery(self, source):
-        query = 'SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname=current_user'
+        if getattr(self, 'scope', 'database') == 'schema':
+            # 스키마를 지우고 다시 만들려면 슈퍼유저이거나 스키마 소유자여야 한다.
+            query = ("SELECT r.rolsuper OR EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname = '"
+                     + self.schema + "' AND n.nspowner = r.oid) FROM pg_roles r WHERE r.rolname = current_user")
+        else:
+            query = 'SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname=current_user'
         with tempfile.TemporaryFile() as output:
             run(self.database_command(source, ['psql', '-U', self.db['PGUSER'], '-d', self.db['PGDATABASE'],
                  '-At', '-v', 'ON_ERROR_STOP=1', '-c', query]), env=self.db, stdout=output)
@@ -307,16 +337,46 @@ class Installation:
 
     def backup(self, source, path):
         with path.open('xb') as output:
-            run(self.database_command(source, ['pg_dump', '-U', self.db['PGUSER'], '-d', self.db['PGDATABASE'], '-Fc']), env=self.db, stdout=output)
+            scope = ['-n', self.schema] if getattr(self, 'scope', 'database') == 'schema' else []
+            run(self.database_command(source, ['pg_dump', '-U', self.db['PGUSER'], '-d', self.db['PGDATABASE'], '-Fc', *scope]),
+                env=self.db, stdout=output)
             output.flush()
             os.fsync(output.fileno())
         if path.stat().st_size < 32:
             raise ValueError('Database backup is empty')
 
+    def restore_schema(self, source, backup):
+        """공유 DB에서 이 스키마만 되돌린다. DB는 지우지 않는다.
+
+        슈퍼유저가 아닌 계정은 객체 소유자를 바꾸기 전에 그 역할이 스키마 권한을 가져야 한다.
+        덤프는 스키마 권한을 맨 끝에 복원하므로, 스키마와 스키마 권한을 먼저 넣고
+        나머지를 한 트랜잭션으로 복원한다. 나머지가 실패하면 빈 스키마만 남는다.
+        """
+        target = ['-U', self.db['PGUSER'], '-d', self.db['PGDATABASE']]
+        run(self.database_command(source, ['psql', *target, '-v', 'ON_ERROR_STOP=1',
+            '-c', 'DROP SCHEMA IF EXISTS "' + self.schema + '" CASCADE']), env=self.db)
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            # 순서를 바꿔 복원하려면 덤프를 되감아 읽어야 하므로 표준입력이 아닌 파일 경로를 넘긴다.
+            with (work / 'toc').open('wb') as toc:
+                run(self.database_command(source, ['pg_restore', '-l', str(backup)]), env=self.db, stdout=toc)
+            entries = (work / 'toc').read_text().splitlines()
+            head = re.compile(r'\d+; \d+ \d+ (SCHEMA - |ACL - SCHEMA )' + re.escape(self.schema) + ' ')
+            first = [line for line in entries if head.match(line)]
+            if not any(' SCHEMA - ' in line for line in first):
+                raise ValueError('Backup does not contain the managed schema')
+            rest = [line for line in entries if line not in first and not line.startswith(';')]
+            for name, lines, options in (('first', first, []), ('rest', rest, ['--single-transaction'])):
+                (work / name).write_text('\n'.join(lines) + '\n')
+                run(self.database_command(source, ['pg_restore', *target, '--exit-on-error', *options,
+                    '-L', str(work / name), str(backup)]), env=self.db)
+
     def restore(self, source, backup):
+        if getattr(self, 'scope', 'database') == 'schema':
+            return self.restore_schema(source, backup)
         # Dedicated DB only. Explicitly remove new-schema objects before restoring the snapshot.
-        for command in [ ['dropdb', '-U', self.db['PGUSER'], '--force', self.db['PGDATABASE']],
-                         ['createdb', '-U', self.db['PGUSER'], '-O', self.db['PGUSER'], self.db['PGDATABASE']] ]:
+        for command in [['dropdb', '-U', self.db['PGUSER'], '--force', self.db['PGDATABASE']],
+                        ['createdb', '-U', self.db['PGUSER'], '-O', self.db['PGUSER'], self.db['PGDATABASE']]]:
             run(self.database_command(source, command), env=self.db)
         with backup.open('rb') as stream:
             run(self.database_command(source, ['pg_restore', '-U', self.db['PGUSER'], '-d', self.db['PGDATABASE'], '--exit-on-error']), env=self.db, stdin=stream)
@@ -401,6 +461,7 @@ def update(installation, release, gh):
         if installation.mode.startswith('compose'):
             installation.prepare(old)
         installation.prepare(destination)
+        make_readable(destination)
     write_status(state, 'prepared', version=number)
     # Write the recovery journal before stopping any component; interrupted updates recover on next run.
     journal = state / 'recovery.json'

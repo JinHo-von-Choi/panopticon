@@ -81,11 +81,19 @@ def grant_runtime(conn,names,schema):
             for table in sorted(writes | {'audit_log'} | ({'case_history','business_review_history'} if kind=='console' else set())):
                 cur.execute('SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=%s AND table_name=%s AND column_name=\'id\')',(schema,table))
                 if not cur.fetchone()[0]:continue
+                # 열 기본값이 실제로 쓰는 시퀀스와 소유 시퀀스를 모두 찾는다.
+                # 파티션 전환 등으로 시퀀스가 둘이 되면 소유 시퀀스만으로는 기본값 시퀀스를 놓친다.
+                cur.execute("""SELECT DISTINCT s.relname FROM pg_attrdef ad
+                    JOIN pg_depend d ON d.classid='pg_attrdef'::regclass AND d.objid=ad.oid
+                        AND d.refclassid='pg_class'::regclass
+                    JOIN pg_class s ON s.oid=d.refobjid AND s.relkind='S'
+                    WHERE ad.adrelid=%s::regclass AND s.relnamespace=%s::regnamespace""",(schema+'.'+table,schema))
+                defaults={row[0] for row in cur.fetchall()}
                 cur.execute('SELECT pg_get_serial_sequence(%s,\'id\')',(schema+'.'+table,))
-                sequence=cur.fetchone()[0]
-                if sequence:
-                    pieces=sequence.split('.')
-                    cur.execute(sql.SQL('GRANT USAGE ON SEQUENCE {} TO {}').format(sql.Identifier(*pieces),role))
+                owned=cur.fetchone()[0]
+                if owned:defaults.add(owned.split('.')[-1])
+                for sequence in sorted(defaults):
+                    cur.execute(sql.SQL('GRANT USAGE ON SEQUENCE {}.{} TO {}').format(sql.Identifier(schema),sql.Identifier(sequence),role))
         cur.execute(sql.SQL('GRANT EXECUTE ON FUNCTION {}.sensor_account_for_share(uuid) TO {}').format(sql.Identifier(schema),sql.Identifier(names['sensor'])))
         cur.execute(sql.SQL('GRANT EXECUTE ON FUNCTION {}.archive_sensor_claims(text,uuid,uuid,integer) TO {}').format(sql.Identifier(schema),sql.Identifier(names['sensor'])))
 

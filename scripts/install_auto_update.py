@@ -97,7 +97,12 @@ def register(args):
               'env_file': str(env_file), 'database_env': str(db_file),
               'local_database': not args.external_database, 'services': args.services or [],
               'gh': str(gh), 'health_url': 'http://127.0.0.1:' + str(args.port) + '/health',
-              'policy_file': str(config_dir / 'update.env')}
+              'policy_file': str(config_dir / 'update.env'),
+              'database_scope': args.database_scope}
+    if args.database_scope == 'schema':
+        if not args.schema:
+            raise ValueError('Specify --schema with --database-scope schema')
+        config['schema'] = args.schema
     if args.mode.startswith('systemd'):
         if not args.config:
             raise ValueError('Specify the existing external application configuration with --config')
@@ -185,6 +190,9 @@ def main():
     parser.add_argument('--grants-env')
     parser.add_argument('--services', nargs='+')
     parser.add_argument('--external-database', action='store_true')
+    parser.add_argument('--database-scope', choices=('database', 'schema'), default='database',
+                        help='schema: back up and restore only --schema in a shared database')
+    parser.add_argument('--schema')
     parser.add_argument('--port', type=int, default=38585)
     parser.add_argument('--gh', default='/usr/bin/gh')
     args = parser.parse_args()

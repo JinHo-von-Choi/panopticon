@@ -75,3 +75,38 @@ def test_real_runtime_roles_have_separate_credentials_and_deny_ddl_hash_and_audi
                     if not cur.fetchone()[0]:continue
                     cur.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(name)))
                     cur.execute(sql.SQL('DROP ROLE IF EXISTS {}').format(sql.Identifier(name)))
+
+
+def test_runtime_roles_can_use_sequence_referenced_by_column_default(config):
+    """기본값이 소유 시퀀스가 아닌 다른 시퀀스를 써도 런타임 역할이 행을 넣을 수 있다."""
+    pg=config.section('postgresql');prefix='role_'+uuid4().hex[:12];schema=prefix
+    names={kind:prefix+'_'+kind for kind in ('migrate','console','sensor')}
+    passwords={kind:secrets.token_hex(32) for kind in names}
+    options=dict(host=pg['host'],port=pg['port'],dbname=pg['database'])
+    with closing(psycopg2.connect(**options,user=pg['username'],password=pg['password'])) as admin:
+        admin.autocommit=True
+        try:
+            with admin:provision_roles(admin,names,schema,'Panopticon test',passwords)
+            with closing(psycopg2.connect(**options,user=names['migrate'],password=passwords['migrate'])) as migrate:
+                with migrate.cursor() as cur:
+                    cur.execute(sql.SQL('SET search_path TO {},public').format(sql.Identifier(schema)))
+                    for statement in ALL_SCHEMAS:cur.execute(statement)
+                    cur.execute('CREATE TABLE alembic_version(version_num varchar(32) PRIMARY KEY)')
+                    cur.execute('CREATE SEQUENCE events_replacement_seq')
+                    cur.execute("ALTER TABLE events ALTER COLUMN id SET DEFAULT nextval('events_replacement_seq')")
+                grant_runtime(migrate,names,schema)
+                migrate.commit()
+            with closing(psycopg2.connect(**options,user=names['sensor'],password=passwords['sensor'])) as sensor:
+                with sensor, sensor.cursor() as cur:
+                    cur.execute(sql.SQL('SET search_path TO {},public').format(sql.Identifier(schema)))
+                    cur.execute("SELECT set_config('app.current_tenant_id','00000000-0000-0000-0000-000000000000',true)")
+                    cur.execute("INSERT INTO events(engine,severity,title) VALUES('probe','INFO','probe') RETURNING id")
+                    assert cur.fetchone()[0] == 1
+        finally:
+            with admin.cursor() as cur:
+                cur.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(schema)))
+                for name in names.values():
+                    cur.execute('SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=%s)',(name,))
+                    if not cur.fetchone()[0]:continue
+                    cur.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(name)))
+                    cur.execute(sql.SQL('DROP ROLE IF EXISTS {}').format(sql.Identifier(name)))

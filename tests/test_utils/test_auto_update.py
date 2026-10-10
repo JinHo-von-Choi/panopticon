@@ -392,3 +392,121 @@ def test_actual_verifier_uses_generated_service_paths_with_protected_home(tmp_pa
     result = subprocess.run(command + [image, 'attestation', 'trusted-root', '--verify-only'],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr[-1500:]
+
+
+def test_real_postgres_schema_scope_restores_only_managed_schema(tmp_path):
+    """공유 DB, 슈퍼유저 아닌 백업 계정: 관리 스키마만 되돌리고 다른 서비스 스키마는 건드리지 않는다."""
+    import os
+    import secrets
+    import shutil
+    import subprocess
+    import time
+    from uuid import uuid4
+    docker = shutil.which('docker')
+    if not docker or subprocess.run([docker, 'image', 'inspect', 'postgres:16-alpine'], capture_output=True).returncode:
+        pytest.skip('Requires a local PostgreSQL16 Docker image')
+    name = 'panopticon-update-test-' + uuid4().hex[:12]
+    credentials = tmp_path / 'postgres.env'
+    credentials.write_text('POSTGRES_PASSWORD=' + secrets.token_hex(24) + '\n')
+    credentials.chmod(0o600)
+    def command(*args, input=None, user='postgres'):
+        return subprocess.run([docker, 'exec', '-i', name, *args], input=input, capture_output=True, check=True).stdout
+    subprocess.run([docker, 'run', '-d', '--name', name, '--label', 'panopticon.test=auto-update',
+                    '--network', 'none', '--env-file', str(credentials), 'postgres:16-alpine'], capture_output=True, check=True)
+    try:
+        for _ in range(60):
+            ready = subprocess.run([docker, 'exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres'], capture_output=True)
+            if ready.returncode == 0:
+                break
+            time.sleep(0.5)
+        assert ready.returncode == 0, 'PostgreSQL did not become ready'
+        command('createdb', '-U', 'postgres', 'shared_fixture')
+        command('psql', '-U', 'postgres', '-d', 'shared_fixture', '-v', 'ON_ERROR_STOP=1', input=b'''
+CREATE ROLE app_admin LOGIN CREATEROLE; CREATE ROLE app_migrate; CREATE ROLE app_reader;
+GRANT app_migrate TO app_admin WITH ADMIN OPTION, SET TRUE;
+GRANT CREATE ON DATABASE shared_fixture TO app_admin;
+CREATE SCHEMA app AUTHORIZATION app_admin;
+GRANT ALL ON SCHEMA app TO app_migrate;
+GRANT USAGE ON SCHEMA app TO app_reader;
+SET ROLE app_migrate;
+CREATE TABLE app.evidence(id integer PRIMARY KEY, note text);
+CREATE FUNCTION app.marker() RETURNS int LANGUAGE sql AS 'SELECT 1';
+INSERT INTO app.evidence VALUES(1,'preserve');
+GRANT SELECT ON app.evidence TO app_reader;
+RESET ROLE;
+CREATE SCHEMA other_service;
+CREATE TABLE other_service.data(id integer);
+INSERT INTO other_service.data VALUES(1);
+''')
+        installation = updater.Installation.__new__(updater.Installation)
+        installation.db = dict(os.environ)
+        installation.db.update(PGUSER='app_admin', PGDATABASE='shared_fixture')
+        installation.scope, installation.schema = 'schema', 'app'
+        executed = []
+        def database_command(source, args):
+            # 호스트 파일 인자는 컨테이너로 복사해 같은 경로 이름으로 넘긴다.
+            mapped = []
+            for arg in args:
+                if os.path.isfile(arg):
+                    inside = '/tmp/' + uuid4().hex
+                    subprocess.run([docker, 'cp', arg, name + ':' + inside], capture_output=True, check=True)
+                    arg = inside
+                mapped.append(arg)
+            executed.append(args[0])
+            return [docker, 'exec', '-i', name, *mapped]
+        installation.database_command = database_command
+        installation.validate_recovery(tmp_path)
+        backup = tmp_path / 'before.dump'
+        installation.backup(tmp_path, backup)
+        command('psql', '-U', 'postgres', '-d', 'shared_fixture', '-v', 'ON_ERROR_STOP=1',
+                input=b"DELETE FROM app.evidence; CREATE TABLE app.new_only(id int); INSERT INTO other_service.data VALUES(2);")
+        installation.restore(tmp_path, backup)
+        observed = command('psql', '-U', 'postgres', '-d', 'shared_fixture', '-At', '-v', 'ON_ERROR_STOP=1', input=b'''
+SELECT note FROM app.evidence WHERE id=1;
+SELECT to_regclass('app.new_only') IS NULL;
+SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='app.evidence'::regclass;
+SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname='marker';
+SELECT has_table_privilege('app_reader','app.evidence','SELECT');
+SELECT has_schema_privilege('app_migrate','app','CREATE');
+SELECT count(*) FROM other_service.data;
+''').decode().splitlines()
+        assert observed == ['preserve', 't', 'app_migrate', 'app_migrate', 't', 't', '2']
+        assert 'dropdb' not in executed and 'createdb' not in executed
+    finally:
+        subprocess.run([docker, 'rm', '-f', '-v', name], capture_output=True, check=True)
+
+
+def test_schema_scope_rejects_public_and_missing_schema(monkeypatch):
+    monkeypatch.setattr(updater, 'read_env', lambda path: {'NETWATCHER_DB_NAME': 'shared', 'NETWATCHER_DB_USER': 'admin'})
+    base = {'source': '/opt/panopticon', 'state': '/var/lib/panopticon-updater', 'mode': 'systemd-eve',
+            'env_file': '/dev/null', 'services': ['panopticon-eve.service']}
+    # 유효한 범위는 스키마 검사를 통과하고 그 다음의 소스 디렉터리 검사에서 멈춘다.
+    for valid in ({'database_scope': 'schema', 'schema': 'netwatcher'}, {}):
+        with pytest.raises(ValueError, match='managed source directory'):
+            updater.Installation(base | valid)
+    for schema in (None, 'public', 'pg_catalog', 'Bad-Name'):
+        with pytest.raises(ValueError, match='managed application schema'):
+            updater.Installation(base | {'database_scope': 'schema', 'schema': schema})
+    with pytest.raises(ValueError, match='database_scope'):
+        updater.Installation(base | {'database_scope': 'cluster'})
+
+
+def test_prepared_release_is_readable_but_not_writable_by_service_users(tmp_path):
+    """umask 077로 만든 venv도 서비스 계정이 실행할 수 있어야 한다."""
+    import os
+    import stat
+    old = os.umask(0o077)
+    try:
+        venv = tmp_path / 'release' / '.venv' / 'bin'
+        venv.mkdir(parents=True)
+        python = venv / 'python'
+        python.write_text('#!/bin/sh\n')
+        python.chmod(0o700)
+        data = tmp_path / 'release' / 'netwatcher.py'
+        data.write_text('x = 1\n')
+        (tmp_path / 'release' / 'shared').mkdir(mode=0o777)
+    finally:
+        os.umask(old)
+    updater.make_readable(tmp_path / 'release')
+    for path, expected in ((venv, 0o755), (python, 0o755), (data, 0o644), (tmp_path / 'release' / 'shared', 0o755)):
+        assert stat.S_IMODE(path.stat().st_mode) == expected, path
