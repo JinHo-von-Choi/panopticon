@@ -11,6 +11,7 @@ let layer = null;
 let state = 'pending';
 let selected = null;
 let origin = null;
+let gaps = null;
 const el = id => document.getElementById(`mitre-${id}`);
 const t = (key, options) => window.i18next.t(`console.mitre.${key}`, options);
 const format = value => new Intl.NumberFormat(window.i18next.language).format(value);
@@ -102,12 +103,38 @@ function render() {
     renderDetail();
 }
 
+function renderGaps() {
+    const body = el('gaps');
+    body.replaceChildren();
+    el('gap-count').textContent = gaps ? `(${gaps.length})` : `(${t('gaps_unavailable')})`;
+    for (const gap of gaps || []) {
+        const row = document.createElement('tr');
+        for (const value of [gap.technique_id, gap.name, gap.tactic]) row.append(textNode('td', '', String(value ?? '')));
+        body.append(row);
+    }
+}
+
+async function loadGaps(hours, id) {
+    // 미관측 기법 목록이 실패해도 매트릭스는 그대로 보여 준다.
+    try {
+        const response = await authFetch(`/api/hunting/coverage?hours=${hours}`);
+        if (!response.ok) throw new Error('Coverage unavailable');
+        const data = await response.json();
+        if (id !== requestId) return;
+        gaps = Array.isArray(data.gaps) ? data.gaps : null;
+    } catch (_) {
+        if (id === requestId) gaps = null;
+    }
+    if (id === requestId) renderGaps();
+}
+
 export async function loadMitreMatrix() {
     if (!isAuthEnabled()) return;
     const id = ++requestId;
     const hours = ['1', '24', '168'].includes(el('hours').value) ? el('hours').value : '24';
     el('detail').close(); selected = null;
     layer = null; state = 'loading'; render();
+    loadGaps(hours, id);
     try {
         const response = await authFetch(`/api/hunting/navigator?hours=${hours}`);
         if (!response.ok) throw new Error('Navigator unavailable');
@@ -141,9 +168,9 @@ export function registerMitreListeners() {
     el('detail').addEventListener('close', () => {
         origin?.focus(); origin = null; selected = null;
     });
-    window.i18next.on('languageChanged', render);
+    window.i18next.on('languageChanged', () => { render(); renderGaps(); });
     window.addEventListener('nw-session-ended', () => {
-        ++requestId; layer = null; state = 'pending'; selected = null;
+        ++requestId; layer = null; state = 'pending'; selected = null; gaps = null; renderGaps();
         el('detail').close(); el('detail-title').textContent = ''; el('detail-body').replaceChildren();
         el('search').value = ''; render();
     });

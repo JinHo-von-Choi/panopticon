@@ -11,6 +11,8 @@
   codex    — codex <prompt>
   gemini   — gemini -p <prompt>
   agent    — claude --agent <prompt>        (실험적)
+  anthropic          — Anthropic Messages API (키는 환경변수)
+  openai_compatible  — OpenAI 호환 Chat Completions (키는 환경변수)
 
 작성자: 최진호
 작성일: 2026-02-27
@@ -19,11 +21,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import ipaddress
 import json
 import logging
 import re
 import copy
 import math
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +40,8 @@ if TYPE_CHECKING:
     from netwatcher.storage.repositories import EventRepository
     from netwatcher.utils.config import Config
     from netwatcher.utils.yaml_editor import YamlConfigEditor
+
+from netwatcher.ai.providers import JSON_INSTRUCTION, ProviderError, build_provider, parse_decision
 
 logger = logging.getLogger("netwatcher.services.ai_analyzer")
 
@@ -55,15 +62,6 @@ class AIAnalyzerService:
 
     config의 ``ai_analyzer.provider`` 값으로 CLI 백엔드를 선택한다.
     """
-
-    # provider → CLI 커맨드 프리픽스. 프롬프트는 항상 마지막 인자로 추가된다.
-    _PROVIDER_COMMANDS: dict[str, list[str]] = {
-        "copilot": ["gh",     "copilot", "explain"],
-        "claude":  ["claude", "-p"],
-        "codex":   ["codex"],
-        "gemini":  ["gemini", "-p"],
-        "agent":   ["claude", "--agent"],
-    }
 
     # ------------------------------------------------------------------ #
     # 파싱                                                                  #
@@ -164,11 +162,23 @@ class AIAnalyzerService:
         self._max_pct:          int = int(ai_cfg.get("max_threshold_increase_pct", 20))
         self._timeout:          int = int(ai_cfg.get("copilot_timeout_seconds", 60))
 
-        if self._provider not in self._PROVIDER_COMMANDS:
-            raise ValueError(
-                f"ai_analyzer.provider must be one of {sorted(self._PROVIDER_COMMANDS)} "
-                f"(got {self._provider!r})"
-            )
+        # 알 수 없는 공급자는 기본값으로 바꾸지 않고 기동을 거부한다.
+        self._backend = build_provider(ai_cfg, float(self._timeout))
+        self._daily_limit: int = int(ai_cfg.get("daily_call_limit", 96))
+        if not 1 <= self._daily_limit <= 10000:
+            raise ValueError("ai_analyzer.daily_call_limit must be 1-10000")
+        # 외부 공급자로 보내기 전에 내부 주소를 가린다(기본 켜짐).
+        self._mask_internal = bool(ai_cfg.get("mask_internal_ips", True))
+        self._calls_day: str = ""
+        self._calls_today: int = 0
+        self._last_prompt_sha: str | None = None
+        self._last_hashes: dict[str, str] = {}
+
+        # 작업이 살아 있다는 것과 분석이 성공했다는 것은 다르다. 마지막 시도 결과를 남긴다.
+        self._health: dict[str, Any] = {
+            "last_attempt_at": None, "last_success_at": None,
+            "consecutive_failures": 0, "last_failure": None,
+        }
 
         self._mt_threshold:    int = int(ai_cfg.get("consecutive_mt_threshold",    2))
         self._max_decrease_pct: int = int(ai_cfg.get("max_threshold_decrease_pct", 10))
@@ -213,6 +223,7 @@ class AIAnalyzerService:
                 "provider": self._provider,
                 "status": "proposed",
                 "applied": False,
+                **self._last_hashes,
             },
         }
 
@@ -376,37 +387,30 @@ class AIAnalyzerService:
     # ------------------------------------------------------------------ #
 
     async def _run_ai(self, prompt: str) -> str:
-        """설정된 AI 프로바이더 CLI를 서브프로세스로 실행하고 stdout을 반환한다.
-
-        타임아웃, FileNotFoundError(CLI 미설치), 기타 예외 시 빈 문자열을 반환한다.
-        """
-        cmd = self._PROVIDER_COMMANDS[self._provider] + [prompt]
+        """설정된 공급자에 프롬프트를 보내고 응답 텍스트를 돌려준다. 실패하면 종류를 남기고 빈 문자열."""
+        self._health["last_attempt_at"] = int(time.time())
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if today != self._calls_day:
+            self._calls_day, self._calls_today = today, 0
+        if self._calls_today >= self._daily_limit:
+            return self._fail("budget_exhausted")
+        self._calls_today += 1
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, _ = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=float(self._timeout),
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                logger.warning(
-                    "[ai_analyzer] %s CLI 타임아웃 (%ds)", self._provider, self._timeout,
-                )
-                return ""
-            return stdout.decode("utf-8", errors="replace")
-        except FileNotFoundError:
-            logger.error(
-                "[ai_analyzer] %s CLI를 찾을 수 없음 — 분석 불가", self._provider,
-            )
-            return ""
+            output = await self._backend.complete(prompt)
+        except ProviderError as exc:
+            logger.warning("[ai_analyzer] %s 실패: %s", self._provider, exc.kind)
+            return self._fail(exc.kind)
         except Exception:
             logger.exception("[ai_analyzer] %s 실행 오류", self._provider)
-            return ""
+            return self._fail("error")
+        self._health.update(last_success_at=int(time.time()), consecutive_failures=0, last_failure=None)
+        return output
+
+    def _fail(self, kind: str) -> str:
+        """실패 종류를 상태에 남기고 빈 응답을 돌려준다."""
+        self._health["consecutive_failures"] += 1
+        self._health["last_failure"] = kind
+        return ""
 
     # ------------------------------------------------------------------ #
     # 프롬프트 구성                                                         #
@@ -416,6 +420,7 @@ class AIAnalyzerService:
         """분석 대상 이벤트를 구조화된 Copilot 프롬프트로 변환한다."""
         slim = [
             {
+                "id":        e.get("id"),
                 "engine":    e.get("engine", ""),
                 "severity":  e.get("severity", ""),
                 "title":     e.get("title", ""),
@@ -424,6 +429,8 @@ class AIAnalyzerService:
             }
             for e in events
         ]
+        if self._mask_internal:
+            slim = self._mask(slim)
         events_json = json.dumps(slim, ensure_ascii=False, indent=2)
         
         # 기본 언어 설정 가져오기
@@ -455,6 +462,7 @@ class AIAnalyzerService:
             f"(2) Do any INFO/low-confidence events indicate a more serious missed threat? "
             f"Return the single most important finding. "
             f"EVENTS: {events_json} "
+            + (JSON_INSTRUCTION if self._backend.structured else
             f"Respond ONLY in this exact format: "
             f"VERDICT: CONFIRMED_THREAT | FALSE_POSITIVE | MISSED_THREAT | UNCERTAIN "
             f"ENGINE: <engine_name> "
@@ -463,8 +471,24 @@ class AIAnalyzerService:
             f"1. <reason 1 in {('Korean' if lang == 'ko' else 'English')}> "
             f"2. <reason 2> "
             f"3. <reason 3> "
-            f"ADJUST: <param>=<numeric_value> (FALSE_POSITIVE: raise value, MISSED_THREAT: lower value, can repeat)"
+            f"ADJUST: <param>=<numeric_value> (FALSE_POSITIVE: raise value, MISSED_THREAT: lower value, can repeat)")
         )
+
+    @staticmethod
+    def _mask(events: list[dict]) -> list[dict]:
+        """사설 주소를 host-1, host-2처럼 바꾼다. 같은 주소는 같은 이름을 받는다."""
+        names: dict[str, str] = {}
+        masked = []
+        for event in events:
+            value = event.get("source_ip", "")
+            try:
+                private = ipaddress.ip_address(value).is_private
+            except ValueError:
+                private = False
+            if private:
+                value = names.setdefault(value, f"host-{len(names) + 1}")
+            masked.append({**event, "source_ip": value})
+        return masked
 
     # ------------------------------------------------------------------ #
     # 분석 결과 적용                                                        #
@@ -609,11 +633,28 @@ class AIAnalyzerService:
             return
 
         prompt = self._build_prompt(events)
+        prompt_sha = hashlib.sha256(prompt.encode()).hexdigest()
+        if prompt_sha == self._last_prompt_sha:
+            # 같은 입력을 다시 보내면 같은 제안이 중복된다. 비용도 들지 않게 건너뛴다.
+            logger.debug("[ai_analyzer] 입력이 지난번과 같아 분석을 건너뜀")
+            return
         raw    = await self._run_ai(prompt)
         if not raw:
             return
 
-        result = self._parse_response(raw)
+        if self._backend.structured:
+            try:
+                result = parse_decision(raw, known_event_ids=[e.get("id") for e in events])
+            except ProviderError as exc:
+                # 계약에 맞지 않는 출력은 적용하지 않는다.
+                self._fail(exc.kind)
+                return
+        else:
+            result = self._parse_response(raw)
+        self._last_prompt_sha = prompt_sha
+        # 원문은 남기지 않고 해시만 제안·판정 기록에 붙인다.
+        self._last_hashes = {"request_sha256": prompt_sha,
+                             "response_sha256": hashlib.sha256(raw.encode()).hexdigest()}
         logger.info(
             "[ai_analyzer] 분석 완료: verdict=%s engine=%s",
             result.verdict, result.engine,

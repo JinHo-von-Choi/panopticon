@@ -23,6 +23,9 @@ import { initReplay, loadReplay } from './modules/replay.js';
 import { loadCapabilities, featureEnabled } from './core/capabilities.js';
 import { initTheme } from './modules/theme.js';
 import { loadTopology, registerTopologyListeners } from './modules/topology.js';
+import { loadAgents, registerAgentListeners } from './modules/agents.js';
+import { loadObservability, registerObservabilityListeners } from './modules/observability.js';
+import { loadObservedAssets, registerObservedAssetListeners } from './modules/observed_assets.js';
 import { loadCompliance, registerComplianceListeners } from './modules/compliance.js';
 import { loadMitreMatrix, registerMitreListeners } from './modules/mitre.js';
 import { loadUsers } from './modules/users.js';
@@ -145,6 +148,9 @@ function registerListeners() {
     registerDefenseListeners();
     registerHuntListeners();
     registerTopologyListeners();
+    registerAgentListeners();
+    registerObservabilityListeners();
+    registerObservedAssetListeners();
     registerComplianceListeners();
     registerMitreListeners();
 
@@ -159,9 +165,11 @@ function registerListeners() {
             document.getElementById(`tab-${target}`).classList.add("active");
             
             if (target === "events")       loadEvents(0);
-            if (target === "devices")      loadDevices();
+            if (target === "devices")      { loadDevices(); loadObservedAssets(0); }
             if (target === "users")        loadUsers();
             if (target === "topology")     loadTopology();
+            if (target === "agents")       loadAgents();
+            if (target === "observability") loadObservability();
             if (target === "compliance")   loadCompliance();
             if (target === "mitre")        loadMitreMatrix();
             if (target === "traffic")      loadCharts();

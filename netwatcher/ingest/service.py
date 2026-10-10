@@ -1,15 +1,21 @@
 """복수의 EVE 파일 수집 작업을 시작하고 정상 종료한다."""
 
 import asyncio
+import logging
 
+from netwatcher.ingest.assets import backfill
 from netwatcher.ingest.repository import EveRepository
 from netwatcher.ingest.tailer import EveTailer
 
 
+logger = logging.getLogger("netwatcher.ingest.service")
+
+
 class EveService:
-    def __init__(self, db, sources, event_stream=None, retention=None):
+    def __init__(self, db, sources, event_stream=None, retention=None, local_networks=None, feeds=None):
         if not isinstance(sources, list) or not 1 <= len(sources) <= 8:
             raise ValueError("Configure between one and eight EVE sources")
+        self.db = db
         self.collectors = []
         policy = retention or {}
         self.retention_days = policy.get("days", 30)
@@ -25,7 +31,9 @@ class EveService:
             if identity in identities:
                 raise ValueError("Duplicate EVE source identity")
             identities.add(identity)
-            self.collectors.append(EveTailer(EveRepository(db, event_stream, **budget), **source))
+            self.collectors.append(EveTailer(EveRepository(db, event_stream, **budget, local_networks=local_networks,
+                                                           feeds=feeds),
+                                             **source))
         self._stop = asyncio.Event()
         self._tasks = []
 
@@ -33,6 +41,15 @@ class EveService:
         if self._tasks:
             raise RuntimeError("EVE service is already started")
         self._stop.clear()
+        # 수집을 시작하기 전에 해야 이미 보존된 기록과 새 기록이 두 번 세어지지 않는다.
+        for collector in self.collectors:
+            try:
+                await backfill(self.db, collector.sensor_id, collector.source_id,
+                               collector.repository.local_networks)
+            except Exception as exc:
+                # 실패하면 표시 행이 롤백되어 다음 시작 때 다시 시도한다. 수집은 막지 않는다.
+                logger.warning("Observed asset backfill failed for %s/%s: %s",
+                               collector.sensor_id, collector.source_id, type(exc).__name__)
         self._tasks = [asyncio.create_task(collector.run(self._stop), name="eve-collector")
                        for collector in self.collectors]
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="eve-retention"))

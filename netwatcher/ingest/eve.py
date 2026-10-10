@@ -9,6 +9,8 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+from netwatcher.ingest.feeds import feed_matches
+
 
 SUPPORTED_TYPES = frozenset({"alert", "flow", "dns", "tls"})
 MAX_LINE_BYTES = 256 * 1024
@@ -32,7 +34,7 @@ def _integer(value, maximum=2**64 - 1):
 
 
 def decode_eve_line(raw: bytes, *, source_id: str, sensor_id: str,
-                    generation: str, offset: int, received_at: datetime | None = None) -> dict:
+                    generation: str, offset: int, received_at: datetime | None = None, feeds=None) -> dict:
     """원본 참조와 해시를 남기고 허용한 필드만 반환한다.
 
     파일 세대는 수집기가 생성한 UUID다. 동일 위치를 다시 읽으면 같은 ingest_id를
@@ -139,4 +141,10 @@ def decode_eve_line(raw: bytes, *, source_id: str, sensor_id: str,
             if key in detail:
                 data[key] = _text(detail[key], 128)
     result["details"] = data
+    if feeds is not None:
+        # DNS 질의 이름과 SNI는 저장하지 않는다. 피드에 있는 지표와 일치할 때만 그 지표를 남긴다.
+        names = {"rrname": detail.get("rrname")} if event_type == "dns" else {"sni": detail.get("sni")} if event_type == "tls" else {}
+        matches = feed_matches(result, names, feeds)
+        if matches:
+            result["feed_match"] = matches
     return result

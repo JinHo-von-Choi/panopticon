@@ -3,6 +3,7 @@
 import json
 import uuid
 
+from netwatcher.ingest.assets import parse_networks, record_assets
 from netwatcher.storage.repositories import EventRepository
 
 
@@ -15,7 +16,8 @@ class EveCapacityError(RuntimeError):
 
 
 class EveRepository:
-    def __init__(self, db, event_stream=None, *, max_records=250000, max_bytes=268435456):
+    def __init__(self, db, event_stream=None, *, max_records=250000, max_bytes=268435456, local_networks=None,
+                 feeds=None):
         if (isinstance(max_records, bool) or not isinstance(max_records, int) or not 1 <= max_records <= 10000000 or
                 isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 1024 <= max_bytes <= 64 * 1024**3):
             raise ValueError("Invalid EVE storage budget")
@@ -23,6 +25,9 @@ class EveRepository:
         self._events = EventRepository(db)
         self._event_stream = event_stream
         self.max_records, self.max_bytes = max_records, max_bytes
+        self.local_networks = parse_networks(local_networks)
+        # 수집기가 디코딩할 때 대조한다. 저장소는 피드를 갖고만 있다.
+        self.feeds = feeds
 
     async def load(self, sensor_id, source_id):
         row = await self._db.pool.fetchrow(
@@ -73,6 +78,8 @@ class EveRepository:
                 if count > self.max_records or total > self.max_bytes:
                     raise EveCapacityError("EVE retained data budget exceeded")
                 published = await self._project_records(conn, inserted, event_ids=event_ids)
+                # 새로 저장된 기록만 센다. 같은 범위를 다시 읽어도 건수가 늘지 않는다.
+                await record_assets(conn, sensor_id, source_id, inserted, self.local_networks)
                 await conn.execute("""UPDATE eve_storage_usage SET record_count=$3,accounted_bytes=$4
                                    WHERE sensor_id=$1 AND source_id=$2""", sensor_id, source_id, count, total)
         if self._event_stream is not None:

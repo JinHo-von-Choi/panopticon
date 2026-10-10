@@ -104,14 +104,16 @@ def gate_ai_write_isolation() -> GateResult:
     if not path.exists():
         return GateResult("G0-2", "AI 쓰기 격리", False, f"파일 없음: {path}")
 
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    # 분석기와 공급자 계층 모두 같은 금지 호출 검사를 받는다.
+    paths = [path, *sorted((REPO_ROOT / "netwatcher" / "ai").glob("*.py"))]
     called = {
         node.func.attr
-        for node in ast.walk(tree)
+        for source in paths
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
     forbidden = called & {"update_engine_config", "reload_engine", "block_ip", "add_block"}
-    checks = [f"forbidden_calls={sorted(forbidden) or 'none'}"]
+    checks = [f"files={len(paths)}", f"forbidden_calls={sorted(forbidden) or 'none'}"]
     if forbidden:
         return GateResult(
             "G0-2", "AI 쓰기 격리", False,

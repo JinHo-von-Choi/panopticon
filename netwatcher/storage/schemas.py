@@ -681,6 +681,44 @@ CREATE POLICY tenant_isolation_{table} ON {table}
 from netwatcher.storage.account_access import ACCOUNT_LOCK_FUNCTION_SQL
 from netwatcher.storage.sensor_claim_retention import SENSOR_CLAIM_RETENTION_SQL
 
+# 센서 운영 표본. 누적 계수(cpu·memory.events)는 같은 boot_id 안에서만 증분을 계산한다.
+OBSERVED_ASSETS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS observed_assets (
+    sensor_id   VARCHAR(64) NOT NULL,
+    source_id   VARCHAR(64) NOT NULL,
+    ip          INET        NOT NULL,
+    mac         MACADDR,
+    first_seen  TIMESTAMPTZ NOT NULL,
+    last_seen   TIMESTAMPTZ NOT NULL,
+    evidence    JSONB       NOT NULL DEFAULT '{}',
+    PRIMARY KEY (sensor_id, source_id, ip)
+);
+CREATE INDEX IF NOT EXISTS idx_observed_assets_last_seen ON observed_assets(last_seen DESC);
+CREATE TABLE IF NOT EXISTS observed_asset_backfills (
+    sensor_id   VARCHAR(64) NOT NULL,
+    source_id   VARCHAR(64) NOT NULL,
+    records     BIGINT,
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sensor_id, source_id)
+);
+"""
+
+SENSOR_SAMPLES_TABLE = """
+CREATE TABLE IF NOT EXISTS sensor_samples (
+    sensor_id           TEXT         NOT NULL,
+    boot_id             UUID         NOT NULL,
+    sampled_at          TIMESTAMPTZ  NOT NULL,
+    loop_lag_ms         REAL,
+    lease_publish_ms    REAL,
+    cpu_usage_usec      BIGINT,
+    cpu_throttled_usec  BIGINT,
+    memory_current      BIGINT,
+    memory_high_events  BIGINT,
+    PRIMARY KEY (sensor_id, sampled_at)
+);
+CREATE INDEX IF NOT EXISTS idx_sensor_samples_time ON sensor_samples (sampled_at);
+"""
+
 ALL_SCHEMAS = [
     SENSOR_CONTROL_CLAIMS_SCHEMA,
     SENSOR_RUNTIME_STATE_SCHEMA,
@@ -710,6 +748,8 @@ ALL_SCHEMAS = [
     AUDIT_LOG_TABLE,
     *AUDIT_LOG_INDEXES,
     SENSOR_CLAIM_RETENTION_SQL,
+    SENSOR_SAMPLES_TABLE,
+    OBSERVED_ASSETS_SCHEMA,
     CONFIG_PROPOSALS_TABLE,
     *CONFIG_PROPOSALS_INDEXES,
     EVIDENCE_RECORDS_TABLE,

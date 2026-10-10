@@ -11,20 +11,37 @@ let statusData = null, statusState = 'loading', logsState = 'empty', logRows = [
 const t = key => window.i18next.t('console.ai_status.' + key);
 const session = () => {const currentEpoch = epoch, token = getAuthToken();return () => currentEpoch === epoch && token === getAuthToken();};
 
+const CLI_PROVIDERS = ['copilot','claude','codex','gemini','agent'];
+const HTTP_PROVIDERS = ['anthropic','openai_compatible'];
+
 function validStatus(data) {
-    const keys = ['enabled','running','state','provider','interval_minutes','lookback_minutes','fp_threshold','max_pct','consecutive_fp'];
+    const keys = ['enabled','running','state','provider','interval_minutes','lookback_minutes','fp_threshold','max_pct','consecutive_fp','health','credential'];
+    if (!validHealth(data?.health)) return false;
+    if (![null,'configured','missing'].includes(data?.credential)) return false;
     if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length !== keys.length
             || keys.some(key => !Object.hasOwn(data,key)) || typeof data.enabled !== 'boolean' || typeof data.running !== 'boolean') return false;
     const numbers = ['interval_minutes','lookback_minutes','fp_threshold','max_pct'];
     if (data.state === 'unconfigured') return data.enabled === false && data.running === false
-        && numbers.every(key => data[key] === null) && data.provider === null
+        && numbers.every(key => data[key] === null) && data.provider === null && data.credential === null
         && data.consecutive_fp && typeof data.consecutive_fp === 'object' && !Array.isArray(data.consecutive_fp) && Object.keys(data.consecutive_fp).length === 0;
     return data.enabled && ['running','stopped'].includes(data.state) && data.running === (data.state === 'running')
-        && ['copilot','claude','codex','gemini','agent'].includes(data.provider)
+        && (CLI_PROVIDERS.includes(data.provider) ? data.credential === null
+            : HTTP_PROVIDERS.includes(data.provider) && data.credential !== null)
         && numbers.every(key => Number.isSafeInteger(data[key]) && data[key] > 0 && data[key] <= 2147483647)
         && data.consecutive_fp && !Array.isArray(data.consecutive_fp) && typeof data.consecutive_fp === 'object'
         && Object.keys(data.consecutive_fp).length <= 64
         && Object.entries(data.consecutive_fp).every(([key,value]) => /^[a-z][a-z0-9_]{0,63}$/.test(key) && Number.isSafeInteger(value) && value >= 0 && value <= 2147483647);
+}
+
+function validHealth(health) {
+    const keys = ['last_attempt_at','last_success_at','consecutive_failures','last_failure'];
+    if (!health || typeof health !== 'object' || Array.isArray(health) || Object.keys(health).length !== keys.length
+            || keys.some(key => !Object.hasOwn(health,key))) return false;
+    const time = value => value === null || (Number.isSafeInteger(value) && value >= 0);
+    return time(health.last_attempt_at) && time(health.last_success_at)
+        && Number.isSafeInteger(health.consecutive_failures) && health.consecutive_failures >= 0
+        && [null,'not_installed','timeout','exit_status','empty_output','error','auth','rate_limited','http_status',
+            'invalid_output','credential_missing','budget_exhausted'].includes(health.last_failure);
 }
 
 function renderStatus() {
@@ -32,6 +49,15 @@ function renderStatus() {
     for (const [id,key] of [['ai-provider','provider'],['ai-interval','interval_minutes'],['ai-lookback','lookback_minutes'],['ai-fp-threshold','fp_threshold']]) {
         _setText(id, statusData?.[key] ?? '—');
     }
+    // 키 값은 받지도 보여 주지도 않는다. 설정 여부만 표시한다.
+    if (statusData?.credential) _setText('ai-provider', `${statusData.provider} · ${t('credential_' + statusData.credential)}`);
+    // 작업이 살아 있어도 분석이 계속 실패할 수 있으므로 마지막 성공과 실패 종류를 따로 보여 준다.
+    const health = statusData?.health;
+    _setText('ai-last-success', !health ? '—'
+        : health.last_success_at === null ? t('never') : new Date(health.last_success_at * 1000).toLocaleString());
+    _setText('ai-failures', !health ? '—'
+        : health.consecutive_failures === 0 ? '0'
+        : `${health.consecutive_failures} (${t('failure_' + health.last_failure)})`);
 }
 
 export async function initAiAnalyzerTab() {

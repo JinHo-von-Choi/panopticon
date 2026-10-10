@@ -1787,6 +1787,39 @@ textarea.input-search {
     cursor: pointer;
 }
 
+.obs-grid {
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+}
+
+.obs-card .obs-body { min-height: 240px; position: relative; }
+.obs-card canvas { max-height: 240px; }
+.obs-picker { margin: 0 0 var(--space-4); }
+.obs-picker-item { display: inline-block; margin-right: var(--space-4); }
+
+.obs-heatmap {
+    display: grid;
+    gap: 2px;
+    grid-template-columns: 3em repeat(24, 1fr);
+}
+
+.obs-heatmap-cell { aspect-ratio: 1; background: var(--warning); border-radius: 2px; }
+.obs-heatmap-day { font-size: 11px; color: var(--text-dim); }
+
+@media (max-width: 600px) {
+    .obs-grid { grid-template-columns: 1fr; }
+}
+
+.capability-notice {
+    background: var(--warning-bg);
+    border-left: 3px solid var(--warning);
+    color: var(--text);
+    font-size: 13px;
+    margin: 0 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
+}
+
 .empty-state {
     color: var(--text-dim);
     font-size: 13px;

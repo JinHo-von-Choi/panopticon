@@ -1,6 +1,7 @@
 """패킷 캡처와 방화벽 조작 없이 EVE 조사 콘솔을 실행한다."""
 
 import asyncio
+import logging
 import signal
 from pathlib import Path
 
@@ -10,13 +11,17 @@ from netwatcher.alerts.stream import EventStream
 from netwatcher.ingest.service import EveService
 from netwatcher.observability.health import HealthChecker
 from netwatcher.storage.database import Database
-from netwatcher.storage.repositories import DeviceRepository, EventRepository, TrafficStatsRepository
+from netwatcher.storage.repositories import (
+    BlocklistRepository, DeviceRepository, EventRepository, TrafficStatsRepository,
+)
 from netwatcher.support import enforce_support
 from netwatcher.utils.logging_setup import setup_logging
 from netwatcher.web.audit_log import AuditLogger
 from netwatcher.web.auth import AuthManager
 from netwatcher.web.rbac import Role, require_role
 from netwatcher.web.server import create_app
+
+logger = logging.getLogger("netwatcher.ingest.runtime")
 
 
 class EveObservation:
@@ -63,16 +68,48 @@ class EveConsole:
                 raise ValueError(f"{path} is incompatible with EVE read-only mode")
         self.db = database or Database(config)
         self.stream = EventStream()
+        self.feeds = self._feed_manager(config)
+        self.blocklist = BlocklistRepository(self.db)
         self.service = EveService(self.db, config.get("input.eve.sources", []), self.stream,
-                                  retention=config.get("input.eve.retention", {}))
+                                  retention=config.get("input.eve.retention", {}),
+                                  local_networks=config.get("input.eve.local_networks"), feeds=self.feeds)
+        self._feed_task = None
         self.observation = EveObservation(self.service)
         self.health = EveHealthChecker(self.db, self.service, self.observation)
         self.app = None
+
+    @staticmethod
+    def _feed_manager(config):
+        """피드는 EVE 기록과 대조만 한다. 피드 설정을 읽지 못하면 대조 없이 수집한다."""
+        try:
+            from netwatcher.threatintel.feed_manager import FeedManager
+            return FeedManager(config)
+        except Exception as exc:
+            logger.warning("Threat feeds unavailable in EVE mode: %s", type(exc).__name__)
+            return None
+
+    async def _refresh_feeds(self):
+        from netwatcher.services.maintenance import _positive_hours
+        interval = _positive_hours(self.config.get("engines.threat_intel.update_interval_hours", 6)) * 3600
+        try:
+            self.feeds.load_custom_entries(await self.blocklist.get_all_custom_ips(),
+                                           await self.blocklist.get_all_custom_domains())
+        except Exception:
+            logger.exception("Custom indicators could not be loaded")
+        while True:
+            try:
+                summary = await self.feeds.update_all()
+                if not summary.succeeded:
+                    logger.error("Threat feed refresh failed (%d feed(s)); keeping previous data", summary.failed)
+            except Exception:
+                logger.exception("Threat feed refresh failed")
+            await asyncio.sleep(interval)
 
     def build_app(self):
         from netwatcher.storage.user_accounts import UserAccounts
         app = create_app(self.config, EventRepository(self.db), DeviceRepository(self.db),
                          TrafficStatsRepository(self.db), self.stream,
+                         blocklist_repo=self.blocklist if self.feeds else None, feed_manager=self.feeds,
                          auth_manager=AuthManager(self.config, users=UserAccounts(self.db)),
                          observation_service=self.observation, health_checker=self.health,
                          audit_logger=AuditLogger(self.db.pool), audit_required=True)
@@ -113,9 +150,14 @@ class EveConsole:
             try:
                 for sig in previous:
                     loop.add_signal_handler(sig, setattr, server, "should_exit", True)
+                if self.feeds is not None:
+                    self._feed_task = asyncio.create_task(self._refresh_feeds(), name="eve-feeds")
                 await self.service.start()
                 await server.serve()
             finally:
+                if self._feed_task is not None:
+                    self._feed_task.cancel()
+                    await asyncio.gather(self._feed_task, return_exceptions=True)
                 await self.service.stop()
                 for sig, handler in previous.items():
                     loop.remove_signal_handler(sig)

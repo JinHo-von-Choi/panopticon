@@ -76,9 +76,10 @@ class TopologyMapper:
         protocol:    str,
         dst_port:    int,
         bytes_count: int,
+        at:          float | None = None,
     ) -> None:
-        """패킷 관찰 시 호출. 노드와 엣지를 갱신한다."""
-        now = time.time()
+        """연결 관찰 시 호출. 노드와 엣지를 갱신한다. at은 관찰 시각(초), 없으면 현재."""
+        now = time.time() if at is None else at
 
         # 노드 upsert — src
         self._upsert_node(src_ip, src_mac, now, connections_out_delta=1)
@@ -112,6 +113,10 @@ class TopologyMapper:
     # ------------------------------------------------------------------
     # 조회
     # ------------------------------------------------------------------
+
+    def replace_with(self, other: "TopologyMapper") -> None:
+        """다른 매퍼에서 새로 만든 그래프로 한 번에 바꾼다. 조회 중에 반쯤 만든 그래프를 보이지 않는다."""
+        self._nodes, self._edges = other._nodes, other._edges
 
     def get_graph(self) -> dict:
         """D3.js force-directed graph 호환 형식으로 반환한다.

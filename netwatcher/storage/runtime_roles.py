@@ -9,13 +9,15 @@ from psycopg2 import sql
 
 SENSOR_READ = {'alembic_version','events','devices','custom_blocklist','traffic_stats','incidents','config_proposals',
     'evidence_records','replay_traces','replay_runs','replay_results','event_ingest','flush_receipts',
-    'asset_context_history','work_schedules','event_work_links','sensor_runtime_state','sensor_control_claims'}
+    'asset_context_history','work_schedules','event_work_links','sensor_runtime_state','sensor_control_claims',
+    'sensor_samples'}
 SENSOR_WRITE = {'events','devices','custom_blocklist','traffic_stats','incidents','config_proposals',
-    'evidence_records','event_ingest','flush_receipts','asset_context_history','sensor_runtime_state','sensor_control_claims'}
+    'evidence_records','event_ingest','flush_receipts','asset_context_history','sensor_runtime_state','sensor_control_claims',
+    'sensor_samples'}
 CONSOLE_READ = SENSOR_READ | {'audit_log','business_reviews','case_workflows','case_history',
-    'business_review_history','user_accounts','oidc_identities','oidc_login_requests',
+    'business_review_history','user_accounts','oidc_identities','oidc_login_requests','observed_assets',
     'response_actions','response_receipts','response_proposals','response_execution_bindings','response_execution_claims'}
-CONSOLE_WRITE = {'events','devices','incidents','replay_traces','replay_runs','replay_results',
+CONSOLE_WRITE = {'events','event_ingest','devices','incidents','replay_traces','replay_runs','replay_results',
     'business_reviews','case_workflows','work_schedules',
     'event_work_links','user_accounts','oidc_identities','oidc_login_requests'}
 CONSOLE_DELETE = {'events','event_ingest','traffic_stats','flush_receipts','incidents',
@@ -69,7 +71,7 @@ def grant_runtime(conn,names,schema):
     """감사 수정·DDL·다른 역할의 자격증명 접근을 런타임에 허용하지 않는다."""
     with conn.cursor() as cur:
         for kind,reads,writes,deletes in (
-            ('sensor',SENSOR_READ,SENSOR_WRITE,{'custom_blocklist'}),
+            ('sensor',SENSOR_READ,SENSOR_WRITE,{'custom_blocklist','sensor_samples'}),
             ('console',CONSOLE_READ,CONSOLE_WRITE,CONSOLE_DELETE)):
             role=sql.Identifier(names[kind])
             cur.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(schema),role))

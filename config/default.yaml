@@ -11,6 +11,8 @@ netwatcher:
         max_records: 250000
         max_bytes: 268435456
         cleanup_interval_seconds: 60
+      # 관찰 자산으로 셀 내부 대역. 생략하면 사설·링크 로컬 대역을 쓴다.
+      local_networks: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"]
       sources:
       - sensor_id: "suricata-1"
         source_id: "office-eve"
@@ -324,7 +326,7 @@ netwatcher:
   ai_analyzer:
     enabled: false                 # AI 오탐 분석 활성화 시 true (CLI 의존성 있음)
     apply_mode: propose            # 반드시 propose — AI는 제안만 한다 (PR 03)
-    provider: "gemini"             # AI 프로바이더: copilot | claude | codex | gemini | agent
+    provider: "gemini"             # CLI: copilot | claude | codex | gemini | agent, HTTP: anthropic | openai_compatible
     interval_minutes: 15           # 분석 실행 주기
     lookback_minutes: 30           # 분석 대상 시간 범위 (최근 N분)
     max_events: 50                 # AI에 전달할 최대 이벤트 수
@@ -332,7 +334,14 @@ netwatcher:
     max_threshold_increase_pct: 20 # 상향 제안 폭 상한 (%)
     consecutive_mt_threshold: 2    # 연속 미탐 판정 횟수 → 하향 *제안*
     max_threshold_decrease_pct: 10 # 하향 제안 폭 상한 (%)
-    copilot_timeout_seconds: 180   # AI CLI 응답 타임아웃
+    copilot_timeout_seconds: 180   # 공급자 응답 시간 제한(CLI·HTTP 공통)
+    daily_call_limit: 96           # 하루 최대 호출 수. 넘으면 다음 날까지 분석하지 않는다
+    mask_internal_ips: true        # 사설 주소를 host-N으로 바꿔 보낸다
+    # HTTP 공급자 전용. 키 값은 설정 파일에 쓰지 않고 api_key_env가 가리키는 환경변수로 넣는다.
+    model: null                    # 예: claude-sonnet-5-5, gpt-4.1-mini
+    endpoint: null                 # 생략하면 공급자 기본 주소. 평문 http는 루프백만 허용
+    api_key_env: null              # 생략하면 ANTHROPIC_API_KEY 또는 OPENAI_API_KEY
+    max_tokens: 1024
 
   daily_report:
     enabled: true

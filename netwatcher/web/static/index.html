@@ -151,7 +151,9 @@
             <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
             <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none" data-i18n="tabs.ai_analyzer">AI Analyzer</button>
             <button class="tab" data-tab="governance" data-i18n="tabs.governance">Governance</button>
+            <button class="tab" type="button" data-tab="observability" aria-controls="tab-observability" data-i18n="tabs.observability">Observability</button>
             <button class="tab" type="button" data-tab="topology" aria-controls="tab-topology" data-i18n="tabs.topology">Topology</button>
+            <button class="tab" type="button" data-tab="agents" aria-controls="tab-agents" data-i18n="tabs.agents">Agents</button>
             <button class="tab" type="button" data-tab="compliance" aria-controls="tab-compliance" data-i18n="tabs.compliance">Compliance</button>
             <button class="tab" type="button" data-tab="mitre" aria-controls="tab-mitre" data-i18n="tabs.mitre">MITRE Matrix</button>
             <button class="tab" data-tab="users" style="display:none" data-i18n="console.users.title">Accounts</button>
@@ -342,6 +344,35 @@
 
         <!-- Devices Tab -->
         <section id="tab-devices" class="tab-content">
+            <p class="capability-notice" data-capability-notice="devices" role="status" hidden></p>
+            <div id="observed-assets-panel" class="hud-panel" hidden>
+                <div class="hud-panel-head">
+                    <h3 data-i18n="console.observed_assets.title">Addresses observed by Suricata</h3>
+                    <div class="hud-meta">
+                        <button type="button" class="btn" id="observed-assets-refresh" data-i18n="common.refresh">Refresh</button>
+                    </div>
+                </div>
+                <p class="scope-hint" data-i18n="console.observed_assets.hint">Internal addresses seen in Suricata EVE records. This is not a complete asset inventory.</p>
+                <div class="toolbar">
+                    <label for="observed-assets-search" data-i18n="console.observed_assets.search">IP or CIDR</label>
+                    <input id="observed-assets-search" type="search" maxlength="64" placeholder="10.0.0.0/24">
+                </div>
+                <p id="observed-assets-status" role="status" aria-live="polite"></p>
+                <table class="data-table">
+                    <thead><tr>
+                        <th>IP</th><th>MAC</th>
+                        <th data-i18n="console.observed_assets.first_seen">First seen</th>
+                        <th data-i18n="console.observed_assets.last_seen">Last seen</th>
+                        <th data-i18n="console.observed_assets.evidence">Records by type</th>
+                        <th data-i18n="console.observed_assets.source">Source</th>
+                    </tr></thead>
+                    <tbody id="observed-assets-body"></tbody>
+                </table>
+                <div class="toolbar">
+                    <button type="button" class="btn" id="observed-assets-prev" disabled data-i18n="console.observed_assets.prev">Previous</button>
+                    <button type="button" class="btn" id="observed-assets-next" disabled data-i18n="console.observed_assets.next">Next</button>
+                </div>
+            </div>
             <div id="inv-summary" class="inv-summary"></div>
             <div class="toolbar">
                 <select id="devices-filter-type">
@@ -389,6 +420,7 @@
 
         <!-- Blocklist Tab -->
         <section id="tab-blocklist" class="tab-content">
+            <p class="capability-notice" data-capability-notice="blocklist" role="status" hidden></p>
             <div class="toolbar">
                 <select id="bl-filter-type">
                     <option value="">All Types</option>
@@ -549,7 +581,71 @@
         </section>
 
         <!-- Topology Tab (Stage 3: Canvas2D 토폴로지 맵) -->
+        <section id="tab-observability" class="tab-content">
+            <div class="toolbar">
+                <label><span data-i18n="console.observability.range">기간</span>
+                    <select id="obs-range">
+                        <option value="15m" data-i18n="console.observability.ranges.15m">15분</option>
+                        <option value="1h" data-i18n="console.observability.ranges.1h">1시간</option>
+                        <option value="6h" data-i18n="console.observability.ranges.6h">6시간</option>
+                        <option value="24h" data-i18n="console.observability.ranges.24h">24시간</option>
+                        <option value="7d" data-i18n="console.observability.ranges.7d">7일</option>
+                        <option value="30d" data-i18n="console.observability.ranges.30d">30일</option>
+                    </select>
+                </label>
+                <label><span data-i18n="console.observability.refresh">자동 갱신</span>
+                    <select id="obs-refresh">
+                        <option value="off" data-i18n="console.observability.refreshes.off">끔</option>
+                        <option value="10s">10s</option>
+                        <option value="30s">30s</option>
+                        <option value="1m">1m</option>
+                    </select>
+                </label>
+                <button id="obs-reload" class="btn" type="button" data-i18n="console.observability.reload">새로고침</button>
+                <span id="obs-status" role="status" aria-live="polite"></span>
+            </div>
+            <details class="obs-picker"><summary data-i18n="console.observability.choose">패널 선택</summary>
+                <div id="obs-panel-picker"></div>
+            </details>
+            <div id="obs-grid" class="obs-grid"></div>
+        </section>
+
+        <section id="tab-agents" class="tab-content">
+            <p class="capability-notice" data-capability-notice="agents" role="status" hidden></p>
+            <div class="toolbar">
+                <button id="agents-refresh" class="btn" type="button" data-i18n="console.agents.refresh">새로고침</button>
+                <span id="agents-summary" role="status" aria-live="polite"></span>
+            </div>
+            <table class="data-table">
+                <thead><tr>
+                    <th data-i18n="console.agents.hostname">호스트</th>
+                    <th data-i18n="console.agents.status">상태</th>
+                    <th data-i18n="console.agents.last_seen">마지막 수신</th>
+                    <th data-i18n="console.agents.latency">지연(ms)</th>
+                    <th data-i18n="console.agents.load">부하(1분)</th>
+                    <th data-i18n="console.agents.memory">사용 가능 메모리</th>
+                    <th data-i18n="console.agents.rss">에이전트 RSS</th>
+                </tr></thead>
+                <tbody id="agents-body"></tbody>
+            </table>
+            <div id="agents-detail" hidden>
+                <h3 id="agents-detail-title"></h3>
+                <table class="data-table">
+                    <thead><tr>
+                        <th data-i18n="console.agents.observed_at">관측 시각</th>
+                        <th data-i18n="console.agents.kind">종류</th>
+                        <th data-i18n="console.agents.local">로컬 주소</th>
+                        <th data-i18n="console.agents.remote">원격 주소</th>
+                        <th data-i18n="console.agents.state">연결 상태</th>
+                    </tr></thead>
+                    <tbody id="agents-events"></tbody>
+                </table>
+                <button id="agents-more" class="btn" type="button" data-i18n="console.agents.more" hidden>이전 기록 더 보기</button>
+            </div>
+        </section>
+
         <section id="tab-topology" class="tab-content">
+            <p class="capability-notice" data-capability-notice="topology" role="status" hidden></p>
             <div class="hud-panel">
                 <div class="hud-panel-head">
                     <h3 data-i18n="console.topology.title">Topology map</h3>
@@ -566,6 +662,7 @@
                     <div id="topology-state" class="hud-canvas-state" role="status" aria-live="polite"
                          data-i18n="console.topology.pending">Topology data integration pending.</div>
                 </div>
+                <p class="scope-hint"><span data-i18n="console.topology.gateways">Gateway candidates (most connected nodes, not a confirmed role):</span> <span id="topology-gateways">—</span></p>
                 <div class="hud-legend">
                     <span class="badge badge-sev badge-sev-critical" data-i18n="console.badge.critical">CRITICAL</span>
                     <span class="badge badge-sev badge-sev-warning" data-i18n="console.badge.warning">WARNING</span>
@@ -583,6 +680,7 @@
                     <h3 data-i18n="console.compliance.title">Compliance coverage</h3>
                     <div class="hud-meta">
                         <span class="badge-slot"><span id="compliance-source-badge" class="badge badge-sev badge-sev-unknown" data-i18n="console.source.unchecked">UNVERIFIED</span></span>
+                        <button type="button" class="btn" id="compliance-report" disabled data-i18n="console.compliance.report">Download report</button>
                         <button type="button" class="btn" id="compliance-refresh" data-i18n="common.refresh">Refresh</button>
                     </div>
                 </div>
@@ -602,6 +700,13 @@
                     </div>
                 </div>
                 <div id="compliance-kpis" class="hud-grid"></div>
+                <details class="obs-table" id="compliance-gaps-panel">
+                    <summary><span data-i18n="console.compliance.gaps_title">Controls without an enabled engine</span> <span id="compliance-gap-count"></span></summary>
+                    <table class="data-table">
+                        <thead><tr><th data-i18n="console.compliance.control">Control</th><th data-i18n="console.compliance.control_name">Name</th><th data-i18n="console.compliance.covering_engines">Engines that would cover it</th></tr></thead>
+                        <tbody id="compliance-gaps"></tbody>
+                    </table>
+                </details>
                 <p id="compliance-state" role="status" aria-live="polite" data-i18n="console.compliance.pending">Compliance data integration pending.</p>
             </div>
         </section>
@@ -631,6 +736,14 @@
                 <div class="hud-legend mitre-legend" aria-label="Detection frequency" data-i18n-aria-label="console.mitre.frequency">
                     <span data-heat="1">1–4</span><span data-heat="2">5–19</span><span data-heat="3">20–49</span><span data-heat="4">50–99</span><span data-heat="5">100+</span>
                 </div>
+                <details class="obs-table" id="mitre-gaps-panel">
+                    <summary><span data-i18n="console.mitre.gaps_title">Network techniques with no detection in this period</span> <span id="mitre-gap-count"></span></summary>
+                    <p class="scope-hint" data-i18n="console.mitre.gaps_hint">No detection does not mean the technique is absent. It means no alert in this period was mapped to it.</p>
+                    <table class="data-table">
+                        <thead><tr><th>ID</th><th data-i18n="console.mitre.technique">Technique</th><th data-i18n="console.mitre.tactic">Tactic</th></tr></thead>
+                        <tbody id="mitre-gaps"></tbody>
+                    </table>
+                </details>
             </div>
             <dialog id="mitre-detail" class="mitre-detail" aria-labelledby="mitre-detail-title">
                 <h3 id="mitre-detail-title"></h3>
@@ -647,6 +760,8 @@
                 <span><span data-i18n="console.ai_status.interval">분석 주기(분)</span>: <strong id="ai-interval">—</strong></span>
                 <span><span data-i18n="console.ai_status.lookback">조회 범위(분)</span>: <strong id="ai-lookback">—</strong></span>
                 <span><span data-i18n="console.ai_status.fp_threshold">연속 오탐 기준</span>: <strong id="ai-fp-threshold">—</strong></span>
+                <span><span data-i18n="console.ai_status.last_success">마지막 성공</span>: <strong id="ai-last-success">—</strong></span>
+                <span><span data-i18n="console.ai_status.failures">연속 실패</span>: <strong id="ai-failures">—</strong></span>
             </div>
             <div class="toolbar" style="margin-top:8px">
                 <select id="ai-filter-verdict" aria-label="판정 필터" data-i18n="[aria-label]console.ai_status.verdict">

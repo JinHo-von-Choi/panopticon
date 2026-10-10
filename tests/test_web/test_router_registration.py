@@ -167,6 +167,7 @@ def test_create_app_without_optional_components(wiring_config):
     event_repo.count_by_engine_since = AsyncMock(return_value={"test-engine": 3})
     event_repo.list_recent = AsyncMock(return_value=[])
     event_repo.top_sources_since = AsyncMock(return_value=[])
+    event_repo.count_by_day_since = AsyncMock(return_value={})
     app = create_app(
         wiring_config,
         event_repo=event_repo,

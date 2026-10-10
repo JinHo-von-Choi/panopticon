@@ -98,8 +98,8 @@ export async function loadTopology() {
     const id = ++requestId;
     setState('loading');
     try {
-        const [response, riskResponse] = await Promise.all([
-            authFetch('/api/topology/graph'), authFetch('/api/topology/high-risk')
+        const [response, riskResponse, gatewayResponse] = await Promise.all([
+            authFetch('/api/topology/graph'), authFetch('/api/topology/high-risk'), authFetch('/api/topology/gateways')
         ]);
         if (!response.ok || !riskResponse.ok) throw new Error('Topology unavailable');
         const [data, risks] = await Promise.all([response.json(), riskResponse.json()]);
@@ -107,6 +107,10 @@ export async function loadTopology() {
         if (!Array.isArray(data.graph?.nodes) || !Array.isArray(data.graph?.links) || !Array.isArray(risks.devices)) {
             throw new Error('Invalid topology response');
         }
+        const gateways = gatewayResponse.ok ? (await gatewayResponse.json()).gateways : null;
+        document.getElementById('topology-gateways').textContent = Array.isArray(gateways)
+            ? (gateways.map(node => node.hostname ? `${node.ip} (${node.hostname})` : node.ip).join(', ') || t('no_gateways'))
+            : t('unavailable');
         const riskByIp = new Map(risks.devices.map(device => [device.ip, device.risk_score]));
         graph = { ...data, graph: { ...data.graph, nodes: data.graph.nodes.map(node => {
             const score = riskByIp.get(node.id) ?? node.risk_score;
@@ -128,6 +132,7 @@ export async function loadTopology() {
         if (id !== requestId || !isAuthEnabled()) return;
         graph = null;
         nodes = [];
+        document.getElementById('topology-gateways').textContent = '—';
         updateCounts();
         const badge = document.getElementById('topology-source-badge');
         badge.textContent = window.i18next.t('console.source.unchecked');

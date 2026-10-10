@@ -69,6 +69,13 @@ def _window_seconds(rows: list[dict]) -> int:
     분리 콘솔은 센서의 기록 주기 설정을 모르므로 행 간격의 최솟값으로 구한다.
     행이 하나뿐이면 기본 주기 60초를 쓴다.
     """
-    times = [row["timestamp"] for row in rows if isinstance(row.get("timestamp"), datetime)]
-    gaps = [int((b - a).total_seconds()) for a, b in zip(times, times[1:]) if b > a]
+    # 풀 연결은 timestamptz를 문자열로 돌려주므로 문자열도 해석한다.
+    times = []
+    for row in rows:
+        value = row.get("timestamp")
+        try:
+            times.append(value if isinstance(value, datetime) else datetime.fromisoformat(str(value)))
+        except ValueError:
+            continue
+    gaps = [int((b - a).total_seconds()) for a, b in zip(times, times[1:], strict=False) if b > a]
     return max(60, min(gaps)) if gaps else 60

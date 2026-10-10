@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
 import secrets
 import sqlite3
 import time
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+
+
+# 에이전트 이상 이벤트를 경보로 옮길 때 쓰는 ingest_id 이름공간. 바꾸면 재전송이 중복 경보가 된다.
+AGENT_ALERT_NAMESPACE = UUID("6f0d7c55-3a8e-4f63-9a51-2b7f0f6c1d42")
 
 
 class StrictBody(BaseModel):
@@ -159,7 +165,108 @@ class AgentGatewayStore:
         return {"ok": True, "seq": body.seq, "duplicate": False, "accepted": len(body.events)}
 
 
-def create_agent_gateway_router(store: AgentGatewayStore) -> APIRouter:
+    # 조회는 인증 토큰과 서명 키를 돌려주지 않는다.
+    _PUBLIC = "agent_uuid, hostname, platform, enrolled_at, last_seen, latency_ms, resources"
+
+    @staticmethod
+    def _public(row) -> dict:
+        item = dict(row)
+        item["resources"] = json.loads(item["resources"]) if item["resources"] else None
+        return item
+
+    def agent_count(self) -> int:
+        with self.connect() as db:
+            return db.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+
+    def list_agents(self, limit: int, offset: int) -> dict:
+        with self.connect() as db:
+            total = db.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+            rows = db.execute(f"SELECT {self._PUBLIC} FROM agents ORDER BY hostname, agent_uuid LIMIT ? OFFSET ?",
+                              (limit, offset)).fetchall()
+        return {"total": total, "now": time.time(), "agents": [self._public(row) for row in rows]}
+
+    def agent(self, agent_uuid: str) -> dict:
+        with self.connect() as db:
+            row = db.execute(f"SELECT {self._PUBLIC} FROM agents WHERE agent_uuid=?", (agent_uuid,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Agent not found")
+        return self._public(row)
+
+    def agent_events(self, agent_uuid: str, limit: int, before_seq: int | None) -> dict:
+        self.agent(agent_uuid)
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT seq, received_at, payload FROM agent_events WHERE agent_uuid=? AND seq < ? "
+                "ORDER BY seq DESC LIMIT ?",
+                (agent_uuid, before_seq if before_seq is not None else 2**63 - 1, limit),
+            ).fetchall()
+        batches = [{"seq": row["seq"], "received_at": row["received_at"],
+                    "events": json.loads(row["payload"])["events"]} for row in rows]
+        return {"batches": batches, "next_before_seq": batches[-1]["seq"] if len(batches) == limit else None}
+
+
+def create_agent_query_router(store: AgentGatewayStore) -> APIRouter:
+    """에이전트 조회 API. 콘솔 로그인 사용자(viewer 이상)용이며 에이전트 자격 증명과 무관하다."""
+    from fastapi import Depends, Query
+    from netwatcher.web.rbac import Role, require_role
+
+    router = APIRouter(prefix="/agents", tags=["agents"], dependencies=[Depends(require_role(Role.VIEWER))])
+
+    def _uuid(value: str) -> str:
+        try:
+            return str(UUID(value))
+        except ValueError:
+            raise HTTPException(422, "Invalid agent UUID") from None
+
+    @router.get("")
+    async def list_agents(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+        return await asyncio.to_thread(store.list_agents, limit, offset)
+
+    @router.get("/{agent_uuid}")
+    async def agent(agent_uuid: str):
+        return await asyncio.to_thread(store.agent, _uuid(agent_uuid))
+
+    @router.get("/{agent_uuid}/events")
+    async def agent_events(agent_uuid: str, limit: int = Query(20, ge=1, le=100),
+                           before_seq: int | None = Query(None, ge=1)):
+        return await asyncio.to_thread(store.agent_events, _uuid(agent_uuid), limit, before_seq)
+
+    return router
+
+
+def _ip(address: str) -> str | None:
+    host = address.rpartition(":")[0].strip("[]")
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return None
+
+
+def anomaly_alerts(body: Events, hostname: str) -> list[dict]:
+    """이상 이벤트만 경보 행으로 만든다. 일반 연결 기록은 경보가 아니다.
+
+    ingest_id는 (agent_uuid, seq, 배치 안 순번)에서 정해지므로 같은 배치를 다시 받아도 경보가 늘지 않는다.
+    """
+    alerts = []
+    for index, event in enumerate(body.events):
+        if event.kind != "anomaly":
+            continue
+        detail = event.detail or f"{event.local_address} -> {event.remote_address} ({event.state})"
+        alerts.append({
+            "ingest_id": str(uuid5(AGENT_ALERT_NAMESPACE, f"{body.agent_uuid}:{body.seq}:{index}")),
+            "engine": "host_agent", "severity": "WARNING",
+            "title": f"Host agent anomaly on {hostname}"[:512], "description": detail,
+            "source_ip": _ip(event.local_address), "dest_ip": _ip(event.remote_address),
+            "timestamp": datetime.fromtimestamp(event.observed_at, timezone.utc).isoformat(),
+            "metadata": {"agent_uuid": str(body.agent_uuid), "seq": body.seq, "index": index,
+                         "hostname": hostname, "state": event.state,
+                         "local_address": event.local_address, "remote_address": event.remote_address},
+        })
+    return alerts
+
+
+def create_agent_gateway_router(store: AgentGatewayStore, event_repo=None) -> APIRouter:
+    """event_repo가 있으면 이상 이벤트를 경보로 저장한다."""
     router = APIRouter(prefix="/agent", tags=["agent"])
 
     async def authenticate(request: Request):
@@ -187,9 +294,19 @@ def create_agent_gateway_router(store: AgentGatewayStore) -> APIRouter:
         return store.heartbeat(body)
 
     @router.post("/events")
-    def events(body: Events, agent_uuid: str = Depends(authenticate)):
+    async def events(body: Events, agent_uuid: str = Depends(authenticate)):
         if str(body.agent_uuid) != agent_uuid:
             raise HTTPException(403, "Agent identity mismatch")
-        return store.events(body)
+        result = await asyncio.to_thread(store.events, body)
+        if event_repo is None or not any(event.kind == "anomaly" for event in body.events):
+            return result
+        # 중복 수신도 다시 저장을 시도한다. 첫 저장이 실패해 에이전트가 재전송한 경우를 살리기 위해서다.
+        hostname = (await asyncio.to_thread(store.agent, agent_uuid))["hostname"]
+        try:
+            await event_repo.insert_batch_mapped(anomaly_alerts(body, hostname))
+        except Exception:
+            # 연결 기록은 저장됐지만 경보는 아니다. 실패로 알려 에이전트가 같은 배치를 다시 보내게 한다.
+            raise HTTPException(503, "Agent events stored but anomaly alerts were not") from None
+        return result
 
     return router

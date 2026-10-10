@@ -143,7 +143,8 @@ class EveTailer:
                 else:
                     try:
                         records.append(decode_eve_line(raw, sensor_id=self.sensor_id, source_id=self.source_id,
-                                                       generation=state["generation"], offset=start))
+                                                       generation=state["generation"], offset=start,
+                                                       feeds=getattr(self.repository, "feeds", None)))
                     except (ValueError, UnicodeDecodeError, RecursionError):
                         records.append(self._notice(state, "invalid_record", raw))
                 state["offset"] += len(raw)

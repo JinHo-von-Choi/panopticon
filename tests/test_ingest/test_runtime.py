@@ -87,7 +87,9 @@ async def test_eve_console_reads_alert_without_capture_or_firewall(db, config, t
             capabilities = (await client.get("/api/capabilities")).json()
             assert capabilities["input_mode"] == "eve"
             assert capabilities["features"]["business_reviews"]
-            assert not any(value for key, value in capabilities["features"].items() if key not in ("business_reviews", "case_workflows", "work_schedules", "event_groups", "investigation_priorities", "eve_observations"))
+            assert not any(value for key, value in capabilities["features"].items() if key not in ("business_reviews", "case_workflows", "work_schedules", "event_groups", "investigation_priorities", "eve_observations", "blocklist"))
+            # EVE 모드의 피드는 기록과 대조만 하고 차단은 하지 않는다.
+            assert capabilities["states"]["blocklist"] == {"state": "limited", "reason": "eve_mode_match_only"}
             assert observation["loss"]["link_loss"]["status"] == "unknown"
             events = (await client.get("/api/events")).json()
             assert "Test alert" in str(events)

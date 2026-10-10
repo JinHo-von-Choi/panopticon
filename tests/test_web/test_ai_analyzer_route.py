@@ -21,11 +21,14 @@ class TestAiAnalyzerRoute:
         svc._task = None
         svc._stopping = False
         svc._provider = "copilot"
+        svc._backend.credential_configured.return_value = None
         svc._interval_seconds = 900
         svc._lookback_minutes = 30
         svc._fp_threshold = 2
         svc._max_pct = 20
         svc._consecutive_fp = {"port_scan": 1}
+        svc._health = {"last_attempt_at": None, "last_success_at": None,
+                       "consecutive_failures": 0, "last_failure": None}
 
         client = TestClient(_make_app(svc))
         resp = client.get("/api/ai-analyzer/status")
@@ -43,11 +46,14 @@ class TestAiAnalyzerRoute:
         svc._task = None
         svc._stopping = False
         svc._provider = "claude"
+        svc._backend.credential_configured.return_value = None
         svc._interval_seconds = 1800
         svc._lookback_minutes = 60
         svc._fp_threshold = 3
         svc._max_pct = 30
         svc._consecutive_fp = {}
+        svc._health = {"last_attempt_at": None, "last_success_at": None,
+                       "consecutive_failures": 0, "last_failure": None}
 
         client = TestClient(_make_app(svc))
         resp = client.get("/api/ai-analyzer/status")

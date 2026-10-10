@@ -1,6 +1,7 @@
 """분리 센서의 실행 소유권과 관측 상태를 갱신한다."""
 
 import asyncio
+import time
 import logging
 from uuid import uuid4
 
@@ -96,6 +97,7 @@ class SensorStatePublisher:
         self.lost = False
         self._attempted = False
         self._task = None
+        self.last_publish_ms: float | None = None
 
     async def start(self):
         if self._task is not None and not self._task.done():
@@ -113,8 +115,10 @@ class SensorStatePublisher:
             raise SensorLeaseLost("센서 실행 소유권을 확인할 수 없습니다")
         try:
             snapshot = self.source()
+            started = time.monotonic()
             async with asyncio.timeout(2):
                 await self.repository.publish(self.sensor_id, self.owner, snapshot, lease_seconds=self.lease_seconds)
+            self.last_publish_ms = (time.monotonic() - started) * 1000
         except Exception as exc:
             self.lost = True
             logger.error("Sensor lease unconfirmed; stopping input (%s)", type(exc).__name__)

@@ -206,3 +206,73 @@ def test_invalid_resources_and_oversized_batch(gateway):
     body = events(identity)
     body['events'] *= 257
     assert signed(client, identity, 'events', body).status_code == 422
+
+
+def test_agent_query_api_hides_credentials_and_pages_events(tmp_path):
+    from netwatcher.web.routes.agent_gateway import create_agent_query_router
+    store = AgentGatewayStore(str(tmp_path / 'gateway.sqlite3'), 'test-enrollment-token')
+    app = FastAPI()
+    app.include_router(create_agent_gateway_router(store), prefix='/api')
+    app.include_router(create_agent_query_router(store), prefix='/api')
+    with TestClient(app) as client:
+        identity = enroll(client).json()
+        assert signed(client, identity, 'heartbeat', heartbeat(identity)).status_code == 200
+        for seq in (1, 2, 3):
+            assert signed(client, identity, 'events', events(identity, seq)).status_code == 200
+        listing = client.get('/api/agents').json()
+        assert listing['total'] == 1
+        agent = listing['agents'][0]
+        assert agent['hostname'] == 'host-1' and agent['resources']['agent_rss_bytes'] == 2048
+        assert agent['last_seen'] is not None
+        assert not {'token_hash', 'signing_key', 'auth_token'} & set(agent)
+        detail = client.get('/api/agents/' + identity['agent_uuid']).json()
+        assert not {'token_hash', 'signing_key'} & set(detail)
+        first = client.get('/api/agents/' + identity['agent_uuid'] + '/events?limit=2').json()
+        assert [batch['seq'] for batch in first['batches']] == [3, 2]
+        assert first['next_before_seq'] == 2
+        rest = client.get('/api/agents/' + identity['agent_uuid'] + '/events?limit=2&before_seq=2').json()
+        assert [batch['seq'] for batch in rest['batches']] == [1] and rest['next_before_seq'] is None
+        assert rest['batches'][0]['events'][0]['remote_address'] == '127.0.0.1:443'
+        assert client.get('/api/agents/not-a-uuid').status_code == 422
+        assert client.get('/api/agents/' + str(uuid4())).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_anomalies_become_alerts_once_and_survive_failed_first_store(tmp_path, db):
+    from httpx import ASGITransport, AsyncClient
+    from netwatcher.storage.repositories import EventRepository
+
+    class FlakyRepo(EventRepository):
+        fail = True
+
+        async def insert_batch_mapped(self, events, **kwargs):
+            if self.fail:
+                self.fail = False
+                raise ConnectionError('database restarting')
+            return await super().insert_batch_mapped(events, **kwargs)
+
+    store = AgentGatewayStore(str(tmp_path / 'gateway.sqlite3'), 'test-enrollment-token')
+    app = FastAPI()
+    app.include_router(create_agent_gateway_router(store, FlakyRepo(db)), prefix='/api')
+    identity = store.enroll(MagicMock(enrollment_token='test-enrollment-token', hostname='web-1', platform='linux'))
+    body = events(identity)
+    body['events'].append({**body['events'][0], 'kind': 'anomaly', 'local_address': '10.0.0.5:5000',
+                           'remote_address': '198.51.100.7:443', 'detail': 'unexpected remote endpoint'})
+    raw = json.dumps(body, separators=(',', ':')).encode()
+
+    async def send():
+        timestamp = str(int(time.time()))
+        signature = hmac.new(bytes.fromhex(identity['signing_key']), timestamp.encode() + b'\n' + raw,
+                             hashlib.sha256).hexdigest()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+            return await client.post('/api/agent/events', content=raw, headers={
+                'Content-Type': 'application/json', 'Authorization': 'Bearer ' + identity['auth_token'],
+                'X-Agent-UUID': identity['agent_uuid'], 'X-Agent-Timestamp': timestamp, 'X-Agent-Signature': signature})
+
+    assert (await send()).status_code == 503
+    assert (await send()).json()['duplicate'] is True
+    assert (await send()).json()['duplicate'] is True
+    rows = await db.pool.fetch("SELECT engine, host(source_ip) AS source, host(dest_ip) AS dest, metadata FROM events")
+    assert len(rows) == 1
+    assert (rows[0]['engine'], rows[0]['source'], rows[0]['dest']) == ('host_agent', '10.0.0.5', '198.51.100.7')
+    assert rows[0]['metadata']['index'] == 1

@@ -234,6 +234,28 @@ class TestRunAI:
             yaml_editor=MagicMock(),
         )
 
+    @pytest.mark.asyncio
+    async def test_failures_and_success_are_recorded_in_health(self):
+        svc = self._make_service(provider="claude")
+        failing = AsyncMock()
+        failing.communicate.return_value = (b"partial", b"boom")
+        failing.returncode = 2
+        with patch("asyncio.create_subprocess_exec", return_value=failing):
+            assert await svc._run_ai("prompt") == ""
+        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("claude")):
+            assert await svc._run_ai("prompt") == ""
+        assert svc._health["consecutive_failures"] == 2
+        assert svc._health["last_failure"] == "not_installed"
+        assert svc._health["last_success_at"] is None
+        ok = AsyncMock()
+        ok.communicate.return_value = (b"VERDICT: UNCERTAIN\n", b"")
+        ok.returncode = 0
+        with patch("asyncio.create_subprocess_exec", return_value=ok):
+            assert await svc._run_ai("prompt") == "VERDICT: UNCERTAIN\n"
+        assert svc._health["consecutive_failures"] == 0
+        assert svc._health["last_failure"] is None
+        assert svc._health["last_success_at"] is not None
+
     def test_unknown_provider_is_rejected_instead_of_falling_back(self):
         with pytest.raises(ValueError, match="ai_analyzer.provider"):
             self._make_service(provider="not-a-provider")

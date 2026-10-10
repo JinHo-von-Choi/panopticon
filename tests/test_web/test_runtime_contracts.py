@@ -233,3 +233,19 @@ async def test_metrics_endpoint_serves_prometheus_text_without_login(runtime_app
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
     assert "netwatcher_" in response.text
+
+
+@pytest.mark.asyncio
+async def test_capability_states_explain_unavailable_features(runtime_app, monkeypatch):
+    monkeypatch.delenv("PANOPTICON_ENROLLMENT_TOKEN", raising=False)
+    app, _, _, _ = runtime_app
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.get("/api/agents")).status_code == 401
+        login = await client.post("/api/auth/login", json={"username": "admin", "password": "test-password"})
+        headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        states = (await client.get("/api/capabilities", headers=headers)).json()["states"]
+        agents = await client.get("/api/agents", headers=headers)
+    assert states["devices"] == {"state": "available", "reason": None}
+    assert states["topology"] == {"state": "unsupported", "reason": "no_topology_source"}
+    assert states["agents"] == {"state": "unconfigured", "reason": "no_enrollment_token"}
+    assert agents.status_code == 200 and agents.json()["total"] == 0

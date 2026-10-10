@@ -17,6 +17,8 @@ from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
 def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False, pcap_writer=None, sensor_control=None, incident_repository=None, topology_mapper=None, risk_scorer=None, compliance_mapper=None, kpi_calc=None, report_gen=None):
+    # 호출자가 실제 연결 정보를 공급하는 매퍼를 넘겼는지. 넘기지 않으면 아래에서 빈 매퍼를 만든다.
+    topology_source = topology_mapper
     if sensor_control is not None:
         if (config.get("input.mode", "native") != "native" or registry is not None or yaml_editor is not None
                 or auth_manager is None or not auth_manager.enabled or auth_manager.multi_user is not True
@@ -77,12 +79,18 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
 
     # API Routers (Standardized Prefix)
     api_prefix = "/api"
-    from netwatcher.web.routes.agent_gateway import AgentGatewayStore, create_agent_gateway_router
+    from netwatcher.storage.repositories import EventRepository
+    from netwatcher.web.routes.agent_gateway import (
+        AgentGatewayStore, create_agent_gateway_router, create_agent_query_router,
+    )
     app.state.agent_gateway = AgentGatewayStore(
         config.get("agent_gateway.database", "data/agent-gateway.sqlite3"),
         enrollment_token=config.get("agent_gateway.enrollment_token"),
     )
-    app.include_router(create_agent_gateway_router(app.state.agent_gateway), prefix=api_prefix)
+    app.include_router(create_agent_gateway_router(
+        app.state.agent_gateway, event_repo if isinstance(event_repo, EventRepository) else None,
+    ), prefix=api_prefix)
+    app.include_router(create_agent_query_router(app.state.agent_gateway), prefix=api_prefix)
     from netwatcher.web.rbac import Role, require_role
 
     @app.get("/api/capabilities", dependencies=[Depends(require_role(Role.VIEWER))])
@@ -110,7 +118,34 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
             "eve_observations": isinstance(event_repo, EventRepository) and config.get("input.mode", "native") == "eve",
             "users": auth_manager is not None and auth_manager.multi_user is True and auth_manager.users is not None,
             "replay": replay_service is not None, "traffic": config.get("input.mode", "native") != "eve",
-        }}
+        }, "states": await _feature_states()}
+
+    async def _feature_states():
+        """기능별 상태와 사유. 빈 화면이 '데이터 없음'인지 '이 구성에서 지원 안 함'인지 구분한다."""
+        eve = config.get("input.mode", "native") == "eve"
+
+        def state(value, reason=None):
+            return {"state": value, "reason": reason}
+
+        try:
+            agents = await asyncio.to_thread(app.state.agent_gateway.agent_count)
+            agent_state = (state("available") if agents or app.state.agent_gateway.enrollment_token
+                           else state("unconfigured", "no_enrollment_token"))
+        except Exception:
+            agent_state = state("unknown", "agent_store_unreadable")
+        has_topology = topology_source is not None
+        ai_on = bool(ai_analyzer) or sensor_control is not None
+        return {
+            "devices": state("unsupported", "eve_mode_no_device_collection") if eve else state("available"),
+            # EVE 모드의 피드는 기록과 대조만 하고 차단은 하지 않는다.
+            "blocklist": (state("limited", "eve_mode_match_only") if feed_manager is not None
+                          else state("unsupported", "eve_mode_no_threat_feeds")) if eve else state("available"),
+            "traffic": state("unsupported", "eve_mode_no_packet_counters") if eve else state("available"),
+            "topology": state("available") if has_topology else state("unsupported", "no_topology_source"),
+            "ai": state("available") if ai_on else state("unconfigured", "ai_analyzer_disabled"),
+            "agents": agent_state,
+            "observed_assets": state("available") if eve else state("unsupported", "native_mode_uses_devices"),
+        }
     # 인증이 꺼져 있어도 /auth/status는 응답해야 대시보드가 로그인 화면 표시 여부를 판단한다.
     from netwatcher.web.routes.auth import create_auth_router
     from netwatcher.web.oidc_login import configured_oidc_login
@@ -123,7 +158,6 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     app.include_router(create_users_router(auth_manager.users if auth_manager else None), prefix=api_prefix)
     from netwatcher.web.routes.audit import create_audit_router
     app.include_router(create_audit_router(), prefix=api_prefix)
-    from netwatcher.storage.repositories import EventRepository
     from netwatcher.investigation.groups import EventGroups
     from netwatcher.web.routes.event_groups import create_event_groups_router
     groups = EventGroups(event_repo._db) if isinstance(event_repo, EventRepository) else None
@@ -168,6 +202,15 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
         topology_mapper = TopologyMapper()
     if risk_scorer is None:
         risk_scorer = DynamicRiskScorer()
+    database = event_repo._db if isinstance(event_repo, EventRepository) else None
+    if topology_source is None and database is not None:
+        # 호출자가 연결 정보를 공급하지 않으면 저장된 흐름·경보·에이전트 기록으로 다시 만든다.
+        from netwatcher.inventory.topology_builder import TopologyBuilder
+        app.state.topology_builder = TopologyBuilder(database, topology_mapper, risk_scorer, app.state.agent_gateway,
+                                                     include_eve=config.get("input.mode", "native") == "eve")
+        topology_source = app.state.topology_builder
+        app.add_event_handler("startup", app.state.topology_builder.start)
+        app.add_event_handler("shutdown", app.state.topology_builder.stop)
     app.include_router(create_topology_router(topology_mapper, risk_scorer), prefix=api_prefix)
 
     from netwatcher.compliance.framework_mapper import FrameworkMapper
@@ -183,14 +226,26 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     # 엔진이 없는 구성(EVE 콘솔)은 활성 엔진 0개로 커버리지를 계산한다.
     # 여기서 EngineRegistry를 만들면 scapy를 불러오고 엔진 22종을 적재한다.
     compliance_registry = registry if registry is not None else SimpleNamespace(engines=[])
+    compliance_engines = None
+    if sensor_control is not None:
+        async def compliance_engines(actor):
+            # 분리 콘솔은 엔진을 직접 갖지 않는다. 센서에서 켜져 있는 엔진만 센다.
+            listing = await sensor_control.list(actor)
+            return [engine["name"] for engine in listing["engines"] if engine.get("enabled")]
     app.include_router(create_compliance_router(
-        compliance_mapper, kpi_calc, report_gen, compliance_registry,
+        compliance_mapper, kpi_calc, report_gen, compliance_registry, compliance_engines,
     ), prefix=api_prefix)
     from netwatcher.web.routes.onboarding import create_onboarding_router
     app.include_router(create_onboarding_router(config, app.state.health_checker,
                        observation_service, auth_manager, yaml_editor), prefix=api_prefix)
     app.include_router(create_stats_router(stats_repo, event_repo, correlator=correlator, incident_repo=incident_repository,
                        input_mode=config.get("input.mode", "native")), prefix=api_prefix)
+    from netwatcher.web.routes.observed_assets import create_observed_assets_router
+    app.include_router(create_observed_assets_router(
+        event_repo._db if isinstance(event_repo, EventRepository) else None), prefix=api_prefix)
+    from netwatcher.web.routes.observability import create_observability_router
+    app.include_router(create_observability_router(event_repo._db if isinstance(event_repo, EventRepository) else None,
+                       config.get("input.mode", "native")), prefix=api_prefix)
 
     if whitelist:
         from netwatcher.web.routes.whitelist import create_whitelist_router

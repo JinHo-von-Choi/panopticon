@@ -243,6 +243,11 @@ class NetWatcher:
         if self._sensor_publisher:
             self._register_sensor_cleanup("sensor_state", self._sensor_publisher.stop)
             await self._sensor_publisher.start()
+            from netwatcher.services.sensor_sampler import SensorSampler
+            self._sensor_sampler = SensorSampler(self.db, self._sensor_publisher.sensor_id, self._sensor_publisher,
+                interval=self.config.get("native.sample_seconds", 30))
+            self._register_sensor_cleanup("sensor_samples", self._sensor_sampler.stop)
+            self._sensor_sampler.start()
         self._register_sensor_cleanup("engines", lambda: asyncio.to_thread(self.registry.shutdown))
         event_repo    = EventRepository(self.db)
         device_repo   = DeviceRepository(self.db)

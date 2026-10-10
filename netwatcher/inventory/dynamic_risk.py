@@ -61,13 +61,17 @@ class DynamicRiskScorer:
         )
         self._decay_half_life = max(60.0, decay_half_life)
 
-    def record_alert(self, ip: str, severity: str, engine: str) -> None:
-        """알림 발생을 기록한다."""
+    def record_alert(self, ip: str, severity: str, engine: str, at: float | None = None) -> None:
+        """알림 발생을 기록한다. at은 발생 시각(초), 없으면 현재."""
         self._alert_history[ip].append(AlertRecord(
-            timestamp = time.time(),
+            timestamp = time.time() if at is None else at,
             severity  = severity.lower(),
             engine    = engine,
         ))
+
+    def replace_with(self, other: "DynamicRiskScorer") -> None:
+        """다시 계산한 경보 이력으로 한 번에 바꾼다."""
+        self._alert_history = other._alert_history
 
     def calculate_risk(self, ip: str, static_score: float = 0.0) -> float:
         """호스트의 종합 위험 점수를 산출한다 (0.0 ~ 10.0).
