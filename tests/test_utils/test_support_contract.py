@@ -68,7 +68,8 @@ def test_passing_contract_is_not_enforcement_certification(base_raw):
     payload = SupportContract(Config(base_raw)).describe()
     assert payload["violations"] == []
     assert payload["enforcement_backends"] == ["iptables"]
-    # nftables 는 미구현이므로 어떤 경우에도 enforcement 목록에 없다
+    # nftables 는 이 경로(response.backend)의 enforcement 가 아니다.
+    # 승인-governance 경로에서 다룬다 — response/executor.py.
     assert "nftables" not in payload["enforcement_backends"]
 
 

@@ -37,7 +37,11 @@ def _load_config():
 async def _ensure_partitions() -> int:
     """events 월별 파티션을 확보한다. 이번 달 파티션이 없으면 실패한다."""
     from netwatcher.storage.database import Database
-    from netwatcher.storage.partition_manager import DEFAULT_MONTHS_AHEAD, PartitionManager
+    from netwatcher.storage.partition_manager import (
+        DEFAULT_MONTHS_AHEAD,
+        DEFAULT_MONTHS_BEHIND,
+        PartitionManager,
+    )
 
     config = _load_config()
     database = Database(config)
@@ -45,7 +49,9 @@ async def _ensure_partitions() -> int:
     try:
         manager = PartitionManager(database.pool)
         try:
-            created = await manager.ensure_partitions(DEFAULT_MONTHS_AHEAD)
+            # 앞뒤 전체 창을 확보한다. 과거 파티션이 없으면 과거 시각의
+            # 경보 INSERT 가 "no partition of relation" 로 실패한다.
+            created = await manager.ensure_partitions(DEFAULT_MONTHS_AHEAD, DEFAULT_MONTHS_BEHIND)
         except Exception as exc:
             # 파티션 확보 실패를 넘어가면 배포가 성공한 것처럼 보이지만
             # 경보 저장은 멈춘다. 배포를 실패시킨다.
@@ -54,7 +60,7 @@ async def _ensure_partitions() -> int:
                 file=sys.stderr,
             )
             return 1
-        state = await manager.partition_state(DEFAULT_MONTHS_AHEAD)
+        state = await manager.partition_state(DEFAULT_MONTHS_AHEAD, DEFAULT_MONTHS_BEHIND)
     finally:
         await database.close()
 

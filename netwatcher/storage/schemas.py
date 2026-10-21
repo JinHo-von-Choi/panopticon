@@ -33,11 +33,30 @@ CREATE TABLE IF NOT EXISTS events (
 # 월별 파티션 이름은 시각에 따라 정해진다 — 정적 DDL 로는 만들 수 없다.
 # ALL_SCHEMAS 를 쓰는 곳은 월별 파티션을 직접 만들 수 없으므로 기본
 # 파티션을 둔다. 범위 밖 시각의 INSERT 는 실패하지 않고 기본 파티션에
-# 남는다. 프로덕션에는 기본 파티션이 없고, partition_manager 가 월별
-# 파티션을 미리 만들어 둔다.
+# 남는다.
+#
+# 프로덕션에는 기본 파티션이 없다. partition_manager 가 월별 파티션을
+# 미리 만들어 둔다. 새 설치가 기존 eve.json 을 읽으면 과거 시각의 경보가
+# 들어오는데, 프로덕션에는 그 월의 파티션이 없다 — 그래서 프로덕션은
+# 마이그레이션이 앞뒤 3개월을 확보한다 (DEFAULT_MONTHS_BEHIND).
+#
+# 테스트 픽스처는 이 파티션을 제거한다 (tests/conftest.py). 그래야
+# "파티션 없는 월의 INSERT 실패" 를 테스트가 프로덕션과 똑같이 재현한다.
+# 이 파티션이 있는 테스트는 그 실패 모드를 놓친다.
 EVENTS_DEFAULT_PARTITION = """
 CREATE TABLE IF NOT EXISTS events_default PARTITION OF events DEFAULT
 """
+
+# 마이그레이션이 만들지 않고 **정적 DDL 에만** 존재하는 객체.
+#
+# ALL_SCHEMAS 로 스키마를 만드는 도구(시험 픽스처·성능 스크립트)는 이
+# 표를 그대로 얻는다. 마이그레이션 체인은 만들지 않는다 — 월별 파티션
+# 이름이 시각에 따라 정해지므로 정적 DDL 로는 만들 수 없다.
+#
+# G0-13 게이트는 "스키마에 있는데 마이그레이션이 안 만드는 표" 를 이
+# 목록으로 예외 처리한다. 숨기지 않는다 — 목록에 있으면 게이트가
+# 보고한다. 여기에 없는 표가 그러면 게이트가 실패한다.
+STATIC_ONLY_OBJECTS = frozenset({"events_default"})
 
 EVENTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_events_tenant_id ON events USING btree(tenant_id);",

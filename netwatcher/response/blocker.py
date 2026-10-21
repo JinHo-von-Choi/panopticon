@@ -1,8 +1,14 @@
-"""BlockManager: iptables/nftables를 통한 OS 수준 반응형 IP 차단.
+"""BlockManager: iptables 를 통한 OS 수준 반응형 IP 차단.
 
 호스트 방화벽에 적용된 활성 차단 규칙 집합을 관리한다.
 시간 기반 만료, 화이트리스트 우회, 리소스 고갈 방지를 위한
 최대 차단 수 제한을 지원한다.
+
+nftables 는 이 경로에 없다. 2026-10-22 이전에는 여기에도 미구현 스텁이
+있었는데, 실제로 동작하는 nftables 구현은 승인-governance 경로
+(`response/nftables_backend.py` · `response/executor.py`)에 있다. 두 벌이
+있으면 "차단" 이 무엇을 뜻하는지 한 곳에서 알 수 없었다. 스텁은 제거했다 —
+조용히 아무것도 하지 않는 차단보다 차단을 하지 않는 편이 정직하다.
 
 작성자: 최진호
 작성일: 2026-02-20
@@ -91,14 +97,15 @@ def _is_safe_to_block(ip: str) -> bool:
 
 
 class BlockManager:
-    """iptables / nftables / mock 백엔드를 통한 반응형 IP 차단을 관리한다.
+    """iptables / mock 백엔드를 통한 반응형 IP 차단을 관리한다.
 
     Parameters
     ----------
     enabled : bool
         마스터 스위치. ``False``이면 모든 block/unblock 호출이 무시된다.
     backend : str
-        ``"iptables"``, ``"nftables"``, ``"mock"`` 중 하나.
+        ``"iptables"``, ``"mock"`` 중 하나. nftables 는 이 경로가 아니다 —
+        승인-governance 경로(`response/executor.py`)에서 다룬다.
     chain_name : str
         NetWatcher 규칙을 격리하기 위한 iptables 체인 이름.
     whitelist : list[str]
@@ -109,7 +116,7 @@ class BlockManager:
         기본 차단 기간 초 단위 (0 = 영구).
     """
 
-    SUPPORTED_BACKENDS = ("iptables", "nftables", "mock")
+    SUPPORTED_BACKENDS = ("iptables", "mock")
 
     def __init__(
         self,
@@ -122,9 +129,15 @@ class BlockManager:
     ) -> None:
         """BlockManager를 초기화한다. 백엔드, 체인 이름, 화이트리스트 등을 설정한다."""
         if backend not in self.SUPPORTED_BACKENDS:
+            hint = ""
+            if backend == "nftables":
+                hint = (
+                    " — nftables 는 이 경로가 아니다. 승인-governance 경로"
+                    "(response/executor.py · response/nftables_backend.py)를 쓰라."
+                )
             raise ValueError(
                 f"Unsupported backend {backend!r}. "
-                f"Must be one of {self.SUPPORTED_BACKENDS}"
+                f"Must be one of {self.SUPPORTED_BACKENDS}{hint}"
             )
 
         self._enabled: bool          = enabled
@@ -306,16 +319,12 @@ class BlockManager:
         """
         if self._backend == "iptables":
             return await self._exec_iptables("-A", self._chain_name, "-s", ip, "-j", "DROP")
-        elif self._backend == "nftables":
-            return await self._exec_nftables_add(ip)
         return False
 
     async def _remove_block(self, ip: str) -> bool:
         """*ip* 차단을 해제하는 방화벽 명령을 실행한다."""
         if self._backend == "iptables":
             return await self._exec_iptables("-D", self._chain_name, "-s", ip, "-j", "DROP")
-        elif self._backend == "nftables":
-            return await self._exec_nftables_delete(ip)
         return False
 
     async def init_chain(self) -> None:
@@ -339,10 +348,6 @@ class BlockManager:
             if not check_ok:
                 await self._exec_iptables("-I", "INPUT", "1", "-j", self._chain_name)
             logger.info("iptables 체인 초기화 완료: %s", self._chain_name)
-
-        elif self._backend == "nftables":
-            # nftables 체인 초기화 (향후 구현 예정)
-            logger.warning("nftables 체인 초기화는 아직 미구현")
 
     # ------------------------------------------------------------------
     # 저수준 명령 실행
@@ -378,13 +383,3 @@ class BlockManager:
         except Exception:
             logger.exception("iptables 명령 실행 중 예외 발생: %s", " ".join(cmd))
             return False
-
-    async def _exec_nftables_add(self, ip: str) -> bool:
-        """nftables 차단 규칙을 추가한다 (향후 구현을 위한 플레이스홀더)."""
-        logger.warning("nftables add 미구현: %s", ip)
-        return False
-
-    async def _exec_nftables_delete(self, ip: str) -> bool:
-        """nftables 차단 규칙을 삭제한다 (향후 구현을 위한 플레이스홀더)."""
-        logger.warning("nftables delete 미구현: %s", ip)
-        return False

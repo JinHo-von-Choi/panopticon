@@ -12,6 +12,10 @@ from netwatcher.storage.account_access import ACCOUNT_LOCK_FUNCTION_SQL
 from netwatcher.storage.runtime_roles import provision_roles,grant_runtime
 from netwatcher.storage.schemas import ALL_SCHEMAS
 
+# 이 모듈은 psycopg2 로 실제 PostgreSQL 에 접속한다. db 픽스처로 잡히지
+# 않으므로 DB 필요 시험을 마커로 명시한다.
+pytestmark = pytest.mark.requires_db
+
 
 def test_real_runtime_roles_have_separate_credentials_and_deny_ddl_hash_and_audit_changes(config):
     pg=config.section('postgresql');prefix='role_'+uuid4().hex[:12];schema=prefix

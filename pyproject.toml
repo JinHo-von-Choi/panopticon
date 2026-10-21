@@ -80,10 +80,20 @@ ignore_errors = true
 # 기존 동작 유지: asyncio 모드는 명시하지 않는다. 모든 비동기 시험이
 # @pytest.mark.asyncio 를 직접 달고 있어야 하고, 그렇게 되어 있다.
 testpaths = ["tests"]
+markers = [
+    # PostgreSQL 이 필요한 시험. 픽스처(db·event_repo 등)로 DB 를 선언하지
+    # 않고 psycopg2 로 직접 접속하는 시험은 이 마커로 명시한다.
+    # DB 부재 시 건너뛰기는 NETWATCHER_TEST_ALLOW_DB_SKIP=1 일 때만 적용된다.
+    "requires_db: PostgreSQL 이 연결되어야 하는 시험",
+]
 
 [tool.coverage.report]
 # 커버리지가 내려가면 회귀로 보고한다. 실측 84% — 여유를 두고 80% 로
 # 묶었다. 올리려면 실측값을 갱신한다.
+#
+# 이 수치는 **PostgreSQL 이 있는 상태** 에서 잰다. DB 를 못 붙이면 DB 를
+# 다루는 코드가 통째로 실행되지 않아 커버리지가 크게 내려간다
+# (2026-10-22 실측: DB 없이 63%). 로컬에서 커버리지를 볼 때는 DB 를 먼저 준비한다.
 fail_under = 80
 show_missing = false
 omit = [

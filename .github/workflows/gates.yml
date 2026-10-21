@@ -86,16 +86,10 @@ jobs:
           python scripts/assert_browser_ran.py /tmp/browser.xml
 
       - name: Type check latch
-        # 타입 오류는 늘릴 수만 있다. 현재 오류 수를 상한으로 두고 초과만
-        # 실패시킨다.
-        run: |
-          python -m mypy netwatcher | tee /tmp/mypy.log || true
-          errors=$(grep -cE '^[^ ]+\.py:[0-9]+: error:' /tmp/mypy.log || true)
-          echo "mypy errors=${errors}"
-          if [ "${errors}" -gt 196 ]; then
-            echo "타입 검사 오류가 상한(196)을 넘었다" >&2
-            exit 1
-          fi
+        # 타입 오류는 늘릴 수만 있다. 기준선은 Python 버전별로 따로 둔다 —
+        # 3.12 와 3.13 은 표준 라이브러리 스텁이 달라 오류 수가 다르다.
+        # 하나를 고칠 때마다 scripts/mypy_baseline.json 의 해당 값을 내린다.
+        run: python scripts/mypy_latch.py
 
       - name: Run release gates (G0)
         env:

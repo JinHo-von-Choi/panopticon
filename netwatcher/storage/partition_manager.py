@@ -17,6 +17,18 @@ logger = logging.getLogger("netwatcher.storage.partition_manager")
 # 이번 달 파티션이 없으면 INSERT 가 실패한다. months_ahead 만큼 앞까지 미리 만든다.
 DEFAULT_MONTHS_AHEAD = 3
 
+# 지난 파티션도 필요하다.
+#
+# 2026-10-22 실측: EVE 수집기는 처음 설치하면 파일 바이트 0부터 읽는다
+# (ingest/tailer.py 의 초기 state). 기존 eve.json 을 가리키는 새 설치는
+# 과거 시각의 경보를 그대로 넣으려 한다. 그런데 파티션이 이번 달 이후만
+# 있으면 그 INSERT 는 "no partition of relation "events" found for row" 로
+# 실패하고, 배치 전체가 롤백되어 수집이 영구히 막힌다.
+#
+# 보존 기간(retention.events_days=90)만큼의 과거를 확보하면 그 구간이
+# 전부 저장된다. 3개월 뒤로 확보하면 90일 치를 덮는다.
+DEFAULT_MONTHS_BEHIND = 3
+
 
 class PartitionUnavailableError(RuntimeError):
     """events 이번 달 파티션을 확보하지 못했을 때 발생한다."""
@@ -64,10 +76,16 @@ class PartitionManager:
         )
         return bool(result)
 
-    async def ensure_partitions(self, months_ahead: int = 2) -> list[str]:
-        """현재 월부터 months_ahead 개월 후까지 파티션을 생성한다.
+    async def ensure_partitions(self, months_ahead: int = DEFAULT_MONTHS_AHEAD,
+                                months_behind: int = DEFAULT_MONTHS_BEHIND) -> list[str]:
+        """현재 월 기준 앞뒤 범위의 월별 파티션을 생성한다.
 
         이미 존재하는 파티션은 건너뛴다. 생성된 파티션 이름 목록을 반환한다.
+
+        ``months_behind`` 는 지난 파티션이다. 과거 시각의 기록을 저장하려면
+        그 월의 파티션이 있어야 한다 — 없으면 INSERT 가 "no partition of
+        relation" 로 실패하고 배치 전체가 롤백된다. 이벤트 보존 기간
+        (기본 90일)을 덮을 만큼 확보한다.
         """
         if not await self._is_partitioned():
             logger.warning(
@@ -79,7 +97,7 @@ class PartitionManager:
         now      = datetime.now(timezone.utc)
         created  = []
 
-        for offset in range(months_ahead + 1):
+        for offset in range(-months_behind, months_ahead + 1):
             target = _add_months(now, offset)
             name   = _partition_name(target.year, target.month)
             start  = _month_start(target.year, target.month)
@@ -108,19 +126,26 @@ class PartitionManager:
 
         return created
 
-    async def partition_state(self, months_ahead: int = DEFAULT_MONTHS_AHEAD) -> dict:
+    async def partition_state(self, months_ahead: int = DEFAULT_MONTHS_AHEAD,
+                              months_behind: int = DEFAULT_MONTHS_BEHIND) -> dict:
         """events 파티션의 현재 상태를 읽는다.
 
         DDL 권한 없이 읽을 수 있다. ``covered`` 는 지금 시각의 INSERT 가
         partitioning 관점에서 성공하는지를 뜻한다 — 파티셔닝되지 않은 테이블은
         범위 제한이 없으므로 항상 covered 다.
+
+        ``missing`` 는 확보해야 하는 전체 창(과거 ``months_behind`` 개월 +
+        미래 ``months_ahead`` 개월) 안에서 없는 파티션을 모두 담는다. 지난
+        파티션이 없으면 과거 시각의 INSERT 가 실패하므로 같이 드러낸다.
         """
         partitioned = await self._is_partitioned()
         now = datetime.now(timezone.utc)
         months = [
             _partition_name(target.year, target.month)
-            for target in (_add_months(now, offset) for offset in range(months_ahead + 1))
+            for target in (_add_months(now, offset)
+                           for offset in range(-months_behind, months_ahead + 1))
         ]
+        current = _partition_name(now.year, now.month)
 
         existing: set[str] = set()
         if partitioned:
@@ -133,11 +158,11 @@ class PartitionManager:
             )
             existing = {row["relname"] for row in rows}
 
-        current_exists = months[0] in existing
+        current_exists = current in existing
         missing = [name for name in months if name not in existing]
         return {
             "partitioned": partitioned,
-            "current_month": months[0],
+            "current_month": current,
             "current_month_exists": current_exists if partitioned else True,
             "covered": (not partitioned) or current_exists,
             "months": months,
@@ -150,6 +175,10 @@ class PartitionManager:
         파티셔닝되지 않은 테이블은 범위 제한이 없으므로 그대로 통과한다.
         파티셔닝된데 이번 달 파티션을 만들지 못하면 PartitionUnavailableError 로
         알린다 — 조용히 데이터 손실을 허용하지 않는다.
+
+        여기서는 **이번 달만** 만든다. 이 메서드는 콘솔 기동 시 호출되며
+        콘솔의 DB 권한에 DDL 이 없을 수 있다. 앞뒤 전체 창은 마이그레이션
+        권한으로 실행하는 ``python -m netwatcher.storage.migrate`` 가 확보한다.
         """
         state = await self.partition_state(months_ahead)
         if state["covered"]:
@@ -157,7 +186,7 @@ class PartitionManager:
 
         month = state["current_month"]
         try:
-            await self.ensure_partitions(months_ahead=0)
+            await self.ensure_partitions(months_ahead=0, months_behind=0)
         except Exception as exc:
             raise PartitionUnavailableError(
                 f"events 파티션 {month} 을 만들 수 없습니다: "
@@ -242,7 +271,7 @@ class PartitionManager:
         ]
 
 
-async def _run(months: int, ensure: bool) -> int:
+async def _run(months: int, ensure: bool, months_behind: int = DEFAULT_MONTHS_BEHIND) -> int:
     """명령줄 처리. 이번 달 파티션이 확보되지 않으면 실패 코드를 돌려준다."""
     from netwatcher.storage.database import Database
     from netwatcher.utils.config import Config
@@ -252,10 +281,10 @@ async def _run(months: int, ensure: bool) -> int:
     await database.connect(max_retries=1)
     try:
         manager = PartitionManager(database.pool)
-        state = await manager.partition_state(months)
+        state = await manager.partition_state(months, months_behind)
         if ensure:
             try:
-                created = await manager.ensure_partitions(months)
+                created = await manager.ensure_partitions(months, months_behind)
             except Exception as exc:
                 # 실패를 이어서 진행하지 않는다. 파티션 확보는 배포의 조건이며
                 # 여기서 넘어가면 경보 저장이 멈춘 채로 배포가 완료된다.
@@ -265,7 +294,7 @@ async def _run(months: int, ensure: bool) -> int:
                 )
                 return 1
             print(f"생성한 파티션: {', '.join(created) if created else '없음'}")
-            state = await manager.partition_state(months)
+            state = await manager.partition_state(months, months_behind)
         print(json.dumps(state, ensure_ascii=False, indent=2))
         if not state["covered"]:
             print(
@@ -294,10 +323,18 @@ def main() -> None:
         default=DEFAULT_MONTHS_AHEAD,
         help="몇 개월 앞까지 확보할지 (기본 3)",
     )
+    parser.add_argument(
+        "--months-behind",
+        type=int,
+        default=DEFAULT_MONTHS_BEHIND,
+        help="몇 개월 뒤까지 확보할지 (기본 3 — 보존 기간만큼의 과거)",
+    )
     args = parser.parse_args()
     if not 0 <= args.months <= 60:
         parser.error("--months 는 0 이상 60 이하이어야 합니다")
-    raise SystemExit(asyncio.run(_run(args.months, args.ensure)))
+    if not 0 <= args.months_behind <= 60:
+        parser.error("--months-behind 는 0 이상 60 이하이어야 합니다")
+    raise SystemExit(asyncio.run(_run(args.months, args.ensure, args.months_behind)))
 
 
 if __name__ == "__main__":

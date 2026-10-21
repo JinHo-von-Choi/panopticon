@@ -316,6 +316,22 @@ class TestBlockManager:
         with pytest.raises(ValueError, match="Unsupported backend"):
             BlockManager(backend="firewalld")
 
+    def test_nftables_backend_rejected(self):
+        """nftables 는 이 경로가 아니다 — governance 경로를 안내한다.
+
+        2026-10-22 이전에는 여기에도 미구현 스텁이 있어서,
+        backend="nftables" 로 만들면 차단이 조용히 아무것도 하지 않았다.
+        스텁을 제거하고 생성 단계에서 거부한다.
+        """
+        with pytest.raises(ValueError) as error:
+            BlockManager(backend="nftables")
+
+        message = str(error.value)
+        assert "response/executor.py" in message
+
+    def test_supported_backends_are_iptables_and_mock(self):
+        assert BlockManager.SUPPORTED_BACKENDS == ("iptables", "mock")
+
     def test_invalid_whitelist_ip_ignored(self):
         """무효한 화이트리스트 IP는 조용히 무시."""
         mgr = BlockManager(

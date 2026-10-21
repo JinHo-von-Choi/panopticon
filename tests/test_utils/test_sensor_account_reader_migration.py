@@ -9,6 +9,11 @@ from uuid import uuid4
 
 import psycopg2
 from psycopg2 import sql
+import pytest
+
+# 이 모듈은 psycopg2 로 실제 PostgreSQL 에 접속한다. db 픽스처로 잡히지
+# 않으므로 DB 필요 시험을 마커로 명시한다.
+pytestmark = pytest.mark.requires_db
 
 
 def test_account_reader_upgrade_downgrade_preserves_accounts(config,tmp_path):

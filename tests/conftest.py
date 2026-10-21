@@ -17,6 +17,7 @@ from netwatcher.storage.database import Database
 from netwatcher.storage.schemas import ALL_SCHEMAS
 from netwatcher.storage.partition_manager import (
     DEFAULT_MONTHS_AHEAD,
+    DEFAULT_MONTHS_BEHIND,
     PartitionManager,
 )
 from netwatcher.storage.repositories import (
@@ -45,6 +46,15 @@ _TEST_DB = {
 _DB_FIXTURES = frozenset(
     {"db", "event_repo", "device_repo", "stats_repo", "blocklist_repo", "incident_repo"}
 )
+
+# 픽스처로 DB 를 선언하지 않고 psycopg2 로 직접 접속하는 시험이 있다.
+# 그런 시험은 픽스처 이름으로 판정할 수 없으므로 마커로 명시한다.
+#
+# 2026-10-22 실측: 마커가 없으면 이 시험들은 DB 부재 시 "건너뛰기" 가 아니라
+# "실패" 로 끝났다. CLAUDE.md 가 문서화한 로컬 절차
+# (NETWATCHER_TEST_ALLOW_DB_SKIP=1 pytest tests/ -q) 가 그대로 동작하지 않았다.
+# 판정 기준을 픽스처 이름에서 마커로 넓혔다.
+_DB_MARKER = "requires_db"
 
 _DB_PROBE_TIMEOUT = 5.0
 
@@ -85,6 +95,12 @@ def pytest_collection_modifyitems(config, items):
     DB 테스트를 실행하지 못해도 초록이 되기 때문이다. 건너뛰기는
     ``NETWATCHER_TEST_ALLOW_DB_SKIP=1`` 로 명시적으로_opt-in_한 경우에만
     적용된다.
+
+    DB 가 필요한 테스트는 두 가지로 표현한다.
+
+    1. DB 픽스처를 요청한다 (``db`` · ``event_repo`` …).
+    2. ``@pytest.mark.requires_db`` 로 직접 선언한다 — psycopg2 로 직접
+       접속하는 시험은 픽스처를 거치지 않으므로 1 로 잡히지 않는다.
     """
     if not _allow_db_skip():
         return
@@ -97,7 +113,7 @@ def pytest_collection_modifyitems(config, items):
         )
     )
     for item in items:
-        if _DB_FIXTURES.intersection(item.fixturenames):
+        if _DB_FIXTURES.intersection(item.fixturenames) or item.get_closest_marker(_DB_MARKER):
             item.add_marker(reason)
 
 
@@ -251,7 +267,13 @@ async def db(config: Config) -> Database:
 
     # events 는 월별 range 파티션 표다. 프로덕션과 같은 범위를 확보해야
     # 파티션 없는 INSERT 실패가 시험에서 그대로 드러난다.
-    await PartitionManager(database.pool).ensure_partitions(DEFAULT_MONTHS_AHEAD)
+    await PartitionManager(database.pool).ensure_partitions(DEFAULT_MONTHS_AHEAD, DEFAULT_MONTHS_BEHIND)
+
+    # 정적 DDL 은 월별 파티션 이름을 모르므로 기본 파티션을 함께 만든다.
+    # 프로덕션에는 이 파티션이 없다. 남겨 두면 "파티션 없는 월의 INSERT
+    # 실패" 를 시험이 재현하지 못한다 — 프로덕션에서 멈추는 수집이
+    # 시험에서는 통과해 보인다. 그래서 시험 스키마를 프로덕션과 같게 만든다.
+    await database.pool.execute("DROP TABLE IF EXISTS events_default")
 
     yield database
     await database.close()

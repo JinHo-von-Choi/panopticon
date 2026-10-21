@@ -55,8 +55,8 @@
       "evidence": "PR 04 실측: 깨끗한 DB 에 마이그레이션이 적용되지 않으면 이후 모든 검사가 표 부재로 흐려진다"
     },
     "G0-5": {
-      "defects": ["regression", "test-database-target", "db-absent-error-not-skip", "schema-ddl-parity"],
-      "evidence": "2026-10-20 실측: .env 가 시험 스키마를 가리켜 운영 DB 에 스키마를 만들고 지웠다. tests/test_utils/test_test_database_target.py 와 tests/test_utils/test_migrations.py 가 막는다"
+      "defects": ["regression", "test-database-target", "db-absent-error-not-skip", "schema-ddl-parity", "db-skip-contract-gap"],
+      "evidence": "2026-10-20 실측: .env 가 시험 스키마를 가리켜 운영 DB 에 스키마를 만들고 지웠다. tests/test_utils/test_test_database_target.py 와 tests/test_utils/test_migrations.py 가 막는다. 2026-10-22 실측: psycopg2 직접 접속 시험 8개가 픽스처 이름 판정 밖에 있어 DB 부재 시 '건너뛰기' 가 아니라 '실패' 로 끝났다 — requires_db 마커로 판정을 넓혔다"
     },
     "G0-6": {
       "defects": ["feed-lifecycle-false-green"],
@@ -87,8 +87,8 @@
       "evidence": "2026-10-09 실측: 강제 실행이 계약 위반을 조용히 통과하며 성공으로 보고됐다"
     },
     "G0-13": {
-      "defects": ["schema-migration-parity-gap"],
-      "evidence": "PR 10 노예 검증 실측: 마이그레이션에만 있는 테이블이 테스트 DB 에 없어 검증 자체가 불가능했다"
+      "defects": ["schema-migration-parity-gap", "test-only-table-in-schema", "table-undercount-by-constant-ddl"],
+      "evidence": "PR 10 노예 검증 실측: 마이그레이션에만 있는 테이블이 테스트 DB 에 없어 검증 자체가 불가능했다. 2026-10-22 실측: ALL_SCHEMAS 의 events_default 는 마이그레이션이 만들지 않아 시험에서만 존재했다 — 시험은 범위 밖 INSERT 를 받아 주고 프로덕션은 막는다. 역방향 검사를 추가하고 마이그레이션이 상수를 참조하는 DDL 도 세게 했다 (표 32 → 37)"
     },
     "G0-14": {
       "defects": ["mutating-route-without-role-check", "gate-route-coverage-gap"],
@@ -119,8 +119,8 @@
       "evidence": "2026-10-21 실측: 관문은 자신이 잡은 결함을 기억하지 않았다 — 같은 결함이 다시 흘러갔다"
     },
     "G0-21": {
-      "defects": ["web-layer-inversion"],
-      "evidence": "2026-10-21 실측: 도메인 모듈이 netwatcher.web 를 가져와 센서 프로세스가 FastAPI 를 끌어들였다"
+      "defects": ["web-layer-inversion", "layer-gate-bypass-by-filename"],
+      "evidence": "2026-10-21 실측: 도메인 모듈이 netwatcher.web 를 가져와 센서 프로세스가 FastAPI 를 끌어들였다. 2026-10-22 실측: 예외 목록을 파일 이름으로 비교해서 netwatcher/response/runtime.py 같은 파일이 검사에서 통째로 빠졌다 — 파일 이름을 runtime.py 로 짓는 것만으로 계층 역전 게이트를 우회할 수 있었다. 예외를 상대경로로 비교한다"
     }
   },
   "uncovered": [
@@ -141,20 +141,20 @@
       "reason": "실패를 유효한 형태의 값으로 돌려주는 함수가 남아 있다 — 5단계에서 정리한다"
     },
     {
-      "defect": "type-check-not-in-ci",
-      "reason": "mypy 가 CI 에서 돌지 않는다 — 4단계에서 래치셋으로 넣는다"
+      "defect": "type-check-baseline-not-measured-per-version",
+      "reason": "mypy 는 CI 에서 래치로 돈다 (scripts/mypy_latch.py). 기준선은 Python 버전별이다 (scripts/mypy_baseline.json). 2026-10-22 실측: 3.13 은 190 으로 확인했지만 3.12 는 이 환경에 3.12 가 없어 확인하지 못했다 — 3.12 값은 이전 상한(196) 을 유지했다"
     },
     {
-      "defect": "coverage-not-measured",
-      "reason": "커버리지 수치가 없다 — 4단계에서 G0-5 에 묶는다"
+      "defect": "coverage-figure-not-reverified",
+      "reason": "커버리지는 G0-5 에서 fail_under=80 으로 측정된다. '실측 84%' 는 DB 가 있는 상태의 수치다 — 2026-10-22 에 DB 없이 잰 63% 와 다르다. 새 실측값으로 갱신하지 않았다"
     },
     {
       "defect": "known-gap-hidden-as-skip",
-      "reason": "미구현이 환경 부재 skip 과 구분되지 않는다 — 4단계에서 xfail 로 구분한다"
+      "reason": "DB 부재 skip 은 requires_db 마커로 명시적으로 구분된다 (2026-10-22). 그래도 환경 부재 skip 이 아닌 구현 미완 skip 이 남아 있을 수 있다 — xfail 로 더 구분해야 한다"
     },
     {
       "defect": "browser-test-silently-skipped",
-      "reason": "브라우저 시험이 실제로 실행됐는지 확인하지 않는다 — 4단계에서 단언을 추가한다"
+      "reason": "브라우저 시험이 실제로 실행됐는지는 CI 가 scripts/assert_browser_ran.py 로 단언한다. 로컬에서는 Chrome 이 없으면 단언이 성립하지 않는다"
     },
     {
       "defect": "orphan-file-unreferenced",

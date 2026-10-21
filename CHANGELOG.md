@@ -1,5 +1,20 @@
 # 변경 기록
 
+## 미출시
+
+### 수정
+
+- `events` 월별 파티션을 **지난 3개월부터 앞으로 3개월**까지 확보합니다. 예전에는 앞으로만 만들었습니다. 새 설치가 기존 `eve.json` 을 가리키면 수집기가 파일 처음부터 읽어 과거 경보를 넣는데, 그 월의 파티션이 없으면 `no partition of relation "events" found for row` 로 배치가 롤백되어 수집이 영구히 멈췄습니다. 마이그레이션 권한으로 `python -m netwatcher.storage.migrate` 를 다시 실행하면 됩니다.
+- 시험 스키마에서 `events_default` 파티션을 없앱니다. 시험은 범위 밖 시각의 INSERT 를 받아 주는데 프로덕션은 막습니다 — 프로덕션에서 멈추는 수집이 시험에서는 통과해 보였습니다. 시험 스키마가 프로덕션과 같은 형태가 됩니다.
+- psycopg2 로 직접 접속하는 시험 8개가 DB 부재 시 "건너뛰기" 대신 "실패" 로 끝나던 것을 고칩니다. `@pytest.mark.requires_db` 마커로 DB 필요를 명시하면 `NETWATCHER_TEST_ALLOW_DB_SKIP=1` 로컬 절차가 그대로 동작합니다. CI 는 이 플래그 없이도 DB 부재 시 실패합니다 — 그대로입니다.
+- 반응형 자동 차단 경로의 미구현 nftables 스텁을 제거했습니다. `BlockManager(backend="nftables")` 는 이제 값을 두지 않고 예외를 냅니다. 실제로 동작하는 nftables 는 승인-governance 경로(`response/executor.py`)에 있고, 그 경로가 "차단" 을 수행합니다.
+- G0-21 의 조립 지점 예외를 상대경로로 비교합니다. 예전에는 파일 이름만 비교해서 `netwatcher/response/runtime.py` 같은 파일이 검사에서 빠졌습니다.
+- G0-13 이 역방향으로 검사합니다. `ALL_SCHEMAS` 에 있는데 마이그레이션이 만들지 않는 표가 있으면 시험에서만 존재하는 표가 됩니다. 마이그레이션이 만들지 않는 것이 불가피하면 `schemas.STATIC_ONLY_OBJECTS` 에 명시해야 합니다. 마이그레이션이 DDL 상수를 참조하는 표도 세게 해서 표 수가 32개에서 37개로 정확해졌습니다.
+
+### 변경
+
+- mypy 래치가 Python 버전별 기준선을 씁니다(`scripts/mypy_baseline.json`). 3.12 와 3.13 은 오류 수가 달라 상한 하나로는 3.13 의 개선이 신호로 표현되지 않았습니다. 오류를 고치면 해당 버전의 기준선을 내리라는 안내가 나옵니다.
+
 ## 0.8.1 — 2026-10-22
 
 ### 추가

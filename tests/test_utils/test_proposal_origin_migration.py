@@ -14,6 +14,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# 이 모듈은 psycopg2 로 실제 PostgreSQL 에 접속한다. db 픽스처로 잡히지
+# 않으므로 DB 필요 시험을 마커로 명시한다.
+pytestmark = pytest.mark.requires_db
+
 
 def test_proposal_origin_upgrade_preserves_legacy_rows_and_checks_complete_origin(config, tmp_path):
     pg = config.section("postgresql")

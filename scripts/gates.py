@@ -940,8 +940,29 @@ def _migration_upgrade_body(text: str) -> str:
     return text[start:end] if end != -1 else text[start:]
 
 
+def _tables_created_in(text: str) -> set[str]:
+    """SQL 문자열 안에서 CREATE TABLE 로 만드는 테이블 이름을 뽑는다."""
+    return {
+        m.lower() for m in re.findall(
+            r"CREATE\s+TABLE\s+(?:IF\s+NOT\S*\s+EXISTS\s+|AS\s+SELECT\s+\*\s+FROM\s+\w+\s+AS\s+)?(\w+)?",
+            text, re.IGNORECASE,
+        )
+        if m
+    }
+
+
+def _tables_dropped_in(text: str) -> set[str]:
+    """SQL 문자열 안에서 DROP TABLE 로 없애는 테이블 이름을 뽑는다."""
+    return {
+        m.lower() for m in re.findall(
+            r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)",
+            text, re.IGNORECASE,
+        )
+    }
+
+
 def gate_schema_parity() -> GateResult:
-    """G0-13: 마이그레이션과 스키마 정의를 대조한다.
+    """G0-13: 마이그레이션과 스키마 정의를 양방향으로 대조한다.
 
     테스트 DB 는 마이그레이션이 아니라 `storage/schemas.py` 의 `ALL_SCHEMAS`
     로 만들어진다. 그래서 마이그레이션에 테이블을 추가하고 `ALL_SCHEMAS` 를
@@ -949,6 +970,12 @@ def gate_schema_parity() -> GateResult:
     상태를 통과로 보고하는 가장 나쁜 종류의 불일치다.
 
     실제로 세 번 발생했다. 주석으로 막을 수 없어 게이트로 막는다.
+
+    2026-10-22 보강: 역방향도 검사한다. `ALL_SCHEMAS` 에 있는데 마이그레이션이
+    만들지 않는 표가 있으면 **시험에서만 존재하는 표**가 된다. `events_default`
+    가 그런 경우였다 — 시험은 범위 밖 INSERT 를 받아 주지만 프로덕션은
+    "no partition of relation" 로 막는다. 마이그레이션이 만들지 않는 것이
+    불가피한 경우에는 `schemas.STATIC_ONLY_OBJECTS` 에 **명시**해야 한다.
     """
     from netwatcher.storage import schemas as schema_module
 
@@ -958,22 +985,20 @@ def gate_schema_parity() -> GateResult:
     # 존재하지 않는 스키마를 기다리는 게 된다.
     existing: set[str] = set()
     for path in versions:
-        upgrade_body = _migration_upgrade_body(path.read_text(encoding="utf-8"))
-        created = {
-            m.lower() for m in re.findall(
-                r"CREATE\s+TABLE\s+(?:IF\s+NOT\S*\s+EXISTS\s+|AS\s+SELECT\s+\*\s+FROM\s+\w+\s+AS\s+)?(\w+)?",
-                upgrade_body, re.IGNORECASE,
-            )
-            if m
-        }
+        source = path.read_text(encoding="utf-8")
+        upgrade_body = _migration_upgrade_body(source)
+        created = _tables_created_in(upgrade_body)
+        # 마이그레이션이 DDL 상수를 참조하는 경우(041·043 등)는 그 상수의
+        # 본문이 파일 안에 없다. 상수는 `storage/schemas.py` 에 있으므로
+        # 거기서 resolve 한다. 2026-10-22 이전에는 이 형태를 놓쳐서
+        # 테이블 수를 32개로 과소계산했다.
+        for name in re.findall(r"op\.execute\(\s*([A-Z][A-Z0-9_]*)\s*\)", upgrade_body):
+            constant = getattr(schema_module, name, None)
+            if isinstance(constant, str):
+                created |= _tables_created_in(constant)
         # 같은 upgrade 안에서 사라지는 테이블은 일시적 작업 테이블이다
         # (008 의 events_backup 처럼).
-        transient = {
-            m.lower() for m in re.findall(
-                r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)",
-                upgrade_body, re.IGNORECASE,
-            )
-        }
+        transient = _tables_dropped_in(upgrade_body)
         existing |= created - transient
         existing -= transient - created
     declared = existing
@@ -984,10 +1009,24 @@ def gate_schema_parity() -> GateResult:
     all_schemas = " ".join(schema_module.ALL_SCHEMAS).lower()
     missing = sorted(t for t in declared if t not in all_schemas)
 
+    schema_tables = {
+        m.lower() for m in re.findall(
+            r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)",
+            all_schemas, re.IGNORECASE,
+        )
+    }
+    static_only = {name.lower() for name in getattr(schema_module, "STATIC_ONLY_OBJECTS", frozenset())}
+    # 역방향: 시험 스키마에만 있고 마이그레이션이 만들지 않는 표
+    test_only = sorted((schema_tables - declared) - static_only)
+    undeclared = sorted(static_only - schema_tables)
+
     checks = [
         f"migrations={len(versions)}",
         f"tables={len(declared)}",
+        f"schema_tables={len(schema_tables)}",
         f"missing={len(missing)}",
+        f"test_only={len(test_only)}",
+        f"static_only={len(static_only)}",
     ]
     if missing:
         return GateResult(
@@ -997,7 +1036,25 @@ def gate_schema_parity() -> GateResult:
             + "\n테스트 DB 는 마이그레이션이 아니라 ALL_SCHEMAS 로 만들어진다.",
             checks,
         )
+    if test_only:
+        return GateResult(
+            "G0-13", "스키마 정합성", False,
+            "ALL_SCHEMAS 에 있지만 마이그레이션이 만들지 않는 테이블:\n  "
+            + "\n  ".join(test_only)
+            + "\n시험에서만 존재하는 표가 있으면 프로덕션과 시험의 실패 모드가 "
+              "달라진다. 마이그레이션으로 만들거나 schemas.STATIC_ONLY_OBJECTS "
+              "에 명시하라.",
+            checks,
+        )
+    if undeclared:
+        return GateResult(
+            "G0-13", "스키마 정합성", False,
+            "STATIC_ONLY_OBJECTS 에 적힌 객체가 ALL_SCHEMAS 에 없다:\n  "
+            + "\n  ".join(undeclared),
+            checks,
+        )
     checks.append("parity=yes")
+    checks.append("reverse=yes")
     return GateResult("G0-13", "스키마 정합성", True, "", checks)
 
 
@@ -1465,16 +1522,38 @@ def gate_gate_experience_library() -> GateResult:
     return GateResult("G0-20", "게이트 경험 라이브러리", True, "", checks)
 
 
+# 계층을 뒤집는 것을 허용하는 조립 지점. netwatcher/ 기준 상대경로.
+COMPOSITION_ROOTS = frozenset({"app.py", "native_console.py", "ingest/runtime.py"})
+
+
+def _is_composition_root(relative_path) -> bool:
+    """netwatcher/ 기준 상대경로가 조립 지점인지 판단한다.
+
+    **경로** 로 비교한다 — 파일 이름으로 비교하면 저장소 어디에 있는
+    `runtime.py` 라도 예외가 되어 게이트를 조용히 우회할 수 있다.
+    """
+    try:
+        inside = relative_path.relative_to("netwatcher").as_posix()
+    except ValueError:
+        inside = relative_path.as_posix()
+    return inside in COMPOSITION_ROOTS
+
+
 def gate_layer_direction() -> GateResult:
     """G0-21: 웹 계층 의존은 조립 지점으로만 들어간다.
 
     도메인 모듈이 `netwatcher.web` 를 가져오면 웹 계층이 아래로 새어
     들어온다 — 센서 프로세스가 FastAPI 를 끌어들이게 된다. 조립 지점
     (앱을 组는 곳)만 예외다.
+
+    2026-10-22 보강: 예외 목록은 **상대경로** 로 비교한다. 이전에는
+    파일 이름만 비교해서 (`relative.name`) 저장소 어디에 있는 `runtime.py`
+    라도 예외로 통째로 건너뛰었다. `netwatcher/response/runtime.py` 도
+    그랬다 — 파일 이름을 `runtime.py` 로 짓는 것만으로 게이트를 조용히
+    우회할 수 있었다.
     """
     import ast
 
-    composition_roots = {"app.py", "native_console.py", "runtime.py"}
     checks: list[str] = []
     offenders: list[str] = []
 
@@ -1482,7 +1561,7 @@ def gate_layer_direction() -> GateResult:
         relative = path.relative_to(REPO_ROOT)
         if relative.parts[1:2] == ("web",):
             continue
-        if relative.name in composition_roots:
+        if _is_composition_root(relative):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -1495,7 +1574,7 @@ def gate_layer_direction() -> GateResult:
                 offenders.append(f"{relative}:{node.lineno}")
 
     checks.append(f"offenders={len(offenders)}")
-    checks.append("roots=app.py,native_console.py,ingest/runtime.py")
+    checks.append("roots=" + ",".join(sorted(COMPOSITION_ROOTS)))
     if offenders:
         return GateResult(
             "G0-21", "계층 방향", False,

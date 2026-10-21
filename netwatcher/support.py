@@ -12,8 +12,9 @@
    - ``full``: 배포 선택 폭을 넓히지만 상태·부작용 조합 검증이 아직 없다.
 2. **구성 조합 검증**
    프로필과 무관하게 *구현되지 않았거나 검증되지 않은* 조합은 항상 거부한다.
-   예를 들어 nftables 백엔드는 플레이스홀더만 존재하므로 어떤 프로필에서도
-   enforcement로 인정하지 않는다.
+   예를 들어 ``response.backend`` 는 반응형 자동 차단 경로이므로 iptables
+   만 enforcement 로 인정한다. 승인-governance 경로의 nftables 백엔드는
+   ``response_execution`` 설정으로 별도 관리한다 — 두 경로는 다른 설정이다.
 
 거부 시 예외 대신 예외 목록을 먼저 계산할 수 있어, CLI·테스트·대시보드가
 같은 판단을 재사용한다.
@@ -228,10 +229,15 @@ class SupportContract:
                 code="SUP-002",
                 path="response.backend",
                 message=(
-                    f"backend={backend!r} 은 아직 구현되지 않았다 "
-                    "(규칙의 적용·만료·복구 경로가 없음)"
+                    f"backend={backend!r} 은 이 경로에서 enforcement가 아니다"
+                    " (규칙의 적용·만료·복구 경로가 없음)"
                 ),
-                remediation="nftables는 PR 14의 TTL 게이트 통과 후에만 허용된다",
+                remediation=(
+                    "이 설정( response.backend )은 반응형 자동 차단 경로다 — "
+                    "iptables 만 지원한다. 승인-governance 경로의 nftables "
+                    "백엔드는 response_execution 설정으로 별도 켠다 "
+                    "(response/executor.py)"
+                ),
             ))
 
         duration = self.get("response.default_duration", 3600)

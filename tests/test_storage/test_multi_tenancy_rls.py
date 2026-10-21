@@ -16,6 +16,10 @@ from netwatcher.storage.database import Database
 from netwatcher.storage.schemas import TENANT_RLS_SCHEMAS, TENANT_TABLES
 from netwatcher.utils.config import Config
 
+# 이 모듈은 psycopg2 로 실제 PostgreSQL 에 접속한다. db 픽스처로 잡히지
+# 않으므로 DB 필요 시험을 마커로 명시한다.
+pytestmark = pytest.mark.requires_db
+
 ZERO_TENANT = UUID(int=0)
 INSERTS = {
     "events": "INSERT INTO events(engine,severity,title,tenant_id) VALUES('test','INFO','test',$1) RETURNING id",

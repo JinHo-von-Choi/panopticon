@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import asyncpg
 import pytest
 
@@ -301,3 +303,86 @@ async def test_insert_fails_without_matching_partition(db):
             "VALUES(NOW(),'test','WARNING','event')"
         )
     assert "no partition of relation" in str(error.value)
+
+
+# ── 시험 스키마가 프로덕션과 같은 형태인지 ─────────────────────────
+#
+# 2026-10-22 실측: 정적 DDL (storage/schemas.py) 은 월별 파티션 이름을
+# 모르므로 events_default (DEFAULT 파티션) 를 함께 만든다. 프로덕션에는
+# 이 파티션이 없다. 시험 스키마에 기본 파티션이 남으면 "파티션 없는 월의
+# INSERT 실패" 를 시험이 재현하지 못한다 — 프로덕션에서 멈추는 수집이
+# 시험에서는 통과해 보인다. 시험 픽스처는 이 파티션을 제거한다.
+
+@pytest.mark.asyncio
+async def test_test_schema_has_no_default_partition(db):
+    """시험 스키마에는 events 의 DEFAULT 파티션이 없다 — 프로덕션과 같다."""
+    exists = await db.pool.fetchval(
+        """SELECT EXISTS (
+               SELECT 1 FROM pg_class c
+               JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE c.relname = 'events_default'
+                 AND n.nspname = current_schema()
+           )"""
+    )
+
+    assert exists is False, (
+        "시험 스키마에 events_default 가 있다 — 프로덕션에는 없는 파티션이 "
+        "시험에서만 INSERT 실패를 가린다"
+    )
+
+
+@pytest.mark.asyncio
+async def test_insert_outside_covered_window_fails(db):
+    """보장 범위 밖 시각의 INSERT 는 프로덕션과 똑같이 실패한다."""
+    with pytest.raises(asyncpg.exceptions.CheckViolationError) as error:
+        await db.pool.execute(
+            "INSERT INTO events(timestamp,engine,severity,title) "
+            "VALUES('2020-01-10','test','WARNING','out of range')"
+        )
+
+    assert "no partition of relation" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_past_window_is_covered(db):
+    """보존 기간 안의 과거 시각은 저장된다.
+
+    EVE 수집기는 처음 설치하면 파일 바이트 0부터 읽는다. 그 경로로 들어온
+    과거 경보가 "no partition of relation" 로 막히면 수집이 영구히 멈춘다.
+    """
+    from datetime import timedelta
+
+    stale = datetime.now(timezone.utc) - timedelta(days=40)
+
+    event_id = await db.pool.fetchval(
+        """INSERT INTO events(timestamp,engine,severity,title)
+           VALUES($1,'test','WARNING','retained event') RETURNING id""",
+        stale,
+    )
+
+    assert event_id is not None
+
+
+@pytest.mark.asyncio
+async def test_ensure_partitions_covers_past_months(db):
+    """ensure_partitions 는 과거 파티션도 만든다."""
+    from netwatcher.storage.partition_manager import (
+        DEFAULT_MONTHS_BEHIND,
+        _add_months,
+        _partition_name,
+    )
+
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(PARTITIONED_EVENTS_DDL)
+
+    created = await PartitionManager(pool).ensure_partitions(months_ahead=1, months_behind=2)
+
+    now = datetime.now(timezone.utc)
+    past = _partition_name(*(_add_months(now, -2).year, _add_months(now, -2).month))
+    assert past in created, "과거 파티션이 만들어지지 않았다"
+
+    partitions = await PartitionManager(pool).list_partitions()
+    names = [p["name"] for p in partitions]
+    assert past in names
