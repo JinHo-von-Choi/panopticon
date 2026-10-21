@@ -66,7 +66,7 @@ async def test_expiry_only_applies_to_recorded_normal_decisions(db, review_case)
 @pytest.mark.asyncio
 async def test_storage_failure_is_unknown_not_zero(db, review_case):
     client, _, _=review_case
-    await db.pool.execute('DROP TABLE business_review_history; DROP TABLE business_reviews')
+    await db.pool.execute('DROP TABLE business_review_history CASCADE; DROP TABLE business_reviews CASCADE')
     assert (await client.get('/api/investigation/priorities')).status_code==503
 
 

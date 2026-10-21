@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from netwatcher.response.executor import ExecutionResult
+from netwatcher.response.contract import ExecutionResult
 from netwatcher.response.lifecycle import LifecycleError
 from netwatcher.response.transport import CommandServer, send_command
 from tests.test_response.test_execution_command import message
@@ -152,7 +152,7 @@ import asyncio, os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[2])
 from netwatcher.response.transport import CommandServer
-from netwatcher.response.executor import ExecutionResult
+from netwatcher.response.contract import ExecutionResult
 async def main():
     async def handle(command):
         return ExecutionResult("unverified", "unknown", detail=str(os.getpid()), backend="shadow")

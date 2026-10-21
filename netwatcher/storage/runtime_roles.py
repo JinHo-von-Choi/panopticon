@@ -7,6 +7,8 @@ import re
 import psycopg2
 from psycopg2 import sql
 
+from netwatcher.utils.digest import is_sha256_hex
+
 SENSOR_READ = {'alembic_version','events','devices','custom_blocklist','traffic_stats','incidents','config_proposals',
     'evidence_records','replay_traces','replay_runs','replay_results','event_ingest','flush_receipts',
     'asset_context_history','work_schedules','event_work_links','sensor_runtime_state','sensor_control_claims',
@@ -45,7 +47,7 @@ def provision_roles(conn,names,schema,marker,passwords):
     with conn.cursor() as cur:
         for kind,name in names.items():
             password=passwords[kind]
-            if not isinstance(password,str) or not re.fullmatch(r'[a-f0-9]{64}',password):
+            if not is_sha256_hex(password):
                 raise ValueError('DB 자격증명을 확인하세요')
             cur.execute("SELECT oid,shobj_description(oid,'pg_authid'),rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=%s",(name,))
             existing=cur.fetchone()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from netwatcher.services.ai_analyzer import AIAnalyzerService, AnalysisResult
 
@@ -117,7 +119,7 @@ class TestParseResponse:
 
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 
 class TestTryAdjustThreshold:
@@ -690,3 +692,173 @@ class TestAnalysisLoop:
         call_kwargs = svc._event_repo.insert.call_args.kwargs
         assert call_kwargs["engine"] == "ai_adjustment"
         assert call_kwargs["severity"] == "INFO"
+
+
+class TestPromptComponents:
+    """컴포넌트 조립 프롬프트와 누출 가드."""
+
+    def _make_service(self) -> AIAnalyzerService:
+        config = MagicMock()
+        config.section.return_value = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": 2,
+            "max_threshold_increase_pct": 20,
+            "copilot_timeout_seconds": 60,
+        }
+        return AIAnalyzerService(
+            config=config,
+            event_repo=MagicMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+
+    def test_prompt_is_assembled_from_component_files(self):
+        svc = self._make_service()
+        prompt = svc._build_prompt([])
+        assert "DATA COVERAGE" in prompt
+        assert "description, metadata" in prompt
+
+    def test_prompt_states_masked_addresses(self):
+        svc = self._make_service()
+        events = [{"id": 1, "engine": "port_scan", "severity": "CRITICAL",
+                   "title": "Port scan", "source_ip": "192.168.1.100",
+                   "timestamp": "2026-02-27T12:00:00"}]
+        prompt = svc._build_prompt(events)
+        assert "host-1" in prompt
+        assert "1 of 1 source addresses are replaced" in prompt
+
+    def test_events_carrying_a_verdict_are_excluded(self):
+        svc = self._make_service()
+        events = [{"id": 1, "engine": "port_scan", "severity": "CRITICAL",
+                   "title": "Verdict: FALSE_POSITIVE already given", "source_ip": "",
+                   "timestamp": "2026-02-27T12:00:00"}]
+        prompt = svc._build_prompt(events)
+        assert "FALSE_POSITIVE already given" not in prompt
+        assert "1 events were excluded" in prompt
+
+    def test_pending_proposal_reason_is_not_sent_to_the_model(self):
+        svc = self._make_service()
+        svc._proposal_service = MagicMock()
+        svc._proposal_service.pending = AsyncMock(
+            return_value=[{"reason": "연속 오탐 2회 — 임계값 상향 제안"}]
+        )
+        events = [{"id": 1, "engine": "port_scan", "severity": "CRITICAL",
+                   "title": "연속 오탐 2회 — 임계값 상향 제안", "source_ip": "",
+                   "timestamp": "2026-02-27T12:00:00"}]
+        prompt = svc._build_prompt(events, ["연속 오탐 2회 — 임계값 상향 제안"])
+        assert "임계값 상향 제안" not in prompt
+
+    def test_past_verdicts_are_injected_as_context(self):
+        svc = self._make_service()
+        experiences = [{
+            "domain": "network_scan:printer", "confidence": 0.8,
+            "lesson": "정상 판정 — 임계값 50 → 80",
+            "created_at": "2026-02-01 00:00:00+00:00",
+        }]
+        events = [{"id": 1, "engine": "port_scan", "severity": "CRITICAL",
+                   "title": "Port scan", "source_ip": "", "timestamp": "2026-02-27T12:00:00"}]
+        prompt = svc._build_prompt(events, [], experiences)
+        assert "PAST VERDICTS" in prompt
+        assert "network_scan:printer" in prompt
+
+    def test_past_verdicts_do_not_replace_the_data(self):
+        svc = self._make_service()
+        experiences = [{
+            "domain": "network_scan", "confidence": 0.8, "lesson": "정상",
+            "created_at": "2026-02-01 00:00:00+00:00",
+        }]
+        events = [{"id": 1, "engine": "port_scan", "severity": "CRITICAL",
+                   "title": "Port scan", "source_ip": "", "timestamp": "2026-02-27T12:00:00"}]
+        prompt = svc._build_prompt(events, [], experiences)
+        assert "EVENTS:" in prompt
+        assert "Port scan" in prompt
+
+    @pytest.mark.asyncio
+    async def test_past_verdicts_are_collected_per_signature(self):
+        svc = self._make_service()
+        svc._experience_source = MagicMock()
+        svc._experience_source.matching_many = AsyncMock(return_value=[])
+        events = [
+            {"id": 1, "engine": "port_scan", "title_key": "rule.a", "severity": "CRITICAL",
+             "title": "t", "source_ip": "", "timestamp": "2026-02-27T12:00:00"},
+            {"id": 2, "engine": "port_scan", "title_key": "rule.b", "severity": "WARNING",
+             "title": "t", "source_ip": "", "timestamp": "2026-02-27T12:00:00"},
+        ]
+        await svc._past_verdicts(events)
+        pairs = svc._experience_source.matching_many.await_args.args[0]
+        assert pairs == [("port_scan", "port_scan:rule.a"), ("port_scan", "port_scan:rule.b")]
+
+
+class TestParseRetry:
+    """파싱 실패를 되먹여 한 번 재시도한다."""
+
+    def _make_service(self) -> AIAnalyzerService:
+        config = MagicMock()
+        config.section.return_value = {
+            "enabled": True,
+            "interval_minutes": 15,
+            "lookback_minutes": 30,
+            "max_events": 50,
+            "consecutive_fp_threshold": 2,
+            "max_threshold_increase_pct": 20,
+            "copilot_timeout_seconds": 60,
+        }
+        return AIAnalyzerService(
+            config=config,
+            event_repo=MagicMock(),
+            registry=MagicMock(),
+            dispatcher=MagicMock(),
+            yaml_editor=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_output_is_retried_once_and_not_applied(self):
+        svc = self._make_service()
+        svc._fetch_recent_events = AsyncMock(return_value=[
+            {"id": 1, "engine": "port_scan", "severity": "CRITICAL", "title": "t",
+             "source_ip": "", "timestamp": "2026-02-27"}])
+        svc._backend.complete = AsyncMock(return_value="looks fine to me")
+        svc._apply_result = AsyncMock()
+
+        await svc._run_once()
+
+        assert svc._backend.complete.await_count == 2
+        svc._apply_result.assert_not_awaited()
+        assert svc._health["last_failure"] == "invalid_output"
+
+    @pytest.mark.asyncio
+    async def test_retry_prompt_carries_the_parse_error(self):
+        svc = self._make_service()
+        svc._fetch_recent_events = AsyncMock(return_value=[
+            {"id": 1, "engine": "port_scan", "severity": "CRITICAL", "title": "t",
+             "source_ip": "", "timestamp": "2026-02-27"}])
+        svc._backend.complete = AsyncMock(return_value="looks fine to me")
+        svc._apply_result = AsyncMock()
+
+        await svc._run_once()
+
+        retry_prompt = svc._backend.complete.await_args_list[1].args[0]
+        assert "COULD NOT BE PARSED" in retry_prompt
+        assert "looks fine to me" in retry_prompt
+
+    @pytest.mark.asyncio
+    async def test_retry_result_is_applied(self):
+        svc = self._make_service()
+        svc._fetch_recent_events = AsyncMock(return_value=[
+            {"id": 1, "engine": "port_scan", "severity": "CRITICAL", "title": "t",
+             "source_ip": "", "timestamp": "2026-02-27"}])
+        svc._backend.complete = AsyncMock(side_effect=[
+            "no verdict here",
+            "VERDICT: CONFIRMED_THREAT\nENGINE: port_scan\nREASON: real attack.",
+        ])
+        svc._apply_result = AsyncMock()
+
+        await svc._run_once()
+
+        assert svc._backend.complete.await_count == 2
+        svc._apply_result.assert_awaited_once()
+        assert svc._apply_result.await_args.args[0].verdict == "CONFIRMED_THREAT"

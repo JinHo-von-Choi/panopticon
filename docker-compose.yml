@@ -80,7 +80,7 @@ services:
       - ${PANOPTICON_ENV_FILE:-.env}
     environment:
       NETWATCHER_DB_HOST: "${NETWATCHER_DB_HOST:-db}"
-    entrypoint: ["python", "-m", "alembic", "upgrade", "head"]
+    entrypoint: ["python", "-m", "netwatcher.storage.migrate"]
     depends_on:
       db:
         condition: service_healthy

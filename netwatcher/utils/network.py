@@ -195,14 +195,18 @@ def get_default_interface() -> str:
     return "eth0"
 
 
-def get_local_ip() -> str:
-    """현재 머신의 로컬 IP 주소를 반환한다."""
+def get_local_ip() -> str | None:
+    """현재 머신의 로컬 IP 주소를 반환한다.
+
+    주소를 얻지 못하면 None 을 돌려준다 — "127.0.0.1" 을 돌려주면 실제 주소가
+    있는 것처럼 보인다.
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             return s.getsockname()[0]
     except Exception:
-        return "127.0.0.1"
+        return None
 
 
 def get_local_mac(iface: str | None = None) -> str | None:

@@ -17,7 +17,7 @@ import struct
 from collections.abc import Awaitable, Callable
 
 from netwatcher.response.command import ExecutionCommand, MAX_COMMAND_BYTES
-from netwatcher.response.executor import ExecutionResult
+from netwatcher.response.contract import ExecutionResult
 from netwatcher.response.lifecycle import LifecycleError
 from netwatcher.response.socket_ownership import SocketOwnership
 

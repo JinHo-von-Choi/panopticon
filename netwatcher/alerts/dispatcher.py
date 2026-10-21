@@ -29,7 +29,7 @@ from netwatcher.observability.observation import (
 )
 from netwatcher.storage.repositories import DeviceRepository, EventRepository
 from netwatcher.utils.config import Config
-from netwatcher.web import metrics
+from netwatcher.observability import metrics
 
 if TYPE_CHECKING:
     from netwatcher.observability.observation import ObservationService
@@ -438,7 +438,7 @@ class AlertDispatcher(EventStream):
                 # 경보 옆에 그 사실을 남긴다.
                 self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
             try:
-                from netwatcher.web.metrics import alerts_rate_limited
+                from netwatcher.observability.metrics import alerts_rate_limited
                 alerts_rate_limited.inc()
             except ImportError:
                 pass
@@ -473,7 +473,7 @@ class AlertDispatcher(EventStream):
 
         # Prometheus 알림 카운터
         try:
-            from netwatcher.web.metrics import alerts_total
+            from netwatcher.observability.metrics import alerts_total
             alerts_total.labels(engine=alert.engine, severity=alert.severity.value).inc()
         except ImportError:
             pass
@@ -717,7 +717,7 @@ class AlertDispatcher(EventStream):
                 logger.error("Webhook channel %s failed: %s", name, type(exc).__name__)
             else:
                 try:
-                    from netwatcher.web.metrics import webhook_duration
+                    from netwatcher.observability.metrics import webhook_duration
                     webhook_duration.labels(channel=name).observe(elapsed)
                 except ImportError:
                     pass

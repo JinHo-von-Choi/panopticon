@@ -1,19 +1,77 @@
-"""PartitionManager 테스트: 파티션 생성/삭제/조회.
+"""PartitionManager 테스트: 파티션 생성/삭제/조회/상태 확인.
 
 파티셔닝 마이그레이션이 실행되지 않은 상태에서의 안전한 동작도 검증한다.
 """
 
 from __future__ import annotations
 
+import asyncpg
 import pytest
 
-from netwatcher.storage.partition_manager import PartitionManager
+from netwatcher.storage.partition_manager import (
+    PartitionManager,
+    PartitionUnavailableError,
+)
+
+
+PARTITIONED_EVENTS_DDL = """
+    CREATE TABLE events (
+        id          BIGSERIAL       NOT NULL,
+        timestamp   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+        engine      VARCHAR(64)     NOT NULL,
+        severity    VARCHAR(16)     NOT NULL,
+        title       VARCHAR(512)    NOT NULL,
+        description TEXT            NOT NULL DEFAULT '',
+        source_ip   INET,
+        source_mac  MACADDR,
+        dest_ip     INET,
+        dest_mac    MACADDR,
+        title_key        TEXT,
+        description_key  TEXT,
+        metadata         JSONB           NOT NULL DEFAULT '{}',
+        packet_info      JSONB           NOT NULL DEFAULT '{}',
+        resolved         BOOLEAN         NOT NULL DEFAULT FALSE,
+        reasoning        TEXT,
+        mitre_attack_id  VARCHAR(64),
+        threat_level     SMALLINT        NOT NULL DEFAULT 0,
+        PRIMARY KEY (id, timestamp)
+    ) PARTITION BY RANGE (timestamp)
+"""
+
+# 마이그레이션 008 이 실행되지 않은 상태 — 파티셔닝되지 않은 표.
+UNPARTITIONED_EVENTS_DDL = """
+    CREATE TABLE events (
+        id          BIGSERIAL       PRIMARY KEY,
+        timestamp   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+        engine      VARCHAR(64)     NOT NULL,
+        severity    VARCHAR(16)     NOT NULL,
+        title       VARCHAR(512)    NOT NULL,
+        description TEXT            NOT NULL DEFAULT '',
+        source_ip   INET,
+        source_mac  MACADDR,
+        dest_ip     INET,
+        dest_mac    MACADDR,
+        title_key        TEXT,
+        description_key  TEXT,
+        metadata         JSONB           NOT NULL DEFAULT '{}',
+        packet_info      JSONB           NOT NULL DEFAULT '{}',
+        resolved         BOOLEAN         NOT NULL DEFAULT FALSE,
+        reasoning        TEXT,
+        mitre_attack_id  VARCHAR(64),
+        threat_level     SMALLINT        NOT NULL DEFAULT 0
+    )
+"""
 
 
 @pytest.mark.asyncio
 async def test_non_partitioned_table_returns_empty(db):
     """파티셔닝되지 않은 events 테이블에서 모든 메서드가 빈 결과를 반환한다."""
-    pm = PartitionManager(db.pool)
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(UNPARTITIONED_EVENTS_DDL)
+
+    pm = PartitionManager(pool)
 
     partitions = await pm.list_partitions()
     assert partitions == []
@@ -154,3 +212,92 @@ async def test_drop_expired_partitions(db):
     partition_names = [p["name"] for p in partitions]
     assert pname in partition_names
     assert "events_2020_01" not in partition_names
+
+
+@pytest.mark.asyncio
+async def test_partition_state_on_non_partitioned_table(db):
+    """파티셔닝되지 않은 테이블은 범위 제한이 없으므로 항상 확보된 것으로 본다."""
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(UNPARTITIONED_EVENTS_DDL)
+
+    state = await PartitionManager(pool).partition_state()
+
+    assert state["partitioned"] is False
+    assert state["covered"] is True
+    assert state["current_month_exists"] is True
+    assert state["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_partition_state_reports_missing_current_month(db):
+    """이번 달 파티션이 없으면 covered 가 거짓이 된다."""
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(PARTITIONED_EVENTS_DDL)
+
+    pm = PartitionManager(pool)
+    state = await pm.partition_state()
+    assert state["partitioned"] is True
+    assert state["current_month_exists"] is False
+    assert state["covered"] is False
+    assert state["current_month"] in state["missing"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_covered_creates_current_month_partition(db):
+    """ensure_covered 는 이번 달 파티션을 만들어 확보 상태로 만든다."""
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(PARTITIONED_EVENTS_DDL)
+
+    pm = PartitionManager(pool)
+    state = await pm.ensure_covered()
+
+    assert state["covered"] is True
+    assert state["current_month_exists"] is True
+    assert state["current_month"] not in state["missing"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_covered_raises_when_partition_cannot_be_created(db, monkeypatch):
+    """파티션을 만들 수 없으면 조용히 넘어가지 않고 알린다."""
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(PARTITIONED_EVENTS_DDL)
+
+    pm = PartitionManager(pool)
+
+    async def refuse(months_ahead: int = 2) -> list[str]:
+        raise PermissionError("permission denied for schema")
+
+    monkeypatch.setattr(pm, "ensure_partitions", refuse)
+
+    with pytest.raises(PartitionUnavailableError) as error:
+        await pm.ensure_covered()
+
+    assert "partition_manager" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_insert_fails_without_matching_partition(db):
+    """파티션이 없는 월의 INSERT 는 실패한다 — 확보가 필요한 이유를 고정한다."""
+    pool = db.pool
+    async with pool.acquire() as conn:
+        await conn.execute("DROP TABLE IF EXISTS events CASCADE")
+        await conn.execute(PARTITIONED_EVENTS_DDL)
+        await conn.execute(
+            "CREATE TABLE events_2020_01 PARTITION OF events "
+            "FOR VALUES FROM ('2020-01-01') TO ('2020-02-01')"
+        )
+
+    with pytest.raises(asyncpg.exceptions.CheckViolationError) as error:
+        await pool.execute(
+            "INSERT INTO events(timestamp,engine,severity,title) "
+            "VALUES(NOW(),'test','WARNING','event')"
+        )
+    assert "no partition of relation" in str(error.value)

@@ -16,7 +16,10 @@ class ExecutionWorker:
     def __init__(self, config, *, database=None):
         settings = config.get("response_execution.worker", {})
         if not isinstance(settings, dict) or settings.get("enabled") is not True:
-            raise ValueError("response_execution.worker.enabled must be true")
+            raise ValueError(
+                "response_execution.worker.enabled must be true — "
+                "기본 설정에는 독립 실행기 설정이 없으며 배포 설정에서 명시해야 합니다"
+            )
         if settings.get("backend", "shadow") != "shadow":
             raise ValueError("검증된 독립 OS 실행 백엔드가 아직 없습니다")
         enabled = config.get("auth.enabled", False)

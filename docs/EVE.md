@@ -41,7 +41,7 @@ netwatcher:
 ```
 
 ```bash
-python -m alembic upgrade head
+python -m netwatcher.storage.migrate
 python -m netwatcher -c config/default.yaml
 ```
 

@@ -22,7 +22,7 @@ from netwatcher.observability.observation import (
     KernelDropProbe,
 )
 from netwatcher.utils.config import Config
-from netwatcher.web import metrics
+from netwatcher.observability import metrics
 
 if TYPE_CHECKING:
     from netwatcher.observability.observation import ObservationService

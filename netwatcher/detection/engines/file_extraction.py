@@ -114,6 +114,10 @@ class FileExtractionEngine(DetectionEngine):
         )
 
         self._pipeline_started = False
+
+        # 파이프라인 작업 참조. 참조가 없으면 진행 중인 작업이 중간에
+        # 가비지 컬렉션될 수 있다.
+        self._tasks: set[asyncio.Task] = set()
         self._last_flush       = time.time()
 
     # ------------------------------------------------------------------
@@ -178,14 +182,8 @@ class FileExtractionEngine(DetectionEngine):
 
     def shutdown(self) -> None:
         """파이프라인을 중지한다."""
-        loop = None
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-
-        if loop and self._pipeline_started:
-            loop.create_task(self._pipeline.stop())
+        if self._pipeline_started:
+            self._spawn(lambda: self._pipeline.stop())
 
     # ------------------------------------------------------------------
     # 내부 메서드
@@ -193,17 +191,28 @@ class FileExtractionEngine(DetectionEngine):
 
     def _submit_to_pipeline(self, files: list) -> None:
         """추출된 파일을 파이프라인에 제출한다."""
+        if not self._pipeline_started:
+            self._spawn(lambda: self._pipeline.start())
+            self._pipeline_started = True
+
+        for ef in files:
+            self._spawn(lambda ef=ef: self._pipeline.submit(ef))
+
+    def _spawn(self, factory) -> None:
+        """파이프라인 작업을 만든다.
+
+        참조를 남기지 않으면 진행 중인 작업이 중간에 가비지 컬렉션될 수
+        있다 — 추출된 파일이 조용히 사라지는 경로가 된다.
+
+        작업은 이벤트 루프가 돌 때에만 만든다.
+        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-
-        if not self._pipeline_started:
-            loop.create_task(self._pipeline.start())
-            self._pipeline_started = True
-
-        for ef in files:
-            loop.create_task(self._pipeline.submit(ef))
+        task = loop.create_task(factory())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def _on_pipeline_alert(self, alert_data: dict[str, Any]) -> None:
         """파이프라인에서 알림이 생성되면 호출된다."""

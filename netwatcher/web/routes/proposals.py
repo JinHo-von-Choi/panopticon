@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from netwatcher.detection.proposals import (
@@ -34,6 +34,12 @@ class SubmitProposalRequest(BaseModel):
     engine: str = Field(..., min_length=1, max_length=64)
     params: dict[str, Any]
     reason: str = ""
+    # 비교 입력(탐지 전 특징값 레코드). 있으면 접수와 동시에 기준·후보 대비를 낸다.
+    records: list[dict[str, Any]] = Field(default_factory=list, max_length=50000)
+
+
+class ProbeRequest(BaseModel):
+    records: list[dict[str, Any]] = Field(..., min_length=1, max_length=50000)
 
 
 class ValidationRequest(BaseModel):
@@ -80,6 +86,7 @@ def create_proposals_router(service: ProposalService) -> APIRouter:
                 params=body.params,
                 reason=body.reason,
                 source=SOURCE_HUMAN,
+                records=body.records or None,
             )
         except ProposalError as exc:
             # 스키마 위반 제안은 큐에 들어가지 않는다
@@ -90,7 +97,25 @@ def create_proposals_router(service: ProposalService) -> APIRouter:
                     "violations": _violations(exc.violations),
                 },
             )
-        return {"status": "proposed", "id": proposal_id, "engine": body.engine}
+        row = await service.get(proposal_id)
+        return {
+            "status": "proposed", "id": proposal_id, "engine": body.engine,
+            "probe": (row or {}).get("probe"),
+        }
+
+    @router.post("/{proposal_id}/probe")
+    async def attach_probe(
+        proposal_id: int, body: ProbeRequest,
+        auth: dict = Depends(require_role(Role.ANALYST, Role.ADMIN)),
+    ):
+        """같은 입력에 대한 기준·후보 대비를 계산해 제안에 붙인다."""
+        try:
+            probe = await service.attach_probe(
+                proposal_id, body.records, str(auth.get('sub') or 'local'),
+            )
+            return {"probe": probe}
+        except ProposalError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from None
 
     @router.post("/{proposal_id}/validation")
     async def attach_validation(
@@ -108,23 +133,28 @@ def create_proposals_router(service: ProposalService) -> APIRouter:
     async def approve_proposal(
         proposal_id: int,
         body: DecisionRequest,
+        request: Request,
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
-        return await _decide(service, proposal_id, body, approved=True, actor=str(_auth.get("sub") or "local"))
+        return await _decide(service, proposal_id, body, approved=True,
+                             actor=str(_auth.get("sub") or "local"), request=request)
 
     @router.post("/{proposal_id}/reject")
     async def reject_proposal(
         proposal_id: int,
         body: DecisionRequest,
+        request: Request,
         _auth: dict = Depends(require_role(Role.ADMIN)),
     ):
-        return await _decide(service, proposal_id, body, approved=False, actor=str(_auth.get("sub") or "local"))
+        return await _decide(service, proposal_id, body, approved=False,
+                             actor=str(_auth.get("sub") or "local"), request=request)
 
     return router
 
 
 async def _decide(
     service: ProposalService, proposal_id: int, body: DecisionRequest, approved: bool, actor: str,
+    request: Request | None = None,
 ):
     try:
         decision = await service.decide(
@@ -139,8 +169,46 @@ async def _decide(
             detail={"error": str(exc), "violations": _violations(exc.violations)},
         )
 
+    await _record_ledger(service, proposal_id, decision, actor, request)
+
     payload = decision.as_dict()
     if decision.approved and not decision.applied:
         # 승인은 됐지만 반영은 실패했다 — 성공으로 위장하지 않는다
         return payload  # 상태 코드 200 이지만 applied=false 와 error 가 함께 담긴다
     return payload
+
+
+async def _record_ledger(
+    service: ProposalService, proposal_id: int, decision, actor: str, request: Request | None,
+) -> None:
+    """제안 결정·대비 결과를 한 건의 원장으로 남긴다.
+
+    감사 해시 체인은 기존 감사 기록기가 잇는다. 여기서는 제안·대비·결정을
+    한 묶음으로 남긴다.
+    """
+    if request is None:
+        return
+    audit = getattr(request.app.state, "audit_logger", None)
+    if audit is None:
+        return
+    row = await service.get(proposal_id)
+    probe = (row or {}).get("probe") or {}
+    details = {
+        "proposal_id": proposal_id,
+        "approved": bool(decision.approved),
+        "engine": decision.engine,
+        "params": decision.params,
+        "probe": {
+            "status": probe.get("status"),
+            "comparable": probe.get("comparable"),
+            "counts": probe.get("counts") or {},
+        },
+    }
+    try:
+        await audit.log(
+            user=actor[:100], action="proposal_decided",
+            resource=f"/api/proposals/{proposal_id}", details=details,
+            ip=request.client.host if request.client else "",
+        )
+    except Exception:
+        logger.exception("제안 결정 원장 기록 실패")

@@ -21,7 +21,7 @@ from netwatcher.detection.attack_mapping import enrich_alert_metadata
 from netwatcher.detection.base import DetectionEngine
 
 try:
-    from netwatcher.web.metrics import engine_analyze_duration as _engine_analyze_duration
+    from netwatcher.observability.metrics import engine_analyze_duration as _engine_analyze_duration
 except ImportError:
     _engine_analyze_duration = None
 from netwatcher.detection.models import Alert, downgrade_severity

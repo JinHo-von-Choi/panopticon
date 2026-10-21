@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, Field, field_validator
 
 from netwatcher.investigation.reviews import ReviewConflict
-from netwatcher.web.change_audit import ChangeAudit, state_summary
+from netwatcher.web.change_audit import ChangeAudit
+from netwatcher.utils.state_summary import state_summary
 from netwatcher.web.rbac import Role, require_role
 
 

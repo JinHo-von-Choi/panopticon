@@ -1,19 +1,17 @@
 """분리 센서의 설정 제안·검증·승인 API."""
 
 import asyncio
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, Query
+from pydantic import Field
 
 from netwatcher.services.sensor_control import SensorControlError
 from netwatcher.web.rbac import Role, require_role
+from netwatcher.web.routes.remote_engines import EngineChange, sensor_error, sensor_unknown
 
 
-class ProposalChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    request_id: UUID
-    base_version: str = Field(pattern=r"^[a-f0-9]{64}$")
+class ProposalChange(EngineChange):
+    """제안 변경 요청 — 버전 지문 계약은 엔진 변경과 같다."""
 
 
 class ProposalSubmission(ProposalChange):
@@ -42,11 +40,9 @@ def create_remote_proposals_router(control):
                 raise SensorControlError("sensor_result_unknown", 503)
             return {**result, "control_process": "separate"}
         except SensorControlError as error:
-            raise HTTPException(error.status, {"code": error.code,
-                "message": "제안의 상태를 확인할 수 없습니다. 제안과 현재 설정을 다시 조회하세요."}) from None
+            raise sensor_error(error, "제안의 상태를 확인할 수 없습니다. 제안과 현재 설정을 다시 조회하세요.") from None
         except TimeoutError:
-            raise HTTPException(503, {"code": "sensor_result_unknown",
-                "message": "제안의 처리 결과를 확인할 수 없습니다. 같은 변경을 다시 실행하지 마세요."}) from None
+            raise sensor_unknown("제안의 처리 결과를 확인할 수 없습니다. 같은 변경을 다시 실행하지 마세요.") from None
 
     @router.get("")
     async def list_proposals(status: str | None = Query(None, pattern="^(pending|approved|rejected|failed)$"),

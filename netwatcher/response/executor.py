@@ -9,16 +9,19 @@ ShadowExecutor는 OS를 변경하지 않는다. nftables 구현은 별도 만료
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
+from netwatcher.response.nftables_backend import NftablesExecutor, capabilities as nft_caps
+from netwatcher.response.contract import (
+    OBSERVED_UNKNOWN,
+    ExecutionRequest,
+    ExecutionResult,
+    Executor,
+)
 from netwatcher.response.lifecycle import (
     DEFAULT_TTL_SECONDS,
-    OUTCOME_CONFIRMED,
     OUTCOME_UNVERIFIED,
     LifecycleError,
-    candidate_hash,
     validate_action,
 )
 
@@ -27,69 +30,6 @@ logger = logging.getLogger("netwatcher.response.executor")
 APPLY = "apply"
 VERIFY = "verify"
 REMOVE = "remove"
-
-# 확인 결과를 담는 봉투. 'unknown' 은 값으로 존재한다 — 없는 게 아니다
-OBSERVED_PRESENT = "present"
-OBSERVED_ABSENT = "absent"
-OBSERVED_UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class ExecutionRequest:
-    """실행기에 전달되는 값. 이 이상은 받지 않는다."""
-
-    target: str
-    direction: str
-    ttl_seconds: int
-    rule_tag: str
-    scope: dict[str, Any] = field(default_factory=dict)
-
-    def content_hash(self) -> str:
-        return candidate_hash(self.target, self.direction, self.ttl_seconds, self.scope)
-
-
-@dataclass(frozen=True, kw_only=True)
-class ExpiringExecutionRequest(ExecutionRequest):
-    """실행기가 DB에서 확정한 만료 시각을 붙이는 내부 요청."""
-
-    expires_at: datetime | None
-
-
-@dataclass
-class ExecutionResult:
-    """실행 결과. 확인되지 않으면 confirmed 가 아니다."""
-
-    outcome: str                 # confirmed | unverified | error | absent | mismatch
-    observed: str                # present | absent | unknown
-    rule_fingerprint: str | None = None
-    detail: str = ""
-    backend: str = "shadow"
-
-    @property
-    def verified(self) -> bool:
-        return self.outcome == OUTCOME_CONFIRMED and self.observed == OBSERVED_PRESENT
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "outcome": self.outcome,
-            "observed": self.observed,
-            "rule_fingerprint": self.rule_fingerprint,
-            "detail": self.detail,
-            "backend": self.backend,
-            "verified": self.verified,
-        }
-
-
-class Executor(Protocol):
-    """실행기 계약. 웹 계층은 이 인터페이스만 본다."""
-
-    name: str
-    applies_to_os: bool
-
-    def apply(self, request: ExecutionRequest) -> ExecutionResult: ...
-    def verify(self, request: ExecutionRequest) -> ExecutionResult: ...
-    def remove(self, request: ExecutionRequest) -> ExecutionResult: ...
-
 
 class ShadowExecutor:
     """OS 를 건드리지 않는 실행기.
@@ -201,8 +141,6 @@ def build_executor(name: str, *, sudo: bool = False) -> Executor:
     if name == ShadowExecutor.name:
         return ShadowExecutor()
     if name == "nftables":
-        from netwatcher.response.nftables_backend import NftablesExecutor
-
         return NftablesExecutor(kernel_expiry_verified=False, sudo=sudo)
     return UnavailableExecutor(name)
 
@@ -214,8 +152,6 @@ def executor_capabilities(name: str, executor: Executor | None = None) -> dict[s
     """
     executor = executor or build_executor(name)
     if getattr(executor, "applies_to_os", False) and name == "nftables":
-        from netwatcher.response.nftables_backend import capabilities as nft_caps
-
         return nft_caps(executor)  # type: ignore[arg-type]
     return {
         "backend": name,

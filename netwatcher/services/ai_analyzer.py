@@ -42,8 +42,24 @@ if TYPE_CHECKING:
     from netwatcher.utils.yaml_editor import YamlConfigEditor
 
 from netwatcher.ai.providers import JSON_INSTRUCTION, ProviderError, build_provider, parse_decision
+from netwatcher.ai.components import (
+    LEAK_MARKERS,
+    PromptTree,
+    assert_no_leak,
+    describe_coverage,
+    filter_leaks,
+    validate as validate_prompt_tree,
+)
+from netwatcher.detection.experience import format_past_verdicts
 
 logger = logging.getLogger("netwatcher.services.ai_analyzer")
+
+# 분석에 넘기지 않는 이벤트 필드. 빠진 필드는 프롬프트에 명시한다.
+DROPPED_PROMPT_FIELDS = (
+    "description", "metadata", "packet_info", "source_mac",
+    "dest_ip", "dest_mac", "title_key", "description_key",
+    "threat_level", "resolved",
+)
 
 
 @dataclass
@@ -130,6 +146,8 @@ class AIAnalyzerService:
         yaml_editor: "YamlConfigEditor | None",
         whitelist: "Whitelist | None" = None,
         proposal_service: "ProposalService | None" = None,
+        review_source: "Any | None" = None,
+        experience_source: "Any | None" = None,
     ) -> None:
         """서비스 의존성을 주입받아 초기화한다."""
         ai_cfg = config.section("ai_analyzer") or {}
@@ -142,6 +160,18 @@ class AIAnalyzerService:
         self._whitelist   = whitelist
         # 승인 큐 (PR 10). 주입되지 않으면 제안은 이벤트 로그로만 남는다.
         self._proposal_service = proposal_service
+        # 최근 판정 노트 출처. 프롬프트 누출 가드가 쓴다.
+        self._review_source = review_source
+        # 과거 판정 라이브러리. 새 제안 프롬프트에 문맥으로 주입한다.
+        self._experience_source = experience_source
+
+        # 프롬프트는 파일 단위 컴포넌트로 관리한다. 유효하지 않으면 조립하지 않는다.
+        self._prompt_tree = PromptTree.load()
+        problems = validate_prompt_tree(self._prompt_tree)
+        if problems:
+            raise ValueError(
+                "프롬프트 컴포넌트가 유효하지 않습니다: " + "; ".join(problems)
+            )
 
         # 쓰기 격리 (PR 03): AI는 설정을 "제안"만 한다.
         # apply_mode 가 "apply" 면 기동을 거부한다 — 지원 프로필 계약이 같은
@@ -416,7 +446,12 @@ class AIAnalyzerService:
     # 프롬프트 구성                                                         #
     # ------------------------------------------------------------------ #
 
-    def _build_prompt(self, events: list[dict]) -> str:
+    def _build_prompt(
+        self,
+        events: list[dict],
+        markers: list[str] | None = None,
+        experiences: list[dict] | None = None,
+    ) -> str:
         """분석 대상 이벤트를 구조화된 Copilot 프롬프트로 변환한다."""
         slim = [
             {
@@ -429,50 +464,117 @@ class AIAnalyzerService:
             }
             for e in events
         ]
+        masked = 0
         if self._mask_internal:
+            masked = self._masked_count(slim)
             slim = self._mask(slim)
-        events_json = json.dumps(slim, ensure_ascii=False, indent=2)
-        
+
+        # 이미 내려진 판정이 이벤트에 남아 있으면 분석기가 그 판정을 보고한다.
+        active = list(markers) if markers else list(LEAK_MARKERS)
+        kept, dropped = filter_leaks(slim, active)
+
         # 기본 언어 설정 가져오기
         lang = self._config.get("netwatcher.language.default", "ko")
-        lang_instruction = "Respond in Korean." if lang == "ko" else "Respond in English."
+        language = "Korean" if lang == "ko" else "English"
 
-        # 화이트리스트 문맥 정보 구성
-        whitelist_info = ""
-        if self._whitelist:
-            wl = self._whitelist.to_dict()
-            whitelist_info = (
-                f"\nWHITELIST CONTEXT:\n"
-                f"- IPs: {', '.join(wl.get('ips', [])) or 'None'}\n"
-                f"- IP Ranges: {', '.join(wl.get('ip_ranges', [])) or 'None'}\n"
-                f"- MACs: {', '.join(wl.get('macs', [])) or 'None'}\n"
-                f"- Domains: {', '.join(wl.get('domains', [])) or 'None'}\n"
-                f"- Domain Suffixes: {', '.join(wl.get('domain_suffixes', [])) or 'None'}\n"
-                f"Trusted entities in the whitelist should be treated as very likely FALSE POSITIVES unless their behavior is clearly malicious."
-            )
-
-        return (
-            f"Analyze these network security events from a home/office LAN monitor "
-            f"(lookback: {self._lookback_minutes} minutes). {lang_instruction} "
-            f"Note: This is a private home/office environment where some local scanning (printers, NAS) may occur. "
-            f"{whitelist_info} "
-            f"Events include CRITICAL, WARNING, and INFO severity levels. "
-            f"Perform TWO checks: "
-            f"(1) Are any CRITICAL/WARNING alerts actually false positives? "
-            f"(2) Do any INFO/low-confidence events indicate a more serious missed threat? "
-            f"Return the single most important finding. "
-            f"EVENTS: {events_json} "
-            + (JSON_INSTRUCTION if self._backend.structured else
-            f"Respond ONLY in this exact format: "
-            f"VERDICT: CONFIRMED_THREAT | FALSE_POSITIVE | MISSED_THREAT | UNCERTAIN "
-            f"ENGINE: <engine_name> "
-            f"REASON: <one sentence in {('Korean' if lang == 'ko' else 'English')}> "
-            f"REASONING: "
-            f"1. <reason 1 in {('Korean' if lang == 'ko' else 'English')}> "
-            f"2. <reason 2> "
-            f"3. <reason 3> "
-            f"ADJUST: <param>=<numeric_value> (FALSE_POSITIVE: raise value, MISSED_THREAT: lower value, can repeat)")
+        coverage = describe_coverage(
+            total=len(events),
+            shown=len(kept),
+            dropped_fields=DROPPED_PROMPT_FIELDS,
+            masked=masked,
         )
+        if dropped:
+            coverage += (
+                f"\n- {len(dropped)} events were excluded because they carried a "
+                "verdict that was already decided."
+            )
+        data = f"{coverage}\n\nEVENTS:\n{json.dumps(kept, ensure_ascii=False, indent=2)}"
+        assert_no_leak(data, active)
+
+        past = format_past_verdicts(experiences or [])
+        if past:
+            data = f"{past}\n\n{data}"
+
+        return self._prompt_tree.render(
+            {
+                "lang": language,
+                "lookback_minutes": str(self._lookback_minutes),
+                "whitelist": self._whitelist_context(),
+            },
+            data=data,
+            format_override=JSON_INSTRUCTION if self._backend.structured else None,
+        )
+
+    def _whitelist_context(self) -> str:
+        """화이트리스트 문맥을 만든다. 없으면 빈 문자열."""
+        if not self._whitelist:
+            return ""
+        wl = self._whitelist.to_dict()
+        return (
+            f"WHITELIST CONTEXT:\n"
+            f"- IPs: {', '.join(wl.get('ips', [])) or 'None'}\n"
+            f"- IP Ranges: {', '.join(wl.get('ip_ranges', [])) or 'None'}\n"
+            f"- MACs: {', '.join(wl.get('macs', [])) or 'None'}\n"
+            f"- Domains: {', '.join(wl.get('domains', [])) or 'None'}\n"
+            f"- Domain Suffixes: {', '.join(wl.get('domain_suffixes', [])) or 'None'}\n"
+            f"Trusted entities in the whitelist should be treated as very likely "
+            f"false positives unless their behavior is clearly malicious."
+        )
+
+    @staticmethod
+    def _masked_count(events: list[dict]) -> int:
+        """사설 주소로 가려진 이벤트 수."""
+        count = 0
+        for event in events:
+            value = event.get("source_ip", "")
+            try:
+                if ipaddress.ip_address(value).is_private:
+                    count += 1
+            except ValueError:
+                continue
+        return count
+
+    async def _past_verdicts(self, events: list[dict]) -> list[dict]:
+        """같은 신호의 과거 판정을 모은다. 없으면 빈 목록."""
+        if self._experience_source is None:
+            return []
+        from netwatcher.detection.experience import DEFAULT_LIMIT, signature_of
+
+        pairs: list[tuple[str, str]] = []
+        for event in events:
+            engine = str(event.get("engine") or "")
+            if not engine:
+                continue
+            signature = signature_of(event)
+            if signature and (engine, signature) not in pairs:
+                pairs.append((engine, signature))
+        if not pairs:
+            return []
+        try:
+            return await self._experience_source.matching_many(pairs, DEFAULT_LIMIT)
+        except Exception:
+            logger.exception("과거 판정 조회 실패 — 주입 없이 진행")
+            return []
+
+    async def _leak_markers(self) -> list[str]:
+        """프롬프트에 들어오면 안 되는 판정 문자열 목록을 모은다."""
+        markers = list(LEAK_MARKERS)
+        if self._proposal_service is not None:
+            try:
+                for row in await self._proposal_service.pending(limit=50):
+                    reason = row.get("reason") if isinstance(row, dict) else None
+                    if reason:
+                        markers.append(str(reason))
+            except Exception:
+                logger.exception("승인 대기 제안 조회 실패 — 누출 가드는 기본 표식으로만 동작")
+        if self._review_source is not None:
+            try:
+                for note in await self._review_source.recent_notes(limit=50):
+                    if note:
+                        markers.append(str(note))
+            except Exception:
+                logger.exception("최근 판정 노트 조회 실패 — 누출 가드는 기본 표식으로만 동작")
+        return markers
 
     @staticmethod
     def _mask(events: list[dict]) -> list[dict]:
@@ -632,7 +734,9 @@ class AIAnalyzerService:
             logger.debug("[ai_analyzer] 분석 대상 이벤트 없음")
             return
 
-        prompt = self._build_prompt(events)
+        markers = await self._leak_markers()
+        experiences = await self._past_verdicts(events)
+        prompt = self._build_prompt(events, markers, experiences)
         prompt_sha = hashlib.sha256(prompt.encode()).hexdigest()
         if prompt_sha == self._last_prompt_sha:
             # 같은 입력을 다시 보내면 같은 제안이 중복된다. 비용도 들지 않게 건너뛴다.
@@ -642,16 +746,18 @@ class AIAnalyzerService:
         if not raw:
             return
 
-        if self._backend.structured:
-            try:
-                result = parse_decision(raw, known_event_ids=[e.get("id") for e in events])
-            except ProviderError as exc:
-                # 계약에 맞지 않는 출력은 적용하지 않는다.
-                self._fail(exc.kind)
-                return
-        else:
-            result = self._parse_response(raw)
+        result, failure = self._parse_output(raw, events)
+        if result is None:
+            # 파싱 오류를 되먹여 한 번 더 시도한다. 두 번째 실패 시 포기한다.
+            retry = self._retry_prompt(prompt, raw)
+            raw = await self._run_ai(retry)
+            if raw:
+                result, failure = self._parse_output(raw, events)
+        # 같은 입력을 다시 보내지 않는다 — 이미 보내봤다는 사실만 남긴다.
         self._last_prompt_sha = prompt_sha
+        if result is None:
+            self._fail(failure or "invalid_output")
+            return
         # 원문은 남기지 않고 해시만 제안·판정 기록에 붙인다.
         self._last_hashes = {"request_sha256": prompt_sha,
                              "response_sha256": hashlib.sha256(raw.encode()).hexdigest()}
@@ -660,6 +766,40 @@ class AIAnalyzerService:
             result.verdict, result.engine,
         )
         await self._apply_result(result)
+
+    def _parse_output(self, raw: str, events: list[dict]) -> tuple[AnalysisResult | None, str]:
+        """응답을 파싱한다.
+
+        형식에 맞지 않으면 ``(None, 실패 종류)`` 를 돌려준다. 실패 종류는
+        되먹일 오류 메시지와 기록에 그대로 쓴다.
+        """
+        if self._backend.structured:
+            try:
+                decision = parse_decision(raw, known_event_ids=[e.get("id") for e in events])
+            except ProviderError as exc:
+                # 계약에 맞지 않는 출력은 적용하지 않는다.
+                logger.warning("[ai_analyzer] 구조화 응답 파싱 실패: %s", exc.kind)
+                return None, exc.kind
+            return AnalysisResult(
+                verdict=decision.verdict,
+                engine=decision.engine,
+                reason=decision.reason,
+                reasoning=decision.reasoning,
+                adjustments=decision.adjustments,
+            ), ""
+        if "VERDICT:" not in raw.upper():
+            logger.warning("[ai_analyzer] 응답에 VERDICT 형식이 없다")
+            return None, "invalid_output"
+        return self._parse_response(raw), ""
+
+    @staticmethod
+    def _retry_prompt(prompt: str, raw: str) -> str:
+        """파싱 실패를 알리고 형식만 다시 요구하는 프롬프트를 만든다."""
+        return (
+            f"{prompt}\n\n"
+            f"YOUR PREVIOUS RESPONSE COULD NOT BE PARSED:\n{raw.strip()[:500]}\n"
+            f"Answer again in the exact format shown above."
+        )
 
     async def _analysis_loop(self) -> None:
         """interval_seconds마다 _run_once()를 호출하는 백그라운드 루프."""

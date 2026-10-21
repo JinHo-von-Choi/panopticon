@@ -2,12 +2,12 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import StrictBool
 
 from netwatcher.services.sensor_control import SensorControlError
 from netwatcher.web.rbac import Role, require_role
-from netwatcher.web.routes.remote_engines import EngineChange
+from netwatcher.web.routes.remote_engines import EngineChange, sensor_error, sensor_unknown
 
 
 class RuleState(EngineChange):
@@ -26,11 +26,9 @@ def create_remote_rules_router(control):
                 raise SensorControlError("sensor_result_unknown", 503)
             return {**result, "control_process": "separate"}
         except SensorControlError as exc:
-            raise HTTPException(exc.status, {"code": exc.code,
-                "message": "최신 규칙과 변경 감사 기록을 조회하세요."}) from None
+            raise sensor_error(exc, "최신 규칙과 변경 감사 기록을 조회하세요.") from None
         except TimeoutError:
-            raise HTTPException(503, {"code": "sensor_result_unknown",
-                "message": "최신 규칙과 변경 감사 기록을 조회하세요."}) from None
+            raise sensor_unknown("최신 규칙과 변경 감사 기록을 조회하세요.") from None
 
     @router.get("")
     async def rules(limit: int = Query(default=50, ge=1, le=50), offset: int = Query(default=0, ge=0, le=2147483647),

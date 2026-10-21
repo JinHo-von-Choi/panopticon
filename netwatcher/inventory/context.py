@@ -2,6 +2,32 @@
 from datetime import datetime, timezone
 
 
+# 소유 관계를 알 수 없을 때의 기본값. "모른다" 는 "없다" 와 다르다.
+UNKNOWN_CONTEXT = {'status': 'unknown', 'scope': 'current_inventory', 'reason': 'not_confirmed'}
+
+
+def unknown_context(reason: str) -> dict:
+    """사유를 붙인 미확인 문맥을 만든다."""
+    return dict(UNKNOWN_CONTEXT, reason=reason)
+
+
+def source_context(*, ip: str | None, mac: str | None, devices: list[dict]) -> dict:
+    """IP 와 MAC 으로 현재 소유 관계를 판정한다.
+
+    IP 만으로는 공유 자산을 추정하지 않는다 — 소유자가 둘이면 "모른다" 다.
+    """
+    if not ip:
+        return unknown_context('not_confirmed')
+    if not mac:
+        return unknown_context('source_mac_missing')
+    if len(devices) != 1:
+        return unknown_context('shared_ip' if devices else 'not_confirmed')
+    device = devices[0]
+    if mac and str(device.get('mac_address') or '').lower() != mac.lower().replace('-', ':'):
+        return unknown_context('mapping_changed')
+    return asset_context(device)
+
+
 def asset_context(device: dict, *, shared_ip: bool = False, now=None) -> dict:
     profile = device.get('context_profile') or {}
     result = {'status': 'unknown', 'scope': 'current_inventory',

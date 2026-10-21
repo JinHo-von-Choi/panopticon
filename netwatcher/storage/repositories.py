@@ -7,8 +7,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from netwatcher.inventory import device_classifier
 from netwatcher.storage.database import Database
+from netwatcher.storage.partition_manager import DEFAULT_MONTHS_AHEAD, PartitionManager
+from netwatcher.storage.schemas import CONFIG_PROPOSALS_PROBE_DEFAULT
 
 logger = logging.getLogger("netwatcher.storage.repositories")
 
@@ -40,6 +41,79 @@ def _sanitize(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_sanitize(item) for item in obj]
     return obj
+
+
+def _event_filter_conditions(
+    *,
+    severity: str | None = None,
+    engine: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    search: str | None = None,
+    source_ip: str | None = None,
+    case_owner: str | None = None,
+    case_owner_id: uuid.UUID | None = None,
+    case_status: str | None = None,
+) -> tuple[list[str], list[Any]]:
+    """이벤트 필터 조건과 바인딩 값을 만든다.
+
+    목록과 개수가 **같은 조건**을 쓴다 — 한쪽만 고치면 화면의 개수와 목록이
+    어긋난다.
+    """
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if severity:
+        params.append(severity)
+        conditions.append(f"severity = ${len(params)}")
+    if engine:
+        params.append(engine)
+        conditions.append(f"engine = ${len(params)}")
+    if since:
+        params.append(since)
+        conditions.append(f"timestamp >= ${len(params)}")
+    if until:
+        params.append(until)
+        conditions.append(f"timestamp <= ${len(params)}")
+    if search:
+        params.append(f"%{search}%")
+        idx = len(params)
+        conditions.append(
+            f"(title LIKE ${idx} OR description LIKE ${idx} OR source_ip::text LIKE ${idx})"
+        )
+    if source_ip:
+        params.append(source_ip)
+        conditions.append(f"source_ip = ${len(params)}::inet")
+    if case_owner is not None:
+        params.append(case_owner)
+        conditions.append(f"COALESCE(w.owner,'') = ${len(params)}")
+    if case_owner_id is not None:
+        params.append(case_owner_id)
+        conditions.append(f"w.owner_id = ${len(params)}::uuid")
+    if case_status is not None:
+        params.append(case_status)
+        conditions.append(f"COALESCE(w.status,'open') = ${len(params)}")
+
+    return conditions, params
+
+
+def _blocklist_filter_conditions(
+    entry_type: str | None = None,
+    search: str | None = None,
+) -> tuple[list[str], list[Any]]:
+    """커스텀 차단 목록 필터 조건과 바인딩 값을 만든다."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if entry_type:
+        params.append(entry_type)
+        conditions.append(f"entry_type = ${len(params)}")
+    if search:
+        params.append(f"%{search}%")
+        idx = len(params)
+        conditions.append(f"(value LIKE ${idx} OR notes LIKE ${idx})")
+
+    return conditions, params
 
 
 class EventRepository:
@@ -129,42 +203,13 @@ class EventRepository:
             w.owner_id AS case_owner_id,
             COALESCE(w.status,'open') AS case_status FROM events
             LEFT JOIN case_workflows w ON w.event_id=events.id WHERE TRUE"""
-        params: list[Any] = []
-
-        if severity:
-            params.append(severity)
-            query += f" AND severity = ${len(params)}"
-        if engine:
-            params.append(engine)
-            query += f" AND engine = ${len(params)}"
-        if since:
-            params.append(since)
-            query += f" AND timestamp >= ${len(params)}"
-        if until:
-            params.append(until)
-            query += f" AND timestamp <= ${len(params)}"
-        if search:
-            search_term = f"%{search}%"
-            params.append(search_term)
-            idx = len(params)
-            query += (
-                f" AND (title LIKE ${idx}"
-                f" OR description LIKE ${idx}"
-                f" OR source_ip::text LIKE ${idx})"
-            )
-        if source_ip:
-            params.append(source_ip)
-            query += f" AND source_ip = ${len(params)}::inet"
-
-        if case_owner is not None:
-            params.append(case_owner)
-            query += f" AND COALESCE(w.owner,'') = ${len(params)}"
-        if case_owner_id is not None:
-            params.append(case_owner_id)
-            query += f" AND w.owner_id = ${len(params)}::uuid"
-        if case_status is not None:
-            params.append(case_status)
-            query += f" AND COALESCE(w.status,'open') = ${len(params)}"
+        conditions, params = _event_filter_conditions(
+            severity=severity, engine=engine, since=since, until=until,
+            search=search, source_ip=source_ip, case_owner=case_owner,
+            case_owner_id=case_owner_id, case_status=case_status,
+        )
+        if conditions:
+            query += " AND " + " AND ".join(conditions)
 
         params.append(limit)
         query += f" ORDER BY timestamp DESC,events.id DESC LIMIT ${len(params)}"
@@ -188,40 +233,11 @@ class EventRepository:
     ) -> int:
         """선택적 필터 조건을 적용하여 이벤트 총 수를 반환한다."""
         query = "SELECT COUNT(*) FROM events LEFT JOIN case_workflows w ON w.event_id=events.id"
-        params: list[Any] = []
-        conditions: list[str] = []
-
-        if severity:
-            params.append(severity)
-            conditions.append(f"severity = ${len(params)}")
-        if engine:
-            params.append(engine)
-            conditions.append(f"engine = ${len(params)}")
-        if since:
-            params.append(since)
-            conditions.append(f"timestamp >= ${len(params)}")
-        if until:
-            params.append(until)
-            conditions.append(f"timestamp <= ${len(params)}")
-        if search:
-            search_term = f"%{search}%"
-            params.append(search_term)
-            idx = len(params)
-            conditions.append(
-                f"(title LIKE ${idx} OR description LIKE ${idx} OR source_ip::text LIKE ${idx})"
-            )
-        if source_ip:
-            params.append(source_ip)
-            conditions.append(f"source_ip = ${len(params)}::inet")
-        if case_owner is not None:
-            params.append(case_owner)
-            conditions.append(f"COALESCE(w.owner,'') = ${len(params)}")
-        if case_owner_id is not None:
-            params.append(case_owner_id)
-            conditions.append(f"w.owner_id = ${len(params)}::uuid")
-        if case_status is not None:
-            params.append(case_status)
-            conditions.append(f"COALESCE(w.status,'open') = ${len(params)}")
+        conditions, params = _event_filter_conditions(
+            severity=severity, engine=engine, since=since, until=until,
+            search=search, source_ip=source_ip, case_owner=case_owner,
+            case_owner_id=case_owner_id, case_status=case_status,
+        )
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -352,6 +368,18 @@ class EventRepository:
             result = await conn.execute("DELETE FROM events WHERE timestamp < $1", cutoff.isoformat())
         return int(result.split()[-1])
 
+    async def partition_state(self, months_ahead: int = DEFAULT_MONTHS_AHEAD) -> dict:
+        """events 월별 파티션의 상태를 읽는다. DDL 권한 없이 읽을 수 있다."""
+        return await PartitionManager(self._db.pool).partition_state(months_ahead)
+
+    async def ensure_covered_partitions(self, months_ahead: int = DEFAULT_MONTHS_AHEAD) -> dict:
+        """이번 달 파티션을 확보한다.
+
+        확보하지 못하면 PartitionUnavailableError 가 발생한다 — 파티션이 없는
+        상태로 INSERT 를 계속하면 경보 저장이 조용히 중단된다.
+        """
+        return await PartitionManager(self._db.pool).ensure_covered(months_ahead)
+
 
 class DeviceRepository:
     """devices 테이블에 대한 CRUD 연산."""
@@ -422,7 +450,9 @@ class DeviceRepository:
                     sources: dict = info.get("hostname_sources") or {}
                     # hostname 컬럼: sources 우선순위 → 기존 역방향DNS hostname 순
                     best_hostname = _best_hostname_from_sources(sources) or info.get("hostname")
-                    # 기기 타입 추론
+                    # 기기 타입 추론 — 도메인 규칙이 저장 계층에 들어오지
+                    # 않도록 여기서 가져온다.
+                    from netwatcher.inventory import device_classifier
                     inferred_type = device_classifier.classify(
                         vendor=info.get("vendor"),
                         os_hint=info.get("os_hint"),
@@ -537,19 +567,13 @@ class DeviceRepository:
 
     async def context_for_source(self, ip: str | None, mac: str | None) -> dict:
         """현재 소유 관계만 반환한다. IP만으로 공유 자산을 추정하지 않는다."""
-        unknown = {"status": "unknown", "scope": "current_inventory", "reason": "not_confirmed"}
-        if not ip:
-            return unknown
-        if not mac:
-            return dict(unknown, reason="source_mac_missing")
-        rows = await self._db.pool.fetch("SELECT * FROM devices WHERE ip_address = $1::inet", ip)
-        if len(rows) != 1:
-            return dict(unknown, reason="shared_ip" if rows else "not_confirmed")
-        device = dict(rows[0])
-        if mac and str(device["mac_address"]).lower() != mac.lower().replace("-", ":"):
-            return dict(unknown, reason="mapping_changed")
-        from netwatcher.inventory.context import asset_context
-        return asset_context(device)
+        from netwatcher.inventory.context import source_context
+        rows = []
+        if ip:
+            rows = await self._db.pool.fetch(
+                "SELECT * FROM devices WHERE ip_address = $1::inet", ip,
+            )
+        return source_context(ip=ip, mac=mac, devices=[dict(row) for row in rows])
 
     async def context_candidates(self, ips: list[str]) -> list[dict]:
         rows = await self._db.pool.fetch(
@@ -753,16 +777,9 @@ class BlocklistRepository:
     ) -> list[dict]:
         """선택적 필터를 적용하여 커스텀 차단 목록 항목을 조회한다."""
         query = "SELECT * FROM custom_blocklist WHERE TRUE"
-        params: list[Any] = []
-
-        if entry_type:
-            params.append(entry_type)
-            query += f" AND entry_type = ${len(params)}"
-        if search:
-            term = f"%{search}%"
-            params.append(term)
-            idx = len(params)
-            query += f" AND (value LIKE ${idx} OR notes LIKE ${idx})"
+        conditions, params = _blocklist_filter_conditions(entry_type, search)
+        if conditions:
+            query += " AND " + " AND ".join(conditions)
 
         params.append(limit)
         query += f" ORDER BY created_at DESC LIMIT ${len(params)}"
@@ -779,16 +796,9 @@ class BlocklistRepository:
     ) -> int:
         """커스텀 차단 목록 항목 수를 반환한다."""
         query = "SELECT COUNT(*) FROM custom_blocklist WHERE TRUE"
-        params: list[Any] = []
-
-        if entry_type:
-            params.append(entry_type)
-            query += f" AND entry_type = ${len(params)}"
-        if search:
-            term = f"%{search}%"
-            params.append(term)
-            idx = len(params)
-            query += f" AND (value LIKE ${idx} OR notes LIKE ${idx})"
+        conditions, params = _blocklist_filter_conditions(entry_type, search)
+        if conditions:
+            query += " AND " + " AND ".join(conditions)
 
         return await self._db.pool.fetchval(query, *params)
 
@@ -1050,13 +1060,15 @@ class ConfigProposalRepository:
         reason: str = "",
         source: str = "human",
         before: dict | None = None,
+        probe: dict | None = None,
     ) -> int:
         """제안을 등록하고 id를 반환한다."""
         row_id = await self._db.pool.fetchval(
-            """INSERT INTO config_proposals (engine, params, reason, source, before)
-               VALUES ($1, $2, $3, $4, $5)
+            """INSERT INTO config_proposals (engine, params, reason, source, before, probe)
+               VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING id""",
             engine, params, reason, source, before,
+            probe if probe is not None else CONFIG_PROPOSALS_PROBE_DEFAULT,
         )
         return int(row_id)
 
@@ -1115,6 +1127,13 @@ class ConfigProposalRepository:
                WHERE id = $1 AND status = 'pending'""", proposal_id, validation)
         return result.split()[-1] != "0"
 
+    async def attach_probe(self, proposal_id: int, probe: dict) -> bool:
+        """대비 결과를 붙인다. 이미 결정된 제안에는 붙지 않는다."""
+        result = await self._db.pool.execute(
+            """UPDATE config_proposals SET probe = $2
+               WHERE id = $1 AND status = 'pending'""", proposal_id, probe)
+        return result.split()[-1] != "0"
+
     async def mark_applied(
         self, proposal_id: int, applied: bool, error: str | None = None,
     ) -> None:
@@ -1126,6 +1145,80 @@ class ConfigProposalRepository:
             proposal_id, applied, error,
             "approved" if applied else "failed",
         )
+
+
+class ExperienceRepository:
+    """analysis_experiences — 사람이 확정한 판정을 다시 쓰는 라이브러리."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert(self, experience: dict[str, Any]) -> int:
+        """경험 항목을 저장하고 id를 반환한다."""
+        row_id = await self._db.pool.fetchval(
+            """INSERT INTO analysis_experiences
+                 (engine, signature, domain, cue, lesson, evidence, confidence,
+                  source_proposal_id, source_review_id, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               RETURNING id""",
+            experience["engine"], experience["signature"], experience["domain"],
+            experience["cue"], experience["lesson"], experience["evidence"],
+            float(experience["confidence"]), experience["source_proposal_id"],
+            experience.get("source_review_id"), experience.get("expires_at"),
+        )
+        return int(row_id)
+
+    async def get(self, experience_id: int) -> dict | None:
+        row = await self._db.pool.fetchrow(
+            "SELECT * FROM analysis_experiences WHERE id = $1", experience_id,
+        )
+        return dict(row) if row else None
+
+    async def list_recent(self, limit: int = 50) -> list[dict]:
+        rows = await self._db.pool.fetch(
+            "SELECT * FROM analysis_experiences ORDER BY created_at DESC LIMIT $1", limit,
+        )
+        return [dict(row) for row in rows]
+
+    async def list_by_signature(
+        self, engine: str, signature: str, limit: int = 5,
+    ) -> list[dict]:
+        """같은 신호의 만료되지 않은 경험만 돌려준다."""
+        rows = await self._db.pool.fetch(
+            """SELECT * FROM analysis_experiences
+               WHERE engine = $1 AND signature = $2
+                 AND (expires_at IS NULL OR expires_at > NOW())
+               ORDER BY created_at DESC LIMIT $3""",
+            engine, signature, limit,
+        )
+        return [dict(row) for row in rows]
+
+    async def list_by_signatures(
+        self, signatures: list[tuple[str, str]], limit_per_signature: int = 5,
+    ) -> list[dict]:
+        """여러 신호의 experiences를 한 번에 읽는다. 서명 쌍 목록이 비면 빈 목록."""
+        if not signatures:
+            return []
+        rows = await self._db.pool.fetch(
+            """SELECT DISTINCT ON (signature) * FROM analysis_experiences
+               WHERE (engine, signature) IN (
+                   SELECT * FROM unnest($1::text[], $2::text[]))
+                 AND (expires_at IS NULL OR expires_at > NOW())
+               ORDER BY signature, created_at DESC""",
+            [engine for engine, _ in signatures],
+            [signature for _, signature in signatures],
+        )
+        return [dict(row) for row in rows][: limit_per_signature * max(len(signatures), 1)]
+
+    async def latest_review_id_for_engine(self, engine: str) -> int | None:
+        """그 엔진에 대한 가장 최근 판정의 사건 id."""
+        value = await self._db.pool.fetchval(
+            """SELECT r.event_id FROM business_reviews r
+               JOIN events e ON e.id = r.event_id
+               WHERE e.engine = $1
+               ORDER BY r.reviewed_at DESC LIMIT 1""", engine,
+        )
+        return int(value) if value is not None else None
 
 
 class ReplayRepository:

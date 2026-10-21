@@ -3,7 +3,8 @@
 from dataclasses import replace
 import hashlib
 import json
-import re
+
+from netwatcher.utils.digest import is_sha256_hex
 
 
 def rule_id(value):
@@ -157,6 +158,6 @@ def validate_result(request, result):
             raise ValueError("Invalid reloaded rule count")
     if (set(result) != expected or result["status"] != ("read" if operation in {"rules.list", "rules.entry"} else "applied")
             or result["request_id"] != request.request_id
-            or any(not isinstance(result.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", result[key])
+            or any(not is_sha256_hex(result.get(key))
                    for key in ("base_version", "rules_hash"))):
         raise ValueError("Invalid rule result")

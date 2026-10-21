@@ -23,16 +23,35 @@ from netwatcher.web.server import create_app
 
 logger = logging.getLogger("netwatcher.ingest.runtime")
 
+# 파티션 상태를 하루마다 다시 확인한다.
+_PARTITION_CHECK_SECONDS = 24 * 3600
+
 
 class EveObservation:
-    def __init__(self, service):
+    def __init__(self, service, partition_state=None):
         self.service = service
+        self._partition_state = partition_state or (lambda: None)
 
     def snapshot(self):
         status = self.service.status()
         state = "stale" if status["status"] == "unhealthy" else "partial"
+        reasons = ["Suricata EVE 파일만 관측합니다. 원래 패킷의 누락과 망 전체의 관측 범위는 확인되지 않습니다."]
+        partitions = self._partition_state()
+        if partitions:
+            if not partitions.get("covered", True):
+                state = "unhealthy"
+                detail = partitions.get("error") or (
+                    f"events 월별 파티션({partitions.get('current_month')})이 없어 "
+                    "경보 저장이 중단될 수 있습니다"
+                )
+                reasons.append(detail)
+            elif partitions.get("missing"):
+                reasons.append(
+                    "events 파티션이 아직 확보되지 않음: " + ", ".join(partitions["missing"])
+                )
         return {"state": state, "input_mode": "eve", "sources": status["sources"],
-                "reasons": ["Suricata EVE 파일만 관측합니다. 원래 패킷의 누락과 망 전체의 관측 범위는 확인되지 않습니다."],
+                "reasons": reasons,
+                "partitions": partitions,
                 "loss": {"link_loss": {"status": "unknown", "reason": "외부 IDS의 패킷 손실은 EVE 파일만으로 측정할 수 없습니다."}},
                 "unsupported_measurements": ["nic_drop", "switch_loss", "span_coverage"],
                 "no_traffic_observed": None}
@@ -70,11 +89,14 @@ class EveConsole:
         self.stream = EventStream()
         self.feeds = self._feed_manager(config)
         self.blocklist = BlocklistRepository(self.db)
+        self.events = EventRepository(self.db)
         self.service = EveService(self.db, config.get("input.eve.sources", []), self.stream,
                                   retention=config.get("input.eve.retention", {}),
                                   local_networks=config.get("input.eve.local_networks"), feeds=self.feeds)
         self._feed_task = None
-        self.observation = EveObservation(self.service)
+        self._partition_task = None
+        self._partition_state = None
+        self.observation = EveObservation(self.service, lambda: self._partition_state)
         self.health = EveHealthChecker(self.db, self.service, self.observation)
         self.app = None
 
@@ -105,9 +127,44 @@ class EveConsole:
                 logger.exception("Threat feed refresh failed")
             await asyncio.sleep(interval)
 
+    async def _ensure_partitions(self) -> dict:
+        """events 이번 달 파티션을 확보하고 상태를 기록한다.
+
+        월별 파티션이 없으면 해당 월의 INSERT 가 실패해 경보 저장이 조용히
+        중단된다. 확보할 수 없으면 기동하지 않는다.
+        """
+        try:
+            state = await self.events.ensure_covered_partitions()
+        except Exception as exc:
+            # 확인에 실패하면 이전 상태를 유지하지 않는다. 오래된 "정상" 상태가
+            # 관측 표면에 남아 있으면 실패가 사라진다.
+            self._partition_state = {
+                "partitioned": True,
+                "covered": False,
+                "current_month": None,
+                "missing": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            raise
+        self._partition_state = state
+        if not state["partitioned"]:
+            logger.warning("events 테이블이 파티셔닝되어 있지 않습니다")
+        elif state["missing"]:
+            logger.warning("events 파티션이 아직 없음: %s", ", ".join(state["missing"]))
+        return state
+
+    async def _partition_loop(self) -> None:
+        """하루마다 파티션 상태를 다시 확인한다."""
+        while True:
+            await asyncio.sleep(_PARTITION_CHECK_SECONDS)
+            try:
+                await self._ensure_partitions()
+            except Exception:
+                logger.exception("events 파티션 확인 실패")
+
     def build_app(self):
         from netwatcher.storage.user_accounts import UserAccounts
-        app = create_app(self.config, EventRepository(self.db), DeviceRepository(self.db),
+        app = create_app(self.config, self.events, DeviceRepository(self.db),
                          TrafficStatsRepository(self.db), self.stream,
                          blocklist_repo=self.blocklist if self.feeds else None, feed_manager=self.feeds,
                          auth_manager=AuthManager(self.config, users=UserAccounts(self.db)),
@@ -117,6 +174,7 @@ class EveConsole:
         @app.get("/api/input/status", dependencies=[Depends(require_role(Role.VIEWER))])
         async def input_status():
             result = self.service.status()
+            result["partitions"] = self._partition_state
             try:
                 async with asyncio.timeout(5):
                     result["storage"] = await self.service.storage_status()
@@ -136,6 +194,7 @@ class EveConsole:
                   self.config.get("language.default", "ko"))
         await self.db.connect()
         try:
+            await self._ensure_partitions()
             app = self.build_app()
             tls = self.config.get("web.tls", {})
             ssl_args = {}
@@ -152,12 +211,16 @@ class EveConsole:
                     loop.add_signal_handler(sig, setattr, server, "should_exit", True)
                 if self.feeds is not None:
                     self._feed_task = asyncio.create_task(self._refresh_feeds(), name="eve-feeds")
+                self._partition_task = asyncio.create_task(self._partition_loop(), name="eve-partitions")
                 await self.service.start()
                 await server.serve()
             finally:
                 if self._feed_task is not None:
                     self._feed_task.cancel()
                     await asyncio.gather(self._feed_task, return_exceptions=True)
+                if self._partition_task is not None:
+                    self._partition_task.cancel()
+                    await asyncio.gather(self._partition_task, return_exceptions=True)
                 await self.service.stop()
                 for sig, handler in previous.items():
                     loop.remove_signal_handler(sig)

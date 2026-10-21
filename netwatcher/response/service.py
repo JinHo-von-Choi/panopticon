@@ -6,7 +6,7 @@ import logging
 import asyncpg
 
 from netwatcher.response.command import ExecutionCommand
-from netwatcher.response.executor import ExecutionResult, ExpiringExecutionRequest
+from netwatcher.response.contract import ExecutionResult, ExpiringExecutionRequest
 from netwatcher.response.lifecycle import LifecycleError
 from netwatcher.storage.execution_claims import ExecutionClaims, command_hash, _time
 

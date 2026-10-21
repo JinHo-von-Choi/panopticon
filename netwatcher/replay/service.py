@@ -24,6 +24,7 @@ from typing import Any, Sequence
 
 from netwatcher.replay.analyzers import get_analyzer
 from netwatcher.replay.contract import (
+    MODELLED_PARAMS,
     REASON_BUDGET_EXCEEDED,
     REASON_FEATURE_MISSING,
     REASON_PAYLOAD_ENGINE,
@@ -276,8 +277,7 @@ def compare(
     candidate, c_reasons = execute_side(trace, candidate_contract, source_bytes=source_bytes)
     reasons.extend(b_reasons)
     reasons.extend(c_reasons)
-    supported_params = {'arp_spoof': {'mac_change_threshold'}, 'port_scan': {'threshold'},
-                        'data_exfil': {'threshold', 'window_seconds'}}
+    supported_params = MODELLED_PARAMS
     changed_params = {key for key in baseline_contract.engine_params.keys() | candidate_contract.engine_params.keys()
                       if baseline_contract.engine_params.get(key) != candidate_contract.engine_params.get(key)}
     for engine in trace.engines:

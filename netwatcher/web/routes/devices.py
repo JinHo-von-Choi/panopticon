@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field, field_validator
 from netwatcher.detection.context_policy import ExpectedFlowRule
 from netwatcher.storage.repositories import DeviceRepository
 from netwatcher.web.rbac import Role, require_role
-from netwatcher.web.change_audit import ChangeAudit, state_summary
+from netwatcher.web.change_audit import ChangeAudit
+from netwatcher.utils.state_summary import state_summary
 
 _MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 

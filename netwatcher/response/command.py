@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from netwatcher.response.executor import ExecutionRequest
+from netwatcher.response.contract import ExecutionRequest
 from netwatcher.response.lifecycle import LifecycleError, validate_action
 
 MAX_COMMAND_BYTES = 8192

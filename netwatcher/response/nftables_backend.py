@@ -31,14 +31,14 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from netwatcher.response.executor import (
+from netwatcher.response.contract import (
     OBSERVED_ABSENT,
     OBSERVED_PRESENT,
-    OUTCOME_CONFIRMED,
     ExecutionRequest,
     ExecutionResult,
     Executor,
 )
+from netwatcher.response.lifecycle import OUTCOME_CONFIRMED
 from netwatcher.response.lifecycle import (
     OUTCOME_ERROR,
     LifecycleError,

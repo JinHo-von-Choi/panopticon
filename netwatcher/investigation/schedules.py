@@ -4,7 +4,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from netwatcher.investigation.reviews import ReviewConflict, event_scope
+from netwatcher.investigation.review_contract import ReviewConflict, event_scope
 
 NAMESPACE = uuid.UUID('cb2a96f5-9d71-48b6-8c52-a17e429f9ba9')
 MAX_SCHEDULES = 2000

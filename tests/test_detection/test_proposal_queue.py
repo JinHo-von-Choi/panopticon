@@ -42,15 +42,24 @@ class FakeRepo:
         self.rows: dict[int, dict] = {}
         self._next = 1
 
-    async def insert(self, engine, params, reason="", source="human", before=None):
+    async def insert(self, engine, params, reason="", source="human", before=None,
+                     probe=None):
         pid = self._next
         self._next += 1
         self.rows[pid] = {
             "id": pid, "engine": engine, "params": dict(params),
             "reason": reason, "source": source, "before": dict(before or {}),
             "status": STATUS_PENDING, "applied": None, "apply_error": None,
+            "probe": dict(probe or {}),
         }
         return pid
+
+    async def attach_probe(self, pid, probe):
+        row = self.rows.get(pid)
+        if row is None or row["status"] != STATUS_PENDING:
+            return False
+        row["probe"] = dict(probe)
+        return True
 
     async def get_by_id(self, pid):
         return self.rows.get(pid)
@@ -437,3 +446,71 @@ async def test_pending_count_and_listing():
     pid = (await svc.pending())[0]["id"]
     await svc.decide(pid, approved=False, decided_by="admin")
     assert await svc.pending_count() == 1
+
+
+# ------------------------------------------------------------------
+# 제안 대비 — 승인 큐에 들어가는 제안은 대비 또는 사유를 갖는다
+# ------------------------------------------------------------------
+
+class TestProposalProbe:
+    """제안은 같은 입력에 대한 기준·후보 대비를 함께 갖는다."""
+
+    RECORDS = [
+        {"src_ip": "10.0.0.5", "dst_port": 22, "ts": 1000.0},
+        {"src_ip": "10.0.0.5", "dst_port": 23, "ts": 1001.0},
+        {"src_ip": "10.0.0.5", "dst_port": 24, "ts": 1002.0},
+    ]
+
+    @pytest.mark.asyncio
+    async def test_proposal_without_input_records_reason(self):
+        repo = FakeRepo()
+        svc = _service(repo)
+        await svc.submit("port_scan", {"threshold": 2})
+        probe = repo.rows[1]["probe"]
+        assert probe["status"] == "skipped"
+        assert probe["reasons"][0]["code"] == "trace_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_proposal_with_input_compares(self):
+        repo = FakeRepo()
+        svc = _service(repo)
+        await svc.submit("port_scan", {"threshold": 2}, records=self.RECORDS)
+        probe = repo.rows[1]["probe"]
+        assert probe["status"] == "compared"
+        assert probe["counts"]["added"] == 1
+        assert probe["counts"]["removed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_probe_uses_proposal_params_not_whole_config(self):
+        repo = FakeRepo()
+        svc = _service(repo)
+        await svc.submit("port_scan", {"threshold": 2}, records=self.RECORDS)
+        probe = repo.rows[1]["probe"]
+        assert probe["baseline_params"]["threshold"] == 50
+        assert probe["candidate_params"]["threshold"] == 2
+
+    @pytest.mark.asyncio
+    async def test_attach_probe_replaces_the_recorded_reason(self):
+        repo = FakeRepo()
+        svc = _service(repo)
+        await svc.submit("port_scan", {"threshold": 2})
+        probe = await svc.attach_probe(1, self.RECORDS, "analyst")
+        assert probe["status"] == "compared"
+        assert repo.rows[1]["probe"]["status"] == "compared"
+
+    @pytest.mark.asyncio
+    async def test_attach_probe_without_input_is_refused(self):
+        repo = FakeRepo()
+        svc = _service(repo)
+        await svc.submit("port_scan", {"threshold": 2})
+        with pytest.raises(ProposalError, match="비교할 입력"):
+            await svc.attach_probe(1, [], "analyst")
+
+    @pytest.mark.asyncio
+    async def test_attach_probe_on_decided_proposal_is_refused(self):
+        repo = FakeRepo()
+        svc = _service(repo)
+        await svc.submit("port_scan", {"threshold": 2})
+        await svc.decide(1, False, "admin")
+        with pytest.raises(ProposalError, match="대기 중인 제안"):
+            await svc.attach_probe(1, self.RECORDS, "analyst")

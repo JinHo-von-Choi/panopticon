@@ -19,6 +19,9 @@ PR 03 으로 AI 는 설정을 직접 바꾸지 못하게 했다. 그런데 그�
     3. **실패를 숨기지 않는다.** 적용에 실패하면 status=failed 로 남기고 사유를
        기록한다. 승인됐다는 사실만 남기면 실제로는 반영되지 않은 상태가 된다.
     4. **되돌릴 근거를 남긴다.** 승인 시점의 이전 설정을 before 에 저장한다.
+    5. **제안은 대비를 함께 갖는다.** 승인 큐에 들어가는 제안은 같은 입력에 대한
+       기준·후보 대비를 가진다. 비교할 입력이 없으면 사유를 남긴다 — 사유 없는
+       미실행은 남기지 않는다.
 """
 
 from __future__ import annotations
@@ -138,6 +141,7 @@ class ProposalService:
         reason: str = "",
         source: str = SOURCE_HUMAN,
         expected_config: dict | None = None,
+        records: list[dict[str, Any]] | None = None,
     ) -> int:
         """제안을 접수한다. 스키마를 어기면 큐에 넣지 않고 거부한다."""
         if not isinstance(params, dict) or not params:
@@ -167,15 +171,62 @@ class ProposalService:
         before = self._current_config(engine)
         if expected_config is not None and before != expected_config:
             raise ProposalError("분석 이후 설정이 변경되었습니다. 현재 설정으로 다시 분석하세요")
+        probe = self._probe(engine, before, params, records)
         proposal_id = await self._repo.insert(
             engine=engine, params=dict(params), reason=reason,
-            source=source, before=before,
+            source=source, before=before, probe=probe,
         )
         logger.info(
             "설정 제안 접수 (id=%s, engine=%s, source=%s, params=%s)",
             proposal_id, engine, source, params,
         )
         return int(proposal_id)
+
+    def _probe(
+        self,
+        engine: str,
+        before: dict,
+        params: dict,
+        records: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """제안과 같은 입력에 대한 기준·후보 대비를 계산한다.
+
+        비교할 입력이 없거나 모델링되지 않은 엔진이면 사유를 남긴다.
+        """
+        from netwatcher.detection.probe import run_probe
+
+        candidate = {**before, **params}
+        return run_probe(
+            engine=engine,
+            records=records or [],
+            before_params=before,
+            candidate_params=candidate,
+        )
+
+    async def attach_probe(
+        self,
+        proposal_id: int,
+        records: list[dict[str, Any]],
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        """제안에 대비 결과를 붙인다. 같은 입력에 대한 기준·후보 비교다."""
+        if self._repo is None:
+            raise ProposalError("제안 저장소가 없다")
+        row = await self._repo.get_by_id(proposal_id)
+        if not row or row.get('status') != STATUS_PENDING:
+            raise ProposalError("대기 중인 제안에만 대비를 붙일 수 있습니다")
+        if not isinstance(records, list) or not records:
+            raise ProposalError("비교할 입력이 비어 있습니다")
+        if not all(isinstance(record, dict) for record in records):
+            raise ProposalError("비교할 입력의 형식이 올바르지 않습니다")
+        probe = self._probe(
+            row['engine'], dict(row.get('before') or {}), dict(row.get('params') or {}),
+            records,
+        )
+        probe['compared_by'] = str(actor)[:100]
+        if not await self._repo.attach_probe(proposal_id, probe):
+            raise ProposalError("다른 사람이 먼저 결정했습니다")
+        return probe
 
     # ------------------------------------------------------------------
     # 결정
@@ -296,6 +347,12 @@ class ProposalService:
         if self._repo is None:
             return []
         return await self._repo.list_pending(limit=limit)
+
+    async def get(self, proposal_id: int) -> dict | None:
+        """제안 한 건을 읽는다. 없으면 None."""
+        if self._repo is None:
+            return None
+        return await self._repo.get_by_id(proposal_id)
 
     async def list_all(self, limit: int = 50, status: str | None = None) -> list[dict]:
         if self._repo is None:

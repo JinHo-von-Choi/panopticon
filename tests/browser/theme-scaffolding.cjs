@@ -29,7 +29,7 @@ const server=http.createServer((req,res)=>{
  const file=path.join(root,url.pathname==='/'?'index.html':url.pathname);
  try {res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.html')?'text/html':'application/octet-stream');res.end(fs.readFileSync(file));}catch {res.statusCode=404;res.end();}
 });
-(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;const browser=await chromium.launch({executablePath:process.env.PANOPTICON_CHROME || '/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>window.i18next?.isInitialized);await page.waitForTimeout(250);
  const missing=await page.evaluate(()=>[...document.querySelectorAll('[data-i18n], [data-i18n-aria-label]')].filter(e=>/^(tabs\.(topology|compliance)|console\.(theme|topology|compliance|badge|source|navigation))/.test(e.dataset.i18n||e.dataset.i18nAriaLabel)).filter(e=>!window.i18next.exists(e.dataset.i18n||e.dataset.i18nAriaLabel)).map(e=>e.dataset.i18n));assert.deepEqual(missing,[]);

@@ -21,7 +21,7 @@ from netwatcher.utils.network import mac_vendor_lookup
 from netwatcher.utils.packet_info import extract_packet_info, guess_os
 
 try:
-    from netwatcher.web.metrics import packets_total as _packets_total
+    from netwatcher.observability.metrics import packets_total as _packets_total
 except ImportError:
     _packets_total = None
 

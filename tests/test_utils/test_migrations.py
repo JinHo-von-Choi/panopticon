@@ -202,3 +202,19 @@ def test_config_proposals_columns_match_migration():
     for col in columns:
         assert col in schema_sql, f"스키마 정의에 {col} 가 없다"
         assert col in mig_sql, f"마이그레이션에 {col} 가 없다"
+
+
+def test_config_proposals_origin_check_matches_migration():
+    """출처 제약이 어긋나면 한쪽은 삽입되고 한쪽은 거절된다.
+
+    스키마 정의를 f-string 으로 만들면 정규식의 ``{64}`` 가 치환된다 —
+    그때 제약이 조용히 약해진다. 두 정의가 같은지 확인한다.
+    """
+    from netwatcher.storage.schemas import ALL_SCHEMAS
+
+    schema_sql = "\n".join(s for s in ALL_SCHEMAS if "config_proposals" in s)
+    mig_sql = (VERSIONS_DIR / "035_proposal_sensor_origin.py").read_text(encoding="utf-8")
+
+    for text in (schema_sql, mig_sql):
+        assert "^[a-f0-9]{64}$" in text, "출처 제약의 버전 지문 정규식이 바뀌었다"
+        assert "sensor_owner IS NOT NULL" in text

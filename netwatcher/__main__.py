@@ -43,7 +43,8 @@ def main() -> None:
             parser.error("native 모드는 독립 콘솔과 --component sensor로 실행해야 합니다. "
                          "native.console.separate: false는 지원하지 않습니다.")
         if not isinstance(config.get("native.control"), dict) or config.get("native.control.enabled") is not True:
-            parser.error("native 콘솔에는 native.control.enabled: true와 센서 소켓 연결 설정이 필요합니다.")
+            parser.error("native 콘솔에는 native.control.enabled: true와 센서 소켓 연결 설정이 필요합니다. "
+                         "기본 설정에는 없으며 scripts/install_native.py 가 생성한 설정을 사용하세요.")
         from netwatcher.native_console import NativeConsole
         app = NativeConsole(config)
     else:

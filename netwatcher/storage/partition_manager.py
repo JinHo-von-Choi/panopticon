@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -11,6 +13,13 @@ if TYPE_CHECKING:
     import asyncpg
 
 logger = logging.getLogger("netwatcher.storage.partition_manager")
+
+# 이번 달 파티션이 없으면 INSERT 가 실패한다. months_ahead 만큼 앞까지 미리 만든다.
+DEFAULT_MONTHS_AHEAD = 3
+
+
+class PartitionUnavailableError(RuntimeError):
+    """events 이번 달 파티션을 확보하지 못했을 때 발생한다."""
 
 
 def _add_months(dt: datetime, months: int) -> datetime:
@@ -99,6 +108,73 @@ class PartitionManager:
 
         return created
 
+    async def partition_state(self, months_ahead: int = DEFAULT_MONTHS_AHEAD) -> dict:
+        """events 파티션의 현재 상태를 읽는다.
+
+        DDL 권한 없이 읽을 수 있다. ``covered`` 는 지금 시각의 INSERT 가
+        partitioning 관점에서 성공하는지를 뜻한다 — 파티셔닝되지 않은 테이블은
+        범위 제한이 없으므로 항상 covered 다.
+        """
+        partitioned = await self._is_partitioned()
+        now = datetime.now(timezone.utc)
+        months = [
+            _partition_name(target.year, target.month)
+            for target in (_add_months(now, offset) for offset in range(months_ahead + 1))
+        ]
+
+        existing: set[str] = set()
+        if partitioned:
+            rows = await self._pool.fetch(
+                """SELECT c.relname FROM pg_class c
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE c.relname = ANY($1::text[])
+                     AND n.nspname = current_schema()""",
+                months,
+            )
+            existing = {row["relname"] for row in rows}
+
+        current_exists = months[0] in existing
+        missing = [name for name in months if name not in existing]
+        return {
+            "partitioned": partitioned,
+            "current_month": months[0],
+            "current_month_exists": current_exists if partitioned else True,
+            "covered": (not partitioned) or current_exists,
+            "months": months,
+            "missing": missing if partitioned else [],
+        }
+
+    async def ensure_covered(self, months_ahead: int = DEFAULT_MONTHS_AHEAD) -> dict:
+        """이번 달 파티션을 확보한다.
+
+        파티셔닝되지 않은 테이블은 범위 제한이 없으므로 그대로 통과한다.
+        파티셔닝된데 이번 달 파티션을 만들지 못하면 PartitionUnavailableError 로
+        알린다 — 조용히 데이터 손실을 허용하지 않는다.
+        """
+        state = await self.partition_state(months_ahead)
+        if state["covered"]:
+            return state
+
+        month = state["current_month"]
+        try:
+            await self.ensure_partitions(months_ahead=0)
+        except Exception as exc:
+            raise PartitionUnavailableError(
+                f"events 파티션 {month} 을 만들 수 없습니다: "
+                f"{type(exc).__name__}: {exc}. "
+                "마이그레이션 권한으로 "
+                "'python -m netwatcher.storage.partition_manager --ensure' 를 실행하세요."
+            ) from exc
+
+        state = await self.partition_state(months_ahead)
+        if not state["covered"]:
+            raise PartitionUnavailableError(
+                f"events 파티션 {month} 이 여전히 없습니다. "
+                "마이그레이션 권한으로 "
+                "'python -m netwatcher.storage.partition_manager --ensure' 를 실행하세요."
+            )
+        return state
+
     async def drop_expired_partitions(self, retention_days: int = 90) -> list[str]:
         """retention_days보다 오래된 파티션을 삭제한다. 삭제된 파티션 이름을 반환한다."""
         if not await self._is_partitioned():
@@ -164,3 +240,65 @@ class PartitionManager:
             }
             for row in rows
         ]
+
+
+async def _run(months: int, ensure: bool) -> int:
+    """명령줄 처리. 이번 달 파티션이 확보되지 않으면 실패 코드를 돌려준다."""
+    from netwatcher.storage.database import Database
+    from netwatcher.utils.config import Config
+
+    config = Config.load()
+    database = Database(config)
+    await database.connect(max_retries=1)
+    try:
+        manager = PartitionManager(database.pool)
+        state = await manager.partition_state(months)
+        if ensure:
+            try:
+                created = await manager.ensure_partitions(months)
+            except Exception as exc:
+                # 실패를 이어서 진행하지 않는다. 파티션 확보는 배포의 조건이며
+                # 여기서 넘어가면 경보 저장이 멈춘 채로 배포가 완료된다.
+                print(
+                    f"파티션을 만들지 못했습니다: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"생성한 파티션: {', '.join(created) if created else '없음'}")
+            state = await manager.partition_state(months)
+        print(json.dumps(state, ensure_ascii=False, indent=2))
+        if not state["covered"]:
+            print(
+                f"events 이번 달 파티션({state['current_month']})이 없습니다. "
+                "마이그레이션 권한으로 이 명령을 다시 실행하세요.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+    finally:
+        await database.close()
+
+
+def main() -> None:
+    """명령줄 진입점."""
+    import argparse
+    import asyncio
+
+    parser = argparse.ArgumentParser(
+        description="events 테이블의 월별 파티션 상태를 확인하고 확보한다."
+    )
+    parser.add_argument("--ensure", action="store_true", help="파티션을 생성한다")
+    parser.add_argument(
+        "--months",
+        type=int,
+        default=DEFAULT_MONTHS_AHEAD,
+        help="몇 개월 앞까지 확보할지 (기본 3)",
+    )
+    args = parser.parse_args()
+    if not 0 <= args.months <= 60:
+        parser.error("--months 는 0 이상 60 이하이어야 합니다")
+    raise SystemExit(asyncio.run(_run(args.months, args.ensure)))
+
+
+if __name__ == "__main__":
+    main()

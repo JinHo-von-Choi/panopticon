@@ -27,7 +27,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from netwatcher.response.executor import Executor, executor_capabilities
+from netwatcher.response.contract import Executor
+from netwatcher.response.executor import executor_capabilities
 from netwatcher.response.proposals import MAPPING_STALE_SECONDS
 from netwatcher.response.lifecycle import (
     DEFAULT_TTL_SECONDS,
@@ -170,7 +171,7 @@ def create_response_router(
         except LifecycleError as exc:
             raise _http(exc) from exc
 
-        from netwatcher.response.executor import ExecutionRequest
+        from netwatcher.response.contract import ExecutionRequest
 
         try:
             request = ExecutionRequest(

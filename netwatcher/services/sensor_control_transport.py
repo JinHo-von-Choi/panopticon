@@ -13,6 +13,7 @@ from netwatcher.response.transport import (
 from netwatcher.services.sensor_control import (
     MAX_RESULT_BYTES, READ_OPERATIONS, SensorControlError, SensorControlRequest, _json, _unique, _reject_constant,
 )
+from netwatcher.utils.digest import is_sha256_hex
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,7 @@ async def send_sensor_control(path: Path, payload: bytes, *, expected_uid: int):
                             or entry["engine"]["name"] in seen
                             or type(entry["engine"].get("enabled")) is not bool
                             or not isinstance(entry["engine"].get("config"), dict)
-                            or not isinstance(entry["base_version"], str)
-                            or not re.fullmatch(r"[a-f0-9]{64}", entry["base_version"])):
+                            or not is_sha256_hex(entry["base_version"])):
                         raise ValueError("invalid engine states")
                     seen.add(entry["engine"]["name"])
             elif value["status"] == "unknown":
@@ -134,7 +134,7 @@ async def send_sensor_control(path: Path, payload: bytes, *, expected_uid: int):
                         or any(not isinstance(items, list) or any(not isinstance(item, str) or not 0 < len(item) <= 253 for item in items)
                                for items in entries.values())
                         or sum(len(items) for items in entries.values()) > 1024
-                        or not isinstance(value["base_version"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["base_version"])):
+                        or not is_sha256_hex(value["base_version"])):
                     raise ValueError("invalid whitelist result")
             else:
                 fields = {"status", "request_id", "engine", "base_version"}
@@ -144,7 +144,7 @@ async def send_sensor_control(path: Path, payload: bytes, *, expected_uid: int):
                 if (set(value) != fields or (value["status"] == "read") != (request.operation == "engine.read")
                         or not isinstance(engine, dict) or engine.get("name") != request.engine
                         or type(engine.get("enabled")) is not bool or not isinstance(engine.get("config"), dict)
-                        or not isinstance(value["base_version"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["base_version"])):
+                        or not is_sha256_hex(value["base_version"])):
                     raise ValueError("invalid applied configuration")
                 if value["status"] == "applied" and (not isinstance(value["warnings"], list)
                         or len(value["warnings"]) > 64 or any(not isinstance(item, str) or len(item) > 512 for item in value["warnings"])):

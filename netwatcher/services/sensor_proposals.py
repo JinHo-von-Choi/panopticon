@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 from netwatcher.detection.proposal_validation import validate_pair, ValidationError
 from netwatcher.services.sensor_control import SensorControlError, _json
+from netwatcher.storage.schemas import CONFIG_PROPOSALS_PROBE_DEFAULT
+from netwatcher.utils.digest import is_sha256_hex
 
 READS = {"proposal.list", "proposal.entry"}
 WRITES = {"proposal.submit", "proposal.validate", "proposal.approve", "proposal.reject"}
@@ -76,7 +78,7 @@ def validate_row(row):
     from netwatcher.storage.sensor_state import _identity
     _identity(row["sensor_id"], row["sensor_owner"])
     if (str(UUID(row["sensor_owner"])) != row["sensor_owner"] or not isinstance(row["source_version"], str)
-            or not re.fullmatch(r"[a-f0-9]{64}", row["source_version"])):
+            or not is_sha256_hex(row["source_version"])):
         raise ValueError("invalid proposal origin")
     for key in ("created_at", "decided_at"):
         if row[key] is not None:
@@ -99,7 +101,7 @@ def validate_row(row):
                 or validation["normal_run_id"] == validation["attack_run_id"]
                 or validation["scope"] != "offline_feature_observations"
                 or not text(validation["build_version"], 64) or not text(validation["confirmed_by"], 100)
-                or any(not isinstance(validation[k], str) or not re.fullmatch(r"[a-f0-9]{64}", validation[k])
+                or any(not is_sha256_hex(validation[k])
                        for k in ("normal_input_hash", "attack_input_hash"))):
             raise ValueError("invalid proposal validation")
 
@@ -137,7 +139,7 @@ def validate_result(request, result):
             raise ValueError("wrong proposal source version")
         if (request.operation == "proposal.submit" and row["engine"] != request.engine
                 or request.operation != "proposal.submit" and row["id"] != updates["proposal_id"]
-                or not isinstance(result["base_version"], str) or not re.fullmatch(r"[a-f0-9]{64}", result["base_version"])):
+                or not is_sha256_hex(result["base_version"])):
             raise ValueError("wrong proposal target")
         expected = {"proposal.submit": "pending", "proposal.validate": "pending",
                     "proposal.approve": "approved", "proposal.reject": "rejected"}.get(request.operation)
@@ -152,7 +154,7 @@ def validate_result(request, result):
         if state is not None and (not isinstance(state, dict) or set(state) != {"engine", "base_version"}
                 or not isinstance(state["engine"], dict) or state["engine"].get("name") != row["engine"]
                 or type(state["engine"].get("enabled")) is not bool or not isinstance(state["engine"].get("config"), dict)
-                or not isinstance(state["base_version"], str) or not re.fullmatch(r"[a-f0-9]{64}", state["base_version"])):
+                or not is_sha256_hex(state["base_version"])):
             raise ValueError("invalid proposal engine state")
     if result["validation_required"] is not True or result["request_id"] != request.request_id:
         raise ValueError("invalid proposal validation policy")
@@ -193,9 +195,10 @@ class SensorProposals:
                 resource = "sensor/" + control.sensor_id + "/proposals"
                 await conn.execute("INSERT INTO audit_log(user_id,action,resource,details) VALUES($1,$2,$3,$4)",
                     "sensor-ai", "sensor_ai_proposal_prepared", resource, details)
-                pid = await conn.fetchval("""INSERT INTO config_proposals(engine,params,reason,source,before,sensor_id,sensor_owner,source_version)
-                    VALUES($1,$2,$3,'ai',$4,$5,$6,$7) RETURNING id""", engine, params, reason,
-                    previous, control.sensor_id, control.owner, state["base_version"])
+                pid = await conn.fetchval("""INSERT INTO config_proposals(engine,params,reason,source,before,sensor_id,sensor_owner,source_version,probe)
+                    VALUES($1,$2,$3,'ai',$4,$5,$6,$7,$8) RETURNING id""", engine, params, reason,
+                    previous, control.sensor_id, control.owner, state["base_version"],
+                    CONFIG_PROPOSALS_PROBE_DEFAULT)
                 await conn.execute("INSERT INTO audit_log(user_id,action,resource,details) VALUES($1,$2,$3,$4)",
                     "sensor-ai", "sensor_ai_proposal_saved", resource, {**details, "proposal_id": pid})
                 return pid
@@ -292,9 +295,10 @@ class SensorProposals:
         before, previous, candidate = await self.candidate(conn, request)
         updates = json.loads(request.updates_json)
         if request.operation == "proposal.submit":
-            pid = await conn.fetchval("""INSERT INTO config_proposals(engine,params,reason,source,before,sensor_id,sensor_owner,source_version)
-                VALUES($1,$2,$3,'human',$4,$5,$6,$7) RETURNING id""", request.engine, updates["params"], updates["reason"],
-                previous, request.sensor_id, UUID(request.owner), request.base_version)
+            pid = await conn.fetchval("""INSERT INTO config_proposals(engine,params,reason,source,before,sensor_id,sensor_owner,source_version,probe)
+                VALUES($1,$2,$3,'human',$4,$5,$6,$7,$8) RETURNING id""", request.engine, updates["params"], updates["reason"],
+                previous, request.sensor_id, UUID(request.owner), request.base_version,
+                CONFIG_PROPOSALS_PROBE_DEFAULT)
         else:
             pid = updates["proposal_id"]
             if request.operation == "proposal.validate":

@@ -393,7 +393,7 @@ class Installation:
             migration_env.update(read_env(Path(self.config.get('migration_env', self.config['database_env']))))
             if self.config.get('application_config'):
                 migration_env['NETWATCHER_CONFIG'] = self.config['application_config']
-            run([str(source / '.venv/bin/python'), '-m', 'alembic', '-c', str(source / 'alembic.ini'), 'upgrade', 'head'], cwd=source, env=migration_env)
+            run([str(source / '.venv/bin/python'), '-m', 'netwatcher.storage.migrate'], cwd=source, env=migration_env)
             if self.mode == 'systemd-native':
                 grants_env = dict(self.env) | read_env(Path(self.config['grants_env']))
                 run([str(source / '.venv/bin/python'), '-m', 'netwatcher.storage.runtime_roles', 'grants'], cwd=source, env=grants_env)

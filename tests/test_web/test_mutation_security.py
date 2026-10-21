@@ -109,7 +109,7 @@ async def test_change_history_validates_request_id(secured_app):
 
 
 def test_state_summary_redacts_secrets_and_bounds_nested_values():
-    from netwatcher.web.change_audit import state_summary
+    from netwatcher.utils.state_summary import state_summary
     result = state_summary({"password": "private", "api_key": "private",
                             "name": "backup", "count": 2, "values": list(range(100)),
                             "ratio": float("nan")})

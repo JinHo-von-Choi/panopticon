@@ -11,7 +11,7 @@ from uuid import uuid4
 from contextlib import asynccontextmanager
 
 from netwatcher.response.command import ActionAuthorization, ExecutionCommand, MAX_APPROVAL_AGE_SECONDS
-from netwatcher.response.executor import ExecutionResult
+from netwatcher.response.contract import ExecutionResult
 from netwatcher.response.lifecycle import LifecycleError, candidate_hash
 
 MAX_APPLY_CLAIMS = 10000

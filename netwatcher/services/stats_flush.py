@@ -10,14 +10,14 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 try:
-    from netwatcher.web.metrics import active_devices as _active_devices
-    from netwatcher.web.metrics import packets_dropped as _packets_dropped
+    from netwatcher.observability.metrics import active_devices as _active_devices
+    from netwatcher.observability.metrics import packets_dropped as _packets_dropped
 except ImportError:
     _active_devices  = None
     _packets_dropped = None
 
 from netwatcher.services import visibility as _visibility
-from netwatcher.web import metrics
+from netwatcher.observability import metrics
 
 if TYPE_CHECKING:
     from netwatcher.capture.sniffer import PacketSniffer

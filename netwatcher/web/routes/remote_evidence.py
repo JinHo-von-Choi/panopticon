@@ -2,13 +2,13 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from netwatcher.web.evidence_download import evidence_download
 from pydantic import Field, StrictBool, field_validator
 
 from netwatcher.services.sensor_control import SensorControlError
 from netwatcher.web.rbac import Role, require_role
-from netwatcher.web.routes.remote_engines import EngineChange
+from netwatcher.web.routes.remote_engines import EngineChange, sensor_error, sensor_unknown
 
 
 class EvidenceReview(EngineChange):
@@ -35,11 +35,9 @@ async def evidence_call(operation):
             raise SensorControlError("sensor_result_unknown", 503)
         return result
     except SensorControlError as exc:
-        raise HTTPException(exc.status, {"code": exc.code,
-            "message": "증거와 변경 감사 기록을 다시 조회하세요."}) from None
+        raise sensor_error(exc, "증거와 변경 감사 기록을 다시 조회하세요.") from None
     except TimeoutError:
-        raise HTTPException(503, {"code": "sensor_result_unknown",
-            "message": "증거 조회 결과를 확인하지 못했습니다."}) from None
+        raise sensor_unknown("증거 조회 결과를 확인하지 못했습니다.") from None
 
 
 def create_remote_evidence_router(control):

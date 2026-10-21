@@ -16,7 +16,7 @@ from netwatcher.web.routes.devices import create_devices_router
 from netwatcher.web.routes.stats import create_stats_router
 from netwatcher.web.routes.events import create_events_router, create_ws_router
 
-def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False, pcap_writer=None, sensor_control=None, incident_repository=None, topology_mapper=None, risk_scorer=None, compliance_mapper=None, kpi_calc=None, report_gen=None):
+def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_manager=None, sniffer=None, correlator=None, whitelist=None, blocklist_repo=None, feed_manager=None, block_manager=None, signature_engine=None, registry=None, yaml_editor=None, flow_processor=None, ai_analyzer=None, proposal_service=None, experience_service=None, observation_service=None, kernel_probe=None, replay_service=None, response_repository=None, response_executor=None, response_proposal_repo=None, health_checker=None, audit_logger=None, audit_required=False, pcap_writer=None, sensor_control=None, incident_repository=None, topology_mapper=None, risk_scorer=None, compliance_mapper=None, kpi_calc=None, report_gen=None):
     # 호출자가 실제 연결 정보를 공급하는 매퍼를 넘겼는지. 넘기지 않으면 아래에서 빈 매퍼를 만든다.
     topology_source = topology_mapper
     if sensor_control is not None:
@@ -327,6 +327,12 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
             create_proposals_router(proposal_service), prefix=api_prefix
         )
 
+    if experience_service is not None:
+        from netwatcher.web.routes.experiences import create_experiences_router
+        app.include_router(
+            create_experiences_router(experience_service), prefix=api_prefix
+        )
+
     # Threat Hunting
     from netwatcher.hunting.ioc_correlator import IOCCorrelator
     from netwatcher.hunting.mitre_navigator import MITRENavigator
@@ -349,7 +355,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     async def metrics_endpoint():
         """이 프로세스의 Prometheus 지표. 분리 설치에서 센서 지표는 포함하지 않는다."""
         from prometheus_client import CONTENT_TYPE_LATEST
-        from netwatcher.web.metrics import get_metrics_output
+        from netwatcher.observability.metrics import get_metrics_output
         return Response(get_metrics_output(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/ready")

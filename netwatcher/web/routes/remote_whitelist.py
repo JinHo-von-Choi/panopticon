@@ -3,11 +3,11 @@
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import StrictBool, Field
 
 from netwatcher.services.sensor_control import SensorControlError
-from netwatcher.web.routes.remote_engines import EngineChange
+from netwatcher.web.routes.remote_engines import EngineChange, sensor_error, sensor_unknown
 from netwatcher.web.rbac import Role, require_role
 
 
@@ -28,11 +28,9 @@ def create_remote_whitelist_router(control):
                 raise SensorControlError("sensor_result_unknown", 503)
             return result
         except SensorControlError as exc:
-            raise HTTPException(exc.status, {"code": exc.code,
-                "message": "목록을 다시 조회해 현재 상태를 확인하세요."}) from None
+            raise sensor_error(exc, "목록을 다시 조회해 현재 상태를 확인하세요.") from None
         except TimeoutError:
-            raise HTTPException(503, {"code": "sensor_result_unknown",
-                "message": "목록을 다시 조회해 현재 상태를 확인하세요."}) from None
+            raise sensor_unknown("목록을 다시 조회해 현재 상태를 확인하세요.") from None
 
     @router.get("")
     async def get_whitelist(actor=Depends(require_role(Role.VIEWER))):

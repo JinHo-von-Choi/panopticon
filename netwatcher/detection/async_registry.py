@@ -23,7 +23,7 @@ from netwatcher.detection.models import Alert, downgrade_severity
 from netwatcher.detection.registry import EngineRegistry
 
 try:
-    from netwatcher.web.metrics import engine_analyze_duration as _engine_analyze_duration
+    from netwatcher.observability.metrics import engine_analyze_duration as _engine_analyze_duration
 except ImportError:
     _engine_analyze_duration = None
 

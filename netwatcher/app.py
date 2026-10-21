@@ -12,6 +12,7 @@ from netwatcher.capture.pcap_writer import PCAPWriter
 from netwatcher.capture.sniffer import PacketSniffer
 from netwatcher.detection.correlator import AlertCorrelator
 from netwatcher.detection.proposals import ProposalService
+from netwatcher.detection.experience import ExperienceService
 from netwatcher.detection.registry import EngineRegistry
 from netwatcher.observability.observation import ObservationService
 from netwatcher.response.blocker import BlockManager
@@ -25,6 +26,7 @@ from netwatcher.storage.repositories import (
     ConfigProposalRepository,
     DeviceRepository,
     EventRepository,
+    ExperienceRepository,
     IncidentRepository,
     TrafficStatsRepository,
 )
@@ -255,6 +257,16 @@ class NetWatcher:
         incident_repo = IncidentRepository(self.db)
         blocklist_repo = BlocklistRepository(self.db)
 
+        # events 월별 파티션이 없으면 경보 저장이 중단된다. 확보할 수 없으면
+        # 센서를 시작하지 않는다.
+        partition_state = await event_repo.ensure_covered_partitions()
+        if not partition_state["partitioned"]:
+            logger.warning("events 테이블이 파티셔닝되어 있지 않습니다")
+        elif partition_state["missing"]:
+            logger.warning(
+                "events 파티션이 아직 없음: %s", ", ".join(partition_state["missing"])
+            )
+
         self.correlator.set_incident_repo(incident_repo)
 
         # ── Redis ────────────────────────────────────────────────────────
@@ -381,7 +393,7 @@ class NetWatcher:
             self.registry.set_feeds(feed_mgr)
 
             try:
-                from netwatcher.web.metrics import feed_last_update
+                from netwatcher.observability.metrics import feed_last_update
                 feed_last_update.set(feed_mgr.last_update_epoch)
             except ImportError:
                 pass
@@ -465,6 +477,16 @@ class NetWatcher:
             proposal_repo=proposal_repo,
         )
 
+        # ── 분석 경험 라이브러리 ──────────────────────────────────────────
+        # 사람이 확정한 판정과 실행 대비가 일치할 때만 교훈이 남는다.
+        from netwatcher.investigation.reviews import BusinessReviews
+        experience_repo = ExperienceRepository(self.db)
+        experience_service = ExperienceService(
+            proposal_repo=proposal_repo,
+            event_repo=event_repo,
+            experience_repo=experience_repo,
+            reviews=BusinessReviews(self.db),
+        )
         # ── 시그니처 엔진 (규칙 관리 API용) ───────────────────────────────
         sig_engine = None
         for engine in self.registry.engines:
@@ -516,6 +538,7 @@ class NetWatcher:
         ai_analyzer = None
         ai_analyzer_cfg = self.config.section("ai_analyzer") or {}
         if ai_analyzer_cfg.get("enabled"):
+            from netwatcher.investigation.reviews import BusinessReviews
             from netwatcher.services.ai_analyzer import AIAnalyzerService
             ai_analyzer = AIAnalyzerService(
                 config=self.config,
@@ -525,6 +548,8 @@ class NetWatcher:
                 yaml_editor=self._yaml_editor,
                 whitelist=self.registry.whitelist,
                 proposal_service=proposal_service,
+                review_source=BusinessReviews(self.db),
+                experience_source=experience_service,
             )
 
         # ── 리플레이 실행·비교 (계획서 1장, PR 12) ───────────────────────
@@ -609,6 +634,7 @@ class NetWatcher:
                 flow_processor=flow_processor,
                 ai_analyzer=ai_analyzer,
                 proposal_service=proposal_service,
+                experience_service=experience_service,
                 observation_service=observation,
                 kernel_probe=kernel_probe,
                 replay_service=replay_service,

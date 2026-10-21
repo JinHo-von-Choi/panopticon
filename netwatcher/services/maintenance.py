@@ -8,7 +8,7 @@ import math
 from typing import TYPE_CHECKING
 
 try:
-    from netwatcher.web.metrics import feed_last_update as _feed_last_update
+    from netwatcher.observability.metrics import feed_last_update as _feed_last_update
 except ImportError:
     _feed_last_update = None
 

@@ -148,3 +148,6 @@ installation*/
 !docs/RELEASE-VERIFICATION.md
 node_modules/
 !docs/AUTO-UPDATE.md
+
+# 로컬 하네스 스냅샷
+.samcheonpo/

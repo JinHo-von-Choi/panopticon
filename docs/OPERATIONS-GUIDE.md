@@ -22,6 +22,20 @@ docker compose --env-file installation/.env logs --tail=100 netwatcher
 
 인증이 필요한 주소는 [API 가이드](API.md#로그인)의 Bearer 토큰을 씁니다.
 
+### events 파티션
+
+`events` 표는 월별 range 파티션 표입니다. 이번 달 파티션이 없으면 경보 저장이
+멈춥니다.
+
+- 파티션 상태는 `/api/input/status`의 `partitions` 항목과 관측 스냅샷에
+  나타납니다. `covered` 가 거짓이면 저장이 중단될 수 있습니다.
+- 배포·업데이트의 마이그레이션 단계(`python -m netwatcher.storage.migrate`)가
+  이번 달부터 세 달 앞까지 파티션을 만듭니다.
+- 콘솔과 센서는 기동할 때 이번 달 파티션을 확보하려고 합니다. 확보하지 못하면
+  시작하지 않습니다.
+- 상태만 보려면 `python -m netwatcher.storage.partition_manager` 를 실행합니다.
+  파티션을 만들려면 `--ensure` 를 붙입니다.
+
 ### 위협 피드
 
 **운영 상태 → 위협 피드**에서 피드별 마지막 성공 시각과 최근 결과(다운로드·캐시·실패)를 봅니다.

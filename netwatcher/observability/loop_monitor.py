@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 
-from netwatcher.web.metrics import event_loop_lag
+from netwatcher.observability.metrics import event_loop_lag
 
 
 class LoopMonitor:

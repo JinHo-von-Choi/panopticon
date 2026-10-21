@@ -367,30 +367,6 @@ netwatcher:
     ttl_seconds: 30             # 리더 락 TTL / 하트비트 TTL
     lock_key: "ha:leader"       # 리더 선출 Redis 키
 
-  integrations:
-    syslog:
-      enabled: false
-      host: "localhost"
-      port: 514
-      protocol: "udp"         # udp, tcp, tls
-      format: "cef"           # cef, rfc5424
-      min_severity: "WARNING"
-      tls_ca_cert: ""
-    elasticsearch:
-      enabled: false
-      hosts: ["http://localhost:9200"]
-      index_prefix: "netwatcher-events"
-      api_key: ""
-      username: ""
-      password: ""
-      min_severity: "INFO"
-    stix_taxii:
-      enabled: false
-      taxii_url: ""
-      collection_id: ""
-      api_key: ""
-      min_severity: "WARNING"
-
   observability:
     structlog: true
     log_format: "json"            # json | console

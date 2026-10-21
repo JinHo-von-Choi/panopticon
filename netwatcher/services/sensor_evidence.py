@@ -7,8 +7,9 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import stat
+
+from netwatcher.utils.digest import is_sha256_hex
 
 MAX_FILE_BYTES = 32 * 1024 * 1024
 CHUNK_BYTES = 16 * 1024
@@ -16,7 +17,7 @@ PIN_BUDGET = {"files": 64, "bytes": MAX_FILE_BYTES, "max_hours": 24}
 
 
 def version(value):
-    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
+    return is_sha256_hex(value)
 
 
 def stamp(info):

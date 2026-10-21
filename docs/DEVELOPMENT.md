@@ -38,7 +38,7 @@ python3 -m venv .venv
 스키마 변경은 `alembic/versions/`에 새 파일로 추가하고, `netwatcher/storage/schemas.py`의 정의와 맞춥니다.
 
 ```bash
-.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m netwatcher.storage.migrate
 .venv/bin/python -m alembic current
 ```
 

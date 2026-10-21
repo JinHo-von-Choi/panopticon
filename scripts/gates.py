@@ -53,6 +53,107 @@ os.environ.setdefault("NETWATCHER_SKIP_DOTENV", "1")
 DEFAULT_CONFIG = REPO_ROOT / "config" / "default.yaml"
 
 
+# ------------------------------------------------------------------
+# 구조 검사 도구 — 문자열 존재 검사 대신 코드를 해석한다
+# ------------------------------------------------------------------
+
+def _tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _defined_functions(tree: ast.Module) -> set[str]:
+    """정의된 함수 이름."""
+    return {
+        node.name for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _call_name(node: ast.Call) -> str | None:
+    """호출 이름. 속성 호출이면 속성 이름을 준다."""
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def _calls_to(tree: ast.Module, name: str) -> list[ast.Call]:
+    """이름으로 호출된 지점들."""
+    return [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _call_name(node) == name
+    ]
+
+
+def _clears_attribute(tree: ast.Module, attribute: str) -> bool:
+    """self.<attribute>.clear() 호출이 있는지."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "clear":
+            continue
+        value = func.value
+        if isinstance(value, ast.Attribute) and value.attr == attribute:
+            return True
+    return False
+
+
+def _route_paths(tree: ast.Module) -> set[str]:
+    """라우트 데코레이터가 붙은 경로들."""
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if not isinstance(target, ast.Attribute):
+                continue
+            if target.attr not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            if decorator.args and isinstance(decorator.args[0], ast.Constant):
+                value = decorator.args[0].value
+                if isinstance(value, str):
+                    paths.add(value)
+    return paths
+
+
+def _requires_admin(tree: ast.Module) -> bool:
+    """require_role(Role.ADMIN) 호출이 있는지."""
+    for node in _calls_to(tree, "require_role"):
+        for argument in node.args:
+            if isinstance(argument, ast.Attribute) and argument.attr == "ADMIN":
+                return True
+    return False
+
+
+def _function_body(tree: ast.Module, name: str) -> ast.AST | None:
+    """이름이 붙은 함수의 본문."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
+def _first_call_position(function: ast.AST, name: str) -> int | None:
+    """함수 본문에서 해당 호출이 처음 나오는 줄."""
+    best: int | None = None
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call) and _call_name(node) == name:
+            if best is None or node.lineno < best:
+                best = node.lineno
+    return best
+
+
+def _strip_comments(text: str, language: str = "js") -> str:
+    """주석을 지운다 — 주석에 적힌 문자열로 검사를 통과시키지 못하게 한다."""
+    if language == "html":
+        return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"(?m)^\s*//.*$", "", text)
+
+
 @dataclass
 class GateResult:
     """게이트 하나의 결과."""
@@ -96,6 +197,30 @@ def gate_support_profile(config_path: Path) -> GateResult:
     return GateResult("G0-1", "지원 프로필 계약", True, "", checks)
 
 
+def yaml_write_surface() -> set[str]:
+    """설정을 바꾸는 공개 표면을 자동으로 모은다.
+
+    금지 목록을 하드코딩하면 새 쓰기 메서드가 늘 때마다 목록을 잊는다.
+    그래서 설정 편집기와 엔진 재적용·차단 적용의 공개 메서드를 직접 훑는다.
+    """
+    import inspect
+
+    from netwatcher.detection.registry import EngineRegistry
+    from netwatcher.response.blocker import BlockManager
+    from netwatcher.utils.yaml_editor import YamlConfigEditor
+
+    def public(cls) -> set[str]:
+        return {
+            name for name, member in inspect.getmembers(cls, inspect.isfunction)
+            if not name.startswith("_")
+        }
+
+    surface = public(YamlConfigEditor) | public(EngineRegistry) | public(BlockManager)
+    return {name for name in surface if name.startswith(
+        ("update_", "set_", "write_", "save_", "delete_", "remove_", "add_", "block_", "reload_")
+    )}
+
+
 def gate_ai_write_isolation() -> GateResult:
     """G0-2: AI 제안 경로가 설정·런타임·방화벽을 바꾸지 않아야 한다 (PR 03)."""
     import ast
@@ -106,14 +231,30 @@ def gate_ai_write_isolation() -> GateResult:
 
     # 분석기와 공급자 계층 모두 같은 금지 호출 검사를 받는다.
     paths = [path, *sorted((REPO_ROOT / "netwatcher" / "ai").glob("*.py"))]
-    called = {
-        node.func.attr
-        for source in paths
-        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
-    forbidden = called & {"update_engine_config", "reload_engine", "block_ip", "add_block"}
-    checks = [f"files={len(paths)}", f"forbidden_calls={sorted(forbidden) or 'none'}"]
+    forbidden_surface = yaml_write_surface()
+    called: set[str] = set()
+    imported_calls: set[str] = set()
+    for source in paths:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        imported = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                called.add(node.func.attr)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                # "from x import write_fn" 형태는 속성 호출이 아니라 이름 호출이다.
+                if node.func.id in imported:
+                    imported_calls.add(node.func.id)
+    forbidden = (called | imported_calls) & forbidden_surface
+    checks = [
+        f"files={len(paths)}",
+        f"surface={len(forbidden_surface)}",
+        f"forbidden_calls={sorted(forbidden) or 'none'}",
+    ]
     if forbidden:
         return GateResult(
             "G0-2", "AI 쓰기 격리", False,
@@ -201,19 +342,18 @@ def gate_detection_contract() -> GateResult:
     if not ev.exists():
         return GateResult("G0-7", "탐지 결과 계약", False, f"파일 없음: {ev}")
 
-    text = ev.read_text(encoding="utf-8")
-    for required in ("def classify_alert", "def apply_evidence_contract"):
-        present = required in text
+    defined = _defined_functions(_tree(ev))
+    for required in ("classify_alert", "apply_evidence_contract"):
+        present = required in defined
         checks.append(f"{required}={'yes' if present else 'no'}")
         if not present:
             return GateResult(
                 "G0-7", "탐지 결과 계약", False,
-                f"{required} 가 없다 — 세 층(요약·근거·원자료) 판정이 없다", checks,
+                f"{required} 가 없다 — 세 층(요약·근고·원자료) 판정이 없다", checks,
             )
 
     if disp.exists():
-        dtext = disp.read_text(encoding="utf-8")
-        applied = "apply_evidence_contract" in dtext
+        applied = bool(_calls_to(_tree(disp), "apply_evidence_contract"))
         checks.append(f"applied_in_dispatcher={'yes' if applied else 'no'}")
         if not applied:
             return GateResult(
@@ -233,11 +373,11 @@ def gate_feed_lifecycle() -> GateResult:
     if not path.exists():
         return GateResult("G0-6", "위협 피드 생애주기", False, f"파일 없음: {path}")
 
-    text = path.read_text(encoding="utf-8")
+    tree = _tree(path)
     checks: list[str] = []
 
     # 1) 갱신 전에 라이브 집합을 비우면 안 된다 (실패 시 지표가 사라짐)
-    clears_live_state = "self._blocked_ips.clear()" in text
+    clears_live_state = _clears_attribute(tree, "_blocked_ips")
     checks.append(f"clears_live_state={'yes' if clears_live_state else 'no'}")
     if clears_live_state:
         return GateResult(
@@ -246,35 +386,49 @@ def gate_feed_lifecycle() -> GateResult:
         )
 
     # 2) 신선도 보고가 있어야 한다
-    for required in ("def feed_health", "def is_stale", "health_as_violations"):
-        present = required in text
+    defined = _defined_functions(tree)
+    for required in ("feed_health", "is_stale"):
+        present = required in defined
         checks.append(f"{required}={'yes' if present else 'no'}")
         if not present:
             return GateResult(
                 "G0-6", "위협 피드 생애주기", False,
                 f"{required} 가 없다 — 피드 상태를 정직하게 보고할 수 없다", checks,
             )
+    reported = "health_as_violations" in defined
+    if reported:
+        # 정의만으로는 충분하지 않다 — 상태를 실제로 보고하는 곳이 있어야 한다.
+        server = REPO_ROOT / "netwatcher" / "web" / "server.py"
+        reported = server.exists() and bool(_calls_to(_tree(server), "health_as_violations"))
+    checks.append(f"health_as_violations={'yes' if reported else 'no'}")
+    if not reported:
+        return GateResult(
+            "G0-6", "위협 피드 생애주기", False,
+            "health_as_violations 가 정의만 되고 호출되지 않는다 — 피드 상태를 위반으로 보고할 수 없다",
+            checks,
+        )
 
     # 3) 갱신 루프가 기동 직후 첫 갱신을 해야 한다
     maint = REPO_ROOT / "netwatcher" / "services" / "maintenance.py"
     if maint.exists():
-        mtext = maint.read_text(encoding="utf-8")
-        loop = mtext[mtext.find("async def _feed_refresh_loop"):]
-        loop = loop[:loop.find("\n    async def", 10)] if "\n    async def" in loop[10:] else loop
-        sleeps_first = loop.strip().find("asyncio.sleep") < loop.find("update_all")
-        checks.append(f"refresh_before_sleep={'yes' if not sleeps_first else 'no'}")
-        if sleeps_first:
-            return GateResult(
-                "G0-6", "위협 피드 생애주기", False,
-                "갱신 루프가 먼저 잠근다 — 기동 후 첫 갱신이 한 주기 밀린다", checks,
-            )
+        loop = _function_body(_tree(maint), "_feed_refresh_loop")
+        if loop is not None:
+            sleep_at = _first_call_position(loop, "sleep")
+            update_at = _first_call_position(loop, "update_all")
+            sleeps_first = sleep_at is not None and update_at is not None and sleep_at < update_at
+            checks.append(f"refresh_before_sleep={'yes' if not sleeps_first else 'no'}")
+            if sleeps_first:
+                return GateResult(
+                    "G0-6", "위협 피드 생애주기", False,
+                    "갱신 루프가 먼저 잠근다 — 기동 후 첫 갱신이 한 주기 밀린다", checks,
+                )
     return GateResult("G0-6", "위협 피드 생애주기", True, "", checks)
 
 
 def gate_approval_loop() -> GateResult:
     """G0-8: 승인 루프가 존재하고 승인이 유일한 쓰기 경로여야 한다 (PR 10).
 
-    제안만 있고 승인 경로가 없으면 "승인" 은 장식이다. AI 제안이 갇히면
+    제안만 있고 승인 경로가 없으면 "승인" 은 장식이다. AI 제안이 갱히면
     되돌릴 방법 없이 로그로만 남는다.
     """
     svc = REPO_ROOT / "netwatcher" / "detection" / "proposals.py"
@@ -286,19 +440,21 @@ def gate_approval_loop() -> GateResult:
         if not path.exists():
             return GateResult("G0-8", "승인 루프", False, f"{label} 없음: {path}")
 
-    stext = svc.read_text(encoding="utf-8")
-    rtext = route.read_text(encoding="utf-8")
+    service_tree = _tree(svc)
+    route_tree = _tree(route)
 
     # 1) 승인/거절 엔드포인트와 서비스가 모두 있어야 한다
-    for required in ("async def decide", "async def submit"):
-        present = required in stext
-        checks.append(f"{required}={'yes' if present else 'no'}")
+    defined = _defined_functions(service_tree)
+    for required in ("decide", "submit"):
+        present = required in defined
+        checks.append(f"def {required}={'yes' if present else 'no'}")
         if not present:
             return GateResult(
                 "G0-8", "승인 루프", False, f"{required} 없음 — 승인 경로가 없다", checks,
             )
+    paths = _route_paths(route_tree)
     for endpoint in ("/approve", "/reject"):
-        present = endpoint in rtext
+        present = any(endpoint in path for path in paths)
         checks.append(f"route{endpoint}={'yes' if present else 'no'}")
         if not present:
             return GateResult(
@@ -306,7 +462,7 @@ def gate_approval_loop() -> GateResult:
             )
 
     # 2) 승인은 ADMIN 이어야 한다 (제안 권한과 분리)
-    admin_guard = "require_role(Role.ADMIN)" in rtext
+    admin_guard = _requires_admin(route_tree)
     checks.append(f"approve_requires_admin={'yes' if admin_guard else 'no'}")
     if not admin_guard:
         return GateResult(
@@ -315,7 +471,8 @@ def gate_approval_loop() -> GateResult:
         )
 
     # 3) 승인 시 재검증해야 한다 (접수 이후 설정이 바뀔 수 있다)
-    revalidate = "validate_engine_config" in stext and stext.count("validate_engine_config") >= 2
+    revalidations = len(_calls_to(service_tree, "validate_engine_config"))
+    revalidate = revalidations >= 2
     checks.append(f"revalidates_at_approval={'yes' if revalidate else 'no'}")
     if not revalidate:
         return GateResult(
@@ -355,8 +512,10 @@ def gate_observation_scope_ui() -> GateResult:
             return GateResult("G0-9", "관측 범위 화면", False, f"{label} 없음: {path}")
 
     gtext, itext, atext, ctext = (
-        gov.read_text(encoding="utf-8"), index.read_text(encoding="utf-8"),
-        app_js.read_text(encoding="utf-8"), css.read_text(encoding="utf-8"),
+        _strip_comments(gov.read_text(encoding="utf-8")),
+        _strip_comments(index.read_text(encoding="utf-8"), "html"),
+        _strip_comments(app_js.read_text(encoding="utf-8")),
+        _strip_comments(css.read_text(encoding="utf-8")),
     )
 
     # 1) 탭과 라우팅
@@ -794,7 +953,10 @@ def gate_schema_parity() -> GateResult:
     from netwatcher.storage import schemas as schema_module
 
     versions = sorted((REPO_ROOT / "alembic" / "versions").glob("*.py"))
-    declared = set()
+    # 마이그레이션 체인을 순서대로 따라가 **head 에 남아 있는** 테이블을
+    # 구한다. 나중에 폐기된 테이블(044 의 users 같은 것)을 요구하면
+    # 존재하지 않는 스키마를 기다리는 게 된다.
+    existing: set[str] = set()
     for path in versions:
         upgrade_body = _migration_upgrade_body(path.read_text(encoding="utf-8"))
         created = {
@@ -804,17 +966,17 @@ def gate_schema_parity() -> GateResult:
             )
             if m
         }
-        # **upgrade 안에서** 생성되고 **upgrade 안에서** 사라지는 테이블은
-        # 일시적 작업 테이블이다 (008 의 events_backup 처럼). 마이그레이션이
-        # 끝나면 존재하지 않으므로 스키마 정의를 기대하면 안 된다.
-        # downgrade 의 DROP 는 여기서 보지 않는다 — 그러면 전부 잠시것이 된다.
+        # 같은 upgrade 안에서 사라지는 테이블은 일시적 작업 테이블이다
+        # (008 의 events_backup 처럼).
         transient = {
             m.lower() for m in re.findall(
                 r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)",
                 upgrade_body, re.IGNORECASE,
             )
         }
-        declared |= created - transient
+        existing |= created - transient
+        existing -= transient - created
+    declared = existing
 
     # alembic 이 관리하는 테이블은 우리가 만들지 않는다
     declared -= {"alembic_version"}
@@ -848,7 +1010,7 @@ def gate_static_analysis() -> GateResult:
     **늘어날 수만 없게** 했다. 하나를 고칠 때마다 상한을 낮춘다.
     """
     debt_rules = "B904,B007,F841,B905,B023,B015"
-    budget = {"B904": 12, "B007": 10, "F841": 10, "B905": 8, "B023": 1, "B015": 1}
+    budget = {"B904": 12, "B007": 10, "F841": 8, "B905": 8, "B023": 1, "B015": 1}
     checks: list[str] = []
 
     proc = subprocess.run([sys.executable, "-m", "ruff", "check", "netwatcher/", "scripts/", "tests/"],
@@ -873,20 +1035,42 @@ def gate_static_analysis() -> GateResult:
             counts[parts[1]] = int(parts[0])
     grown = [f"{rule} {counts.get(rule, 0)}/{limit}" for rule, limit in budget.items()
              if counts.get(rule, 0) > limit]
+    slack = [f"{rule} {counts.get(rule, 0)}/{limit}" for rule, limit in budget.items()
+             if counts.get(rule, 0) < limit]
     checks.append("debt=" + ",".join(f"{r}:{counts.get(r, 0)}/{l}" for r, l in budget.items()))
     if grown:
         return GateResult("G0-15", "정적 분석", False,
                           "정적 분석 부채 상한 초과: " + ", ".join(grown), checks)
+    if slack:
+        # 상한이 실제보다 크면 빚을 갚았다고 말할 수 없다. 상한을 실제
+        # 카운트에 맞춰 내리고, 0 이 되면 그 규칙은 상시 켠다.
+        return GateResult("G0-15", "정적 분석", False,
+                          "정적 분석 부채 상한이 실제보다 크다 (상환 필요): "
+                          + ", ".join(slack), checks)
     return GateResult("G0-15", "정적 분석", True, "", checks)
 
 
 def gate_tests() -> GateResult:
-    """G0-5: 회귀 스위트가 통과해야 한다."""
-    cmd = [sys.executable, "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider"]
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=3600)
-    tail = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()][-1:]
-    summary = tail[0] if tail else ""
-    checks = [summary or "no output"]
+    """G0-5: 회귀 스위트가 통과해야 하고, 커버리지가 떨어지지 않아야 한다.
+
+    처리량 측정은 계측(instrumentation) 의 영향을 받는다 — 계측된 실행은
+    실제보다 느리다. 그래서 성능 시험은 커버리지 측정 밖에서 돌리고, 그
+    결과로 코드 회귀를 판정한다.
+    """
+    checks: list[str] = []
+    cmd = [
+        sys.executable, "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider",
+        "--cov=netwatcher", "--cov-report=term",
+        "--deselect", "tests/test_performance/test_throughput.py",
+    ]
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=5400)
+    tail = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    summary = ""
+    for line in reversed(tail):
+        if "passed" in line or "failed" in line:
+            summary = line.strip()
+            break
+    checks.append(summary or "no output")
     if proc.returncode != 0:
         # 요약만 남기면 실패한 시험을 찾기 위해 전체 스위트를 다시 돌려야 한다.
         fd, report_path = tempfile.mkstemp(prefix="panopticon-regression-", suffix=".log")
@@ -896,7 +1080,28 @@ def gate_tests() -> GateResult:
         failures = [line for line in (proc.stdout or "").splitlines() if line.startswith("FAILED ")]
         checks.append(f"failure-report={report_path}")
         return GateResult("G0-5", "회귀 스위트", False, "\n".join(failures) or summary, checks)
+
+    total = [line for line in tail if line.strip().startswith("TOTAL")]
+    checks.append(total[-1].strip() if total else "coverage=unknown")
+
+    perf = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_performance/test_throughput.py",
+         "-q", "-p", "no:cacheprovider"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800,
+    )
+    checks.append("performance=run")
+    if perf.returncode != 0:
+        failures = [line for line in (perf.stdout or "").splitlines() if line.startswith("FAILED ")]
+        return GateResult(
+            "G0-5", "회귀 스위트", False,
+            "처리량 측정 실패: " + ("\n".join(failures) or "실패 요약 없음"), checks,
+        )
     return GateResult("G0-5", "회귀 스위트", True, "", checks)
+
+
+# 본문 자격증명으로 인증되는 변경 경로. 예외로 기록한다 — 열거 예외이므로
+# 다른 경로를 숨기지 않는다.
+BODY_CREDENTIAL_PATHS = ("/api/agent/enroll",)
 
 
 def missing_admin_guards(routes) -> list[str]:
@@ -921,6 +1126,39 @@ def missing_admin_guards(routes) -> list[str]:
     return sorted(missing)
 
 
+def unguarded_mutations(routes) -> list[str]:
+    """권한 검사 자체가 없는 변경 경로를 모두 찾는다.
+
+    관리자 변경 목록은 하드코딩이라 새 접두 경로를 놓친다. 그래서
+    목록과 무관하게 **어떤 변경 경로든** 접근 검사가 있어야 한다.
+    로그인 경로는 원래 공개 경로라 제외한다.
+    """
+    from netwatcher.web.rbac import MUTATION_METHODS
+
+    def has_access_check(dependant):
+        for dependency in dependant.dependencies:
+            call = dependency.call
+            # 역할 검사(rbac)든 기기 토큰 검사든, 호출 가능한 의존성이 있으면
+            # 그 경로에는 접근 검사가 걸려 있다.
+            if callable(call) and not isinstance(call, type):
+                return True
+            if has_access_check(dependency):
+                return True
+        return False
+
+    missing = []
+    for route in routes:
+        path = getattr(route, "path", "")
+        if path.startswith("/api/auth/"):
+            continue
+        if path in BODY_CREDENTIAL_PATHS:
+            continue
+        for method in getattr(route, "methods", ()):
+            if method in MUTATION_METHODS and not has_access_check(route.dependant):
+                missing.append(f"{method} {path}")
+    return sorted(missing)
+
+
 def gate_mutation_permissions() -> GateResult:
     """G0-14: 관리자 변경 경로에 명시적 권한 의존성이 있어야 한다."""
     from unittest.mock import MagicMock
@@ -933,6 +1171,20 @@ def gate_mutation_permissions() -> GateResult:
                      signature_engine=MagicMock(), registry=MagicMock(), yaml_editor=MagicMock(),
                      incident_repository=MagicMock())
     missing = missing_admin_guards(app.routes)
+    # 응답·제안·리플레이·관측 경로까지 포함한다 — 이전에는 이 라우터들이
+    # 게이트 대상에서 빠져 있었다.
+    extended = create_app(
+        Config({}), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        block_manager=MagicMock(), blocklist_repo=MagicMock(),
+        feed_manager=MagicMock(), whitelist=MagicMock(),
+        signature_engine=MagicMock(), registry=MagicMock(), yaml_editor=MagicMock(),
+        incident_repository=MagicMock(),
+        response_repository=MagicMock(), response_executor=MagicMock(),
+        response_proposal_repo=MagicMock(), replay_service=MagicMock(),
+        observation_service=MagicMock(), kernel_probe=MagicMock(),
+    )
+    missing.extend(missing_admin_guards(extended.routes))
+    unguarded = unguarded_mutations(app.routes) + unguarded_mutations(extended.routes)
     managed = MagicMock()
     managed.enabled = True
     managed.multi_user = True
@@ -941,9 +1193,315 @@ def gate_mutation_permissions() -> GateResult:
                             auth_manager=managed, audit_logger=MagicMock(), audit_required=True,
                             sensor_control=MagicMock())
     missing.extend(missing_admin_guards(remote_app.routes))
-    return GateResult("G0-14", "변경 라우트 권한", not missing,
-                      "관리자 권한 누락: " + ", ".join(missing) if missing else "",
-                      [f"missing={len(missing)}", "engine_profiles=local,remote"])
+    unguarded.extend(unguarded_mutations(remote_app.routes))
+    checks = [
+        f"missing={len(missing)}",
+        f"unguarded={len(unguarded)}",
+        "engine_profiles=local,remote,extended",
+    ]
+    problems = []
+    if missing:
+        problems.append("관리자 권한 누락: " + ", ".join(sorted(set(missing))))
+    if unguarded:
+        problems.append("권한 검사 없는 변경 경로: " + ", ".join(sorted(set(unguarded))))
+    return GateResult("G0-14", "변경 라우트 권한", not problems,
+                      " / ".join(problems), checks)
+
+
+def gate_event_partitions() -> GateResult:
+    """G0-16: events 월별 파티션이 확보되어 있어야 한다.
+
+    파티션이 없으면 해당 월의 INSERT 가 실패해 경보 저장이 중단된다.
+    게이트는 DB 를 고치지 않는다 — 상태만 확인하고 부족하면 실패시킨다.
+    """
+    checks: list[str] = []
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "netwatcher.storage.partition_manager", "--months", "3"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return GateResult(
+            "G0-16", "events 월별 파티션", False,
+            f"파티션 상태를 확인할 수 없다: {type(exc).__name__}: {exc}", checks,
+        )
+
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip().splitlines()
+        return GateResult(
+            "G0-16", "events 월별 파티션", False,
+            f"이번 달 파티션이 확보되지 않았다: {stderr[-1] if stderr else '알 수 없음'}", checks,
+        )
+
+    try:
+        state = json.loads((proc.stdout or "").strip() or "{}")
+    except json.JSONDecodeError as exc:
+        return GateResult(
+            "G0-16", "events 월별 파티션", False,
+            f"파티션 상태 출력을 해석할 수 없다: {exc}", checks,
+        )
+
+    checks.append(f"partitioned={state.get('partitioned')}")
+    checks.append(f"covered={state.get('covered')}")
+    checks.append(f"current_month={state.get('current_month')}")
+    missing = state.get("missing") or []
+    checks.append(f"missing={len(missing)}")
+
+    if not state.get("partitioned"):
+        return GateResult(
+            "G0-16", "events 월별 파티션", False,
+            "events 테이블이 파티셔닝되어 있지 않다 "
+            "(008_events_monthly_partitioning 마이그레이션 확인)", checks,
+        )
+    if not state.get("covered"):
+        return GateResult(
+            "G0-16", "events 월별 파티션", False,
+            f"이번 달 파티션({state.get('current_month')})이 없다 — "
+            "'python -m netwatcher.storage.partition_manager --ensure' 필요", checks,
+        )
+    if missing:
+        checks.append(f"upcoming_missing={','.join(missing)}")
+    return GateResult("G0-16", "events 월별 파티션", True, "", checks)
+
+
+def gate_prompt_components() -> GateResult:
+    """G0-17: 분석 프롬프트가 파일 단위 컴포넌트 계약을 지켜야 한다.
+
+    프롬프트가 코드 안 문자열로 돌아가면 무엇이 바뀌었는지 비교할 수 없고
+    출력 형식 계약도 검사할 수 없다. 컴포넌트 파일이 유효한지, 조립이
+    파일에서 일어나는지를 함께 확인한다.
+    """
+    from netwatcher.ai.components import COMPONENT_ORDER, PromptTree, validate
+
+    checks: list[str] = []
+    try:
+        tree = PromptTree.load()
+    except Exception as exc:
+        return GateResult(
+            "G0-17", "프롬프트 컴포넌트", False,
+            f"프롬프트 컴포넌트를 읽을 수 없다: {type(exc).__name__}: {exc}", checks,
+        )
+
+    problems = validate(tree)
+    checks.append(f"components={len(COMPONENT_ORDER)}")
+    checks.append(f"problems={len(problems)}")
+    if problems:
+        return GateResult(
+            "G0-17", "프롬프트 컴포넌트", False,
+            "프롬프트 컴포넌트 계약 위반:\n  " + "\n  ".join(problems), checks,
+        )
+
+    # 조립이 코드 안 문자열로 돌아가면 파일 계약이 무의미해진다.
+    source = (REPO_ROOT / "netwatcher" / "services" / "ai_analyzer.py").read_text(encoding="utf-8")
+    tree_ = ast.parse(source)
+    literals: list[str] = []
+    for node in ast.walk(tree_):
+        if not isinstance(node, ast.FunctionDef) or node.name != "_build_prompt":
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                literals.append(child.value)
+    longest = max((len(text) for text in literals), default=0)
+    checks.append(f"longest_prompt_literal={longest}")
+    if longest > 200:
+        return GateResult(
+            "G0-17", "프롬프트 컴포넌트", False,
+            f"_build_prompt() 에 {longest} 글자짜리 문자열이 남아 있다 — "
+            "프롬프트는 컴포넌트 파일에서 조립해야 한다", checks,
+        )
+    checks.append("assembled_from_files=yes")
+    return GateResult("G0-17", "프롬프트 컴포넌트", True, "", checks)
+
+
+def gate_proposal_probe() -> GateResult:
+    """G0-18: 승인 큐에 들어가는 제안은 대비 또는 명시적 사유를 갖는다.
+
+    사유 없는 미실행은 금지한다 — 제안이 승인 큐에 있는데 왜 비교하지
+    않았는지 알 수 없으면, 판단자는 빈칸을 정상으로 읽는다.
+    """
+    from netwatcher.storage import schemas as schema_module
+
+    checks: list[str] = []
+    schema_sql = " ".join(schema_module.ALL_SCHEMAS)
+    problems: list[str] = []
+
+    if "config_proposals_probe_check" not in schema_sql:
+        problems.append("config_proposals 에 probe 상태 제약을 두고 있지 않다")
+    if "probe ? 'status'" not in schema_sql:
+        problems.append("probe 가 상태를 요구하지 않는다")
+    default = schema_module.CONFIG_PROPOSALS_PROBE_DEFAULT
+    if default.get("status") != "skipped" or not default.get("reasons"):
+        problems.append("probe 기본값에 사유가 없다")
+    checks.append(f"default_status={default.get('status')}")
+    checks.append(f"default_reasons={len(default.get('reasons') or [])}")
+
+    # 제안 삽입 경로가 어디서든 대비를 명시하거나 기본값에 맡겨야 한다.
+    inserts: list[tuple[str, str]] = []
+    for path in sorted((REPO_ROOT / "netwatcher").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"INSERT INTO config_proposals(.*?)RETURNING", text, re.DOTALL):
+            inserts.append((str(path.relative_to(REPO_ROOT)), match.group(1)))
+    checks.append(f"insert_paths={len(inserts)}")
+    for relative, statement in inserts:
+        if "probe" not in statement:
+            problems.append(f"{relative}: 제안 삽입이 probe 를 명시하지 않는다")
+
+    service = (REPO_ROOT / "netwatcher" / "detection" / "proposals.py").read_text(encoding="utf-8")
+    if "run_probe" not in service or "probe=probe" not in service:
+        problems.append("제안 서비스가 대비를 계산해 붙이지 않는다")
+    checks.append("service_probe=yes")
+
+    if problems:
+        return GateResult(
+            "G0-18", "제안 대비 계약", False,
+            "제안 대비 계약 위반:\n  " + "\n  ".join(problems), checks,
+        )
+    return GateResult("G0-18", "제안 대비 계약", True, "", checks)
+
+
+def gate_experience_library() -> GateResult:
+    """G0-19: 경험 항목은 근거가 있어야 산다.
+    근거 없는 교훈은 다음 제안의 판정을 망친다. 그래서 증거가 비어 있으면
+    존재할 수 없고, 근거가 된 제안·판정이 실제로 존재해야 하며, 실행
+    대비가 뒷받침할 때만 채택된다.
+    """
+    from netwatcher.storage import schemas as schema_module
+
+    checks: list[str] = []
+    problems: list[str] = []
+    schema_sql = " ".join(schema_module.ALL_SCHEMAS)
+
+    if "analysis_experiences_evidence_check" not in schema_sql:
+        problems.append("analysis_experiences 에 증거 제약을 두고 있지 않다")
+    if "evidence <> '{}'::jsonb" not in schema_sql:
+        problems.append("경험 항목의 증거가 비어 있어도 된다")
+    if "REFERENCES config_proposals(id)" not in schema_sql:
+        problems.append("경험 항목이 근거 제안을 참조하지 않는다")
+    if "REFERENCES business_reviews(event_id)" not in schema_sql:
+        problems.append("경험 항목이 근거 판정을 참조하지 않는다")
+    checks.append("evidence_check=yes")
+    checks.append("references=yes")
+
+    experience = (REPO_ROOT / "netwatcher" / "detection" / "experience.py").read_text(encoding="utf-8")
+    if "no_comparison" not in experience or "check_adoption(" not in experience:
+        problems.append("경험 채택이 실행 대비를 확인하지 않는다")
+    if "build_candidate" not in experience:
+        problems.append("경험 후보를 만드는 경로가 없다")
+    checks.append("adoption_rule=yes")
+
+    repository = (REPO_ROOT / "netwatcher" / "storage" / "repositories.py").read_text(encoding="utf-8")
+    if "INSERT INTO analysis_experiences" not in repository or "evidence" not in repository:
+        problems.append("경험 항목을 저장하는 경로가 근거를 남기지 않는다")
+    checks.append("storage_path=yes")
+
+    server = (REPO_ROOT / "netwatcher" / "web" / "server.py").read_text(encoding="utf-8")
+    if "create_experiences_router" not in server:
+        problems.append("경험 라이브러리 API 가 등록되지 않았다")
+    checks.append("api_mounted=yes")
+
+    if problems:
+        return GateResult(
+            "G0-19", "경험 라이브러리 계약", False,
+            "경험 라이브러리 계약 위반:\n  " + "\n  ".join(problems), checks,
+        )
+    return GateResult("G0-19", "경험 라이브러리 계약", True, "", checks)
+
+
+def gate_gate_experience_library() -> GateResult:
+    """G0-20: 관문은 자신이 잡은 결함을 기억해야 한다.
+
+    `docs/gates/EXPERIENCE.md` 에 결함 유형 → 관문 → 근거 가 남아 있어야
+    한다. 관문을 새로 만들고 그 파일을 고치지 않으면 게이트가 실패한다.
+    관문 이름을 잘못 적어도 실패한다. 덮이지 않은 결함은 사유와 함께
+    `uncovered` 에 남는다 — 숨기지 않는다.
+    """
+    path = REPO_ROOT / "docs" / "gates" / "EXPERIENCE.md"
+    checks: list[str] = []
+    if not path.exists():
+        return GateResult("G0-20", "게이트 경험 라이브러리", False, f"파일 없음: {path}", checks)
+
+    text = path.read_text(encoding="utf-8")
+    blocks = re.findall(r"```json\s*(.*?)```", text, re.DOTALL)
+    if not blocks:
+        return GateResult(
+            "G0-20", "게이트 경험 라이브러리", False,
+            "기계 판독 가능한 json 블록이 없다", checks,
+        )
+    try:
+        data = json.loads(blocks[-1])
+    except json.JSONDecodeError as exc:
+        return GateResult(
+            "G0-20", "게이트 경험 라이브러리", False,
+            f"json 블록을 읽을 수 없다: {exc}", checks,
+        )
+
+    gates = data.get("gates") or {}
+    uncovered = data.get("uncovered") or []
+    problems: list[str] = []
+
+    for gate_id, entry in sorted(gates.items()):
+        if gate_id not in GATE_BY_ID:
+            problems.append(f"{gate_id} 는 존재하지 않는 관문이다")
+        if not entry.get("defects"):
+            problems.append(f"{gate_id} 에 기록된 결함 유형이 없다")
+        if not entry.get("evidence"):
+            problems.append(f"{gate_id} 에 근거가 없다")
+    checks.append(f"recorded={len(gates)}")
+
+    for gate_id in sorted(GATE_BY_ID):
+        if gate_id not in gates:
+            problems.append(f"{gate_id} 는 결함 유형이 기록되지 않았다")
+
+    for entry in uncovered:
+        if not entry.get("defect") or not entry.get("reason"):
+            problems.append("덮이지 않은 결함은 유형과 사유를 함께 적어야 한다")
+    checks.append(f"uncovered={len(uncovered)}")
+
+    if problems:
+        return GateResult(
+            "G0-20", "게이트 경험 라이브러리", False,
+            "게이트 경험 라이브러리 위반:\n  " + "\n  ".join(problems), checks,
+        )
+    return GateResult("G0-20", "게이트 경험 라이브러리", True, "", checks)
+
+
+def gate_layer_direction() -> GateResult:
+    """G0-21: 웹 계층 의존은 조립 지점으로만 들어간다.
+
+    도메인 모듈이 `netwatcher.web` 를 가져오면 웹 계층이 아래로 새어
+    들어온다 — 센서 프로세스가 FastAPI 를 끌어들이게 된다. 조립 지점
+    (앱을 组는 곳)만 예외다.
+    """
+    import ast
+
+    composition_roots = {"app.py", "native_console.py", "runtime.py"}
+    checks: list[str] = []
+    offenders: list[str] = []
+
+    for path in sorted((REPO_ROOT / "netwatcher").rglob("*.py")):
+        relative = path.relative_to(REPO_ROOT)
+        if relative.parts[1:2] == ("web",):
+            continue
+        if relative.name in composition_roots:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            module = None
+            if isinstance(node, ast.ImportFrom) and node.module:
+                module = node.module
+            elif isinstance(node, ast.Import):
+                module = node.names[0].name if node.names else None
+            if module and module.startswith("netwatcher.web"):
+                offenders.append(f"{relative}:{node.lineno}")
+
+    checks.append(f"offenders={len(offenders)}")
+    checks.append("roots=app.py,native_console.py,ingest/runtime.py")
+    if offenders:
+        return GateResult(
+            "G0-21", "계층 방향", False,
+            "웹 계층을 끌어들이는 모듈:\n  " + "\n  ".join(offenders), checks,
+        )
+    return GateResult("G0-21", "계층 방향", True, "", checks)
 
 
 GATES: tuple[Callable[..., GateResult], ...] = (
@@ -961,6 +1519,12 @@ GATES: tuple[Callable[..., GateResult], ...] = (
     gate_schema_parity,
     gate_mutation_permissions,
     gate_static_analysis,
+    gate_event_partitions,
+    gate_prompt_components,
+    gate_proposal_probe,
+    gate_experience_library,
+    gate_gate_experience_library,
+    gate_layer_direction,
     gate_tests,
 )
 
@@ -980,6 +1544,12 @@ GATE_BY_ID = {
     "G0-13": gate_schema_parity,
     "G0-14": gate_mutation_permissions,
     "G0-15": gate_static_analysis,
+    "G0-16": gate_event_partitions,
+    "G0-17": gate_prompt_components,
+    "G0-18": gate_proposal_probe,
+    "G0-19": gate_experience_library,
+    "G0-20": gate_gate_experience_library,
+    "G0-21": gate_layer_direction,
     "G0-5": gate_tests,
 }
 

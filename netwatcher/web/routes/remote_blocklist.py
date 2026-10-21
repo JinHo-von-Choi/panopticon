@@ -3,12 +3,12 @@
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import Field, StrictBool
 
 from netwatcher.services.sensor_control import SensorControlError
 from netwatcher.web.rbac import Role, require_role
-from netwatcher.web.routes.remote_engines import EngineChange
+from netwatcher.web.routes.remote_engines import EngineChange, sensor_error, sensor_unknown
 
 
 class BlocklistChange(EngineChange):
@@ -29,11 +29,9 @@ def create_remote_blocklist_router(control):
                 raise SensorControlError("sensor_result_unknown", 503)
             return result
         except SensorControlError as exc:
-            raise HTTPException(exc.status, {"code": exc.code,
-                "message": "현재 목록과 변경 기록을 확인한 뒤 다시 시도하세요."}) from None
+            raise sensor_error(exc, "현재 목록과 변경 기록을 확인한 뒤 다시 시도하세요.") from None
         except TimeoutError:
-            raise HTTPException(503, {"code": "sensor_result_unknown",
-                "message": "현재 목록과 변경 기록을 확인한 뒤 다시 시도하세요."}) from None
+            raise sensor_unknown("현재 목록과 변경 기록을 확인한 뒤 다시 시도하세요.") from None
 
     @router.get("")
     async def list_entries(entry_type: Literal["ip", "domain"] | None = None,

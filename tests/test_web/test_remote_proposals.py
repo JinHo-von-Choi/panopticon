@@ -366,3 +366,18 @@ async def test_same_config_reloaded_after_submission_invalidates_evidence(db, pr
     assert response.status_code == 409
     assert await db.pool.fetchval("SELECT status FROM config_proposals WHERE id=$1", pid) == "pending"
     assert editor.get_engine_config("port_scan")["threshold"] == 5 and not stopped
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=False, reason="분리 센서 전송 형식에 대비 결과가 아직 없다 — 3단계 남은 항목")
+async def test_remote_proposal_carries_the_comparison(db, proposals_api):
+    """분리 센서 콘솔에도 제안의 대비 결과가 넘어가야 한다.
+
+    센서 → 콘솔 전송 형식(ROW_FIELDS)에 대비 결과가 없으므로 지금은
+    실패한다. 형식에 담기면 통과한다.
+    """
+    client, header, service, registry, editor, accounts, server, stopped, replay = proposals_api
+    state, _ = await submit(proposals_api)
+    pid = state["proposal"]["id"]
+    row = (await client.get(f"/api/proposals/{pid}", headers=header)).json()
+    assert row["proposal"]["probe"]["status"] in {"compared", "skipped"}

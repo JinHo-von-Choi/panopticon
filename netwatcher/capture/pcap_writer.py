@@ -13,7 +13,7 @@ from pathlib import Path
 
 from scapy.all import IP, IPv6, ARP, Ether, Packet
 from scapy.utils import RawPcapWriter
-from netwatcher.web import metrics
+from netwatcher.observability import metrics
 
 logger = logging.getLogger("netwatcher.capture.pcap_writer")
 

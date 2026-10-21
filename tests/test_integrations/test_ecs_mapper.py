@@ -99,10 +99,12 @@ class TestAlertToEcs:
         assert doc["netwatcher"]["confidence"] == 0.85
         assert doc["netwatcher"]["metadata"]["unique_ports"] == 50
 
-    def test_to_ecs_method_on_alert(self):
-        """Alert.to_ecs() 메서드가 동일한 결과를 반환하는지 확인."""
-        alert    = _make_alert()
-        from_method = alert.to_ecs()
-        from_func   = alert_to_ecs(alert)
+    def test_ecs_conversion_does_not_live_on_the_model(self):
+        """도메인 모델은 출력 포맷을 알지 않는다.
 
-        assert from_method == from_func
+        변환은 `integrations` 쪽에서만 한다 — 모델이 변환기를 가지면
+        도메인과 출력 포맷이 서로를 부른다.
+        """
+        alert = _make_alert()
+        assert not hasattr(alert, "to_ecs")
+        assert alert_to_ecs(alert)["@timestamp"]

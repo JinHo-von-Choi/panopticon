@@ -108,6 +108,13 @@ class TestEngineThroughput:
 
 
 class TestDBBatchPerformance:
+    # 벽시계 임계는 저장소 환경마다 다르다. 느린 환경에서도 걸리지 않을
+    # 여유를 두되, 처리량이 무한정 느려지는 것은 막는다.
+    EVENT_INSERT_MIN_EPS = 50.0
+    EVENT_INSERT_MAX_SECONDS = 60.0
+    DEVICE_UPSERT_MIN_EPS = 100.0
+    DEVICE_UPSERT_MAX_SECONDS = 60.0
+
     @pytest.mark.asyncio
     async def test_db_batch_insert_events(self, event_repo):
         """Measure event insert throughput: 1000 events."""
@@ -127,6 +134,13 @@ class TestDBBatchPerformance:
 
         count = await event_repo.count()
         assert count == 1000
+        assert eps >= self.EVENT_INSERT_MIN_EPS, (
+            f"경보 저장 처리량이 {eps:.0f}/s 로 임계({self.EVENT_INSERT_MIN_EPS}/s) 아래다"
+        )
+        assert elapsed < self.EVENT_INSERT_MAX_SECONDS, (
+            f"경보 저장 1,000건이 {elapsed:.1f}s 걸렸다 — 임계 "
+            f"{self.EVENT_INSERT_MAX_SECONDS}s 를 넘었다"
+        )
 
     @pytest.mark.asyncio
     async def test_db_batch_upsert_devices(self, device_repo):
@@ -152,3 +166,10 @@ class TestDBBatchPerformance:
 
         count = await device_repo.count()
         assert count == 1000
+        assert dps >= self.DEVICE_UPSERT_MIN_EPS, (
+            f"장치 일괄 기록 처리량이 {dps:.0f}/s 로 임계({self.DEVICE_UPSERT_MIN_EPS}/s) 아래다"
+        )
+        assert elapsed < self.DEVICE_UPSERT_MAX_SECONDS, (
+            f"장치 1,000건 일괄 기록이 {elapsed:.1f}s 걸렸다 — 임계 "
+            f"{self.DEVICE_UPSERT_MAX_SECONDS}s 를 넘었다"
+        )

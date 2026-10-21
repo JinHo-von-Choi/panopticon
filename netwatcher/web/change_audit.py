@@ -2,30 +2,9 @@
 
 import asyncio
 import inspect
-import hashlib
-import math
 from functools import wraps
 
 from fastapi import HTTPException
-
-
-def state_summary(value, depth=0):
-    """수치·불리언은 비교하고 자유 문자열은 해시로만 보관한다."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return {"non_finite": str(value)}
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if isinstance(value, str):
-        return {"sha256": hashlib.sha256(value.encode()).hexdigest(), "length": len(value)}
-    if depth >= 4:
-        return {"omitted": "depth_limit"}
-    if isinstance(value, dict):
-        return {str(key): "[redacted]" if any(word in str(key).lower() for word in
-                ("password", "secret", "token", "credential", "authorization", "cookie", "key"))
-                else state_summary(item, depth + 1) for key, item in list(value.items())[:64]}
-    if isinstance(value, (list, tuple)):
-        return [state_summary(item, depth + 1) for item in value[:64]]
-    return {"omitted": "unsupported_type"}
 
 
 class ChangeAudit:

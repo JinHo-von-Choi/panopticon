@@ -160,10 +160,11 @@ def _ja4_sni_indicator(client_hello) -> str:
         return "d"
 
 
-def _ja4_first_alpn(client_hello) -> str:
+def _ja4_first_alpn(client_hello) -> str | None:
     """JA4용 첫 번째 ALPN 프로토콜 값의 앞 2자를 추출한다.
 
-    ALPN 확장이 없으면 '00'을 반환한다.
+    ALPN 확장이 없으면 '00' (JA4 규격의 "없음") 을 반환한다. 파싱에 실패하면
+    None 을 반환한다 — 실패를 "없음" 처럼 보이면 안 된다.
     """
     try:
         if not client_hello.ext:
@@ -185,7 +186,7 @@ def _ja4_first_alpn(client_hello) -> str:
                     return (val[:2] if len(val) >= 2 else val.ljust(2, "0"))
         return "00"
     except Exception:
-        return "00"
+        return None
 
 
 def _ja4_extract_sig_algs(client_hello) -> list[int]:
@@ -254,6 +255,10 @@ def compute_ja4(client_hello) -> str | None:
         cipher_count = f"{min(len(ciphers), 99):02d}"
         ext_count = f"{min(len(ext_types), 99):02d}"
         first_alpn = _ja4_first_alpn(client_hello)
+        if first_alpn is None:
+            # ALPN 을 읽지 못하면 핑거프린트를 만들지 않는다 — 없는 것으로
+            # 기록하면 정상 통신으로 보인다.
+            return None
 
         part_a = f"{proto}{tls_ver}{sni_ind}{cipher_count}{ext_count}{first_alpn}"
 

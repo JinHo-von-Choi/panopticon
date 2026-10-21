@@ -38,7 +38,7 @@ def main():
             parser.error('구성요소의 설정 파일이 필요합니다')
         command = ['-m', 'netwatcher', '--component', args.component, '-c', args.config]
     elif args.component == 'migrate':
-        command = ['-m', 'alembic', 'upgrade', 'head']
+        command = ['-m', 'netwatcher.storage.migrate']
     else:
         command = ['-m', 'netwatcher.storage.runtime_roles', args.component]
     os.execv(sys.executable, [sys.executable, *command])

@@ -44,7 +44,7 @@ from netwatcher.response.nftables_backend import (
     rule_tag,
     validate_target,
 )
-from netwatcher.response.executor import ExecutionRequest
+from netwatcher.response.contract import ExecutionRequest
 
 NFT = shutil.which("nft")
 

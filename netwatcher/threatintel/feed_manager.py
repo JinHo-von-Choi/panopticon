@@ -417,7 +417,7 @@ class FeedManager:
             self.last_update_epoch = _time.time()
             for name in set(delivered) | acc.validated_cached:
                 self._confirmed_epochs[name] = self.last_update_epoch
-        self._save_meta()
+        await self._save_meta()
 
         summary = FeedUpdateSummary(
             succeeded=True,
@@ -449,7 +449,7 @@ class FeedManager:
         self._last_attempt_epoch = summary.last_update_epoch or self._last_attempt_epoch
         self._feed_outcomes = dict(getattr(self, "_pending_outcomes", {}) or {})
         try:
-            from netwatcher.web.metrics import feed_last_update
+            from netwatcher.observability.metrics import feed_last_update
             # 실패한 갱신이므로 이전 성공 시각을 그대로 유지한다
             feed_last_update.set(self.last_update_epoch)
         except ImportError:
@@ -547,10 +547,14 @@ class FeedManager:
                 logger.warning("피드 메타 파일 손상, 초기화합니다")
         return {}
 
-    def _save_meta(self) -> None:
-        """피드별 HTTP 메타데이터를 디스크에 저장한다."""
+    async def _save_meta(self) -> None:
+        """피드별 HTTP 메타데이터를 디스크에 저장한다.
+
+        파일 쓰기는 이벤트 루프를 막지 않도록 스레드로 넘긴다.
+        """
         try:
-            self._meta_file.write_text(json.dumps(self._feed_meta, indent=2))
+            payload = json.dumps(self._feed_meta, indent=2)
+            await asyncio.to_thread(self._meta_file.write_text, payload)
         except OSError:
             logger.warning("피드 메타 파일 저장 실패")
 
@@ -562,7 +566,7 @@ class FeedManager:
         safe_url = validate_outbound_url(source.url)
         if safe_url is None:
             logger.error("피드 URL이 내부 주소를 대상으로 하여 차단됨: %s", source.name)
-            self._load_from_cache(source, cache_file, acc)
+            await self._load_from_cache(source, cache_file, acc)
             return
 
         # 이전 메타데이터에서 조건부 요청 헤더 구성
@@ -583,7 +587,7 @@ class FeedManager:
                 ) as resp:
                     if resp.status == 304:
                         logger.info("Feed %s: not modified (304), using cache", source.name)
-                        self._load_from_cache(source, cache_file, acc)
+                        await self._load_from_cache(source, cache_file, acc)
                         if headers and acc.outcomes.get(source.name) == 'cached':
                             acc.validated_cached.add(source.name)
                         return
@@ -592,7 +596,7 @@ class FeedManager:
                         logger.warning(
                             "Feed %s returned HTTP %d", source.name, resp.status
                         )
-                        self._load_from_cache(source, cache_file, acc)
+                        await self._load_from_cache(source, cache_file, acc)
                         return
 
                     content = await resp.text()
@@ -606,22 +610,25 @@ class FeedManager:
                     if new_meta:
                         self._feed_meta[source.name] = new_meta
 
-            cache_file.write_text(content)
+            await asyncio.to_thread(cache_file.write_text, content)
 
         except (aiohttp.ClientError, OSError, TimeoutError, UnicodeError) as exc:
             logger.warning("Failed to download feed %s (%s), using cache", source.name, type(exc).__name__)
-            self._load_from_cache(source, cache_file, acc)
+            await self._load_from_cache(source, cache_file, acc)
             return
 
         self._parse_and_store(source, content, acc)
 
-    def _load_from_cache(
+    async def _load_from_cache(
         self, source: FeedSource, cache_file: Path, acc: _FeedAccumulator,
     ) -> None:
-        """로컬 캐시 파일에서 피드를 로드한다."""
+        """로컬 캐시 파일에서 피드를 로드한다.
+
+        파일 읽기는 이벤트 루프를 막지 않도록 스레드로 넘긴다.
+        """
         if cache_file.exists():
             try:
-                content = cache_file.read_text()
+                content = await asyncio.to_thread(cache_file.read_text)
             except OSError:
                 logger.warning("캐시 읽기 실패: %s", source.name)
                 acc.fail(source.name)

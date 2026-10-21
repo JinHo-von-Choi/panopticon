@@ -12,8 +12,9 @@ from uuid import UUID, uuid4
 from netwatcher.detection.validation import RESERVED_KEYS, validate_engine_config
 from netwatcher.detection.schema_utils import normalize_schema
 from netwatcher.storage.sensor_state import _identity
-from netwatcher.web.change_audit import state_summary
+from netwatcher.utils.state_summary import state_summary
 from netwatcher.services.sensor_whitelist import candidate as whitelist_candidate, state as whitelist_state
+from netwatcher.utils.digest import is_sha256_hex
 
 MAX_REQUEST_BYTES = 8192
 MAX_RESULT_BYTES = 65536
@@ -118,7 +119,7 @@ class SensorControlRequest:
                 raise ValueError("read operation cannot change configuration")
             if value["operation"] in ("engine.catalog", "engine.states") and value["engine"] != value["operation"].split(".")[1]:
                 raise ValueError("invalid engine collection request")
-        elif not isinstance(value["base_version"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["base_version"]):
+        elif not is_sha256_hex(value["base_version"]):
             raise ValueError("invalid base version")
         if value["operation"] == "engine.toggle" and (
                 set(value["updates"]) != {"enabled"} or type(value["updates"]["enabled"]) is not bool):

@@ -3,10 +3,10 @@
 import hashlib
 import ipaddress
 import json
-import re
 from datetime import datetime
 
 from netwatcher.services.sensor_whitelist import normalize_entry as normalize_whitelist_entry
+from netwatcher.utils.digest import is_sha256_hex
 
 
 def entry_metadata(row):
@@ -148,10 +148,9 @@ def validate_result(request, result):
         if (not isinstance(entry, dict) or set(entry) != {"type", "value", "present", "notes_sha256", "notes", "notes_truncated", "created_at"}
                 or entry["type"] not in {"ip", "domain"} or type(entry["present"]) is not bool
                 or not isinstance(entry["value"], str) or not 0 < len(entry["value"]) <= 253
-                or (entry["present"] and (not isinstance(entry["notes_sha256"], str)
-                    or not re.fullmatch(r"[a-f0-9]{64}", entry["notes_sha256"])))
+                or (entry["present"] and not is_sha256_hex(entry["notes_sha256"]))
                 or (not entry["present"] and entry["notes_sha256"] is not None)
-                or not isinstance(result.get("base_version"), str) or not re.fullmatch(r"[a-f0-9]{64}", result["base_version"])):
+                or not is_sha256_hex(result.get("base_version"))):
             raise ValueError("invalid blocklist entry result")
         if (not isinstance(entry["notes"], str) or len(entry["notes"]) > 2048 or type(entry["notes_truncated"]) is not bool
                 or (entry["present"] and (not isinstance(entry["created_at"], str) or not 0 < len(entry["created_at"]) <= 64))

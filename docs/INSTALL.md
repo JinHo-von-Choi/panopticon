@@ -166,7 +166,7 @@ Python 3.12 이상과 PostgreSQL이 필요합니다. 설정 파일의 DB 주소�
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install --require-hashes -r requirements.lock
-.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m netwatcher.storage.migrate
 .venv/bin/python -m netwatcher -c config/default.yaml
 ```
 

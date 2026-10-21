@@ -40,15 +40,24 @@ class FakeRepo:
         self.rows: dict[int, dict] = {}
         self._next = 1
 
-    async def insert(self, engine, params, reason="", source="human", before=None):
+    async def insert(self, engine, params, reason="", source="human", before=None,
+                     probe=None):
         pid = self._next
         self._next += 1
         self.rows[pid] = {
             "id": pid, "engine": engine, "params": dict(params),
             "reason": reason, "source": source, "before": dict(before or {}),
             "status": STATUS_PENDING, "applied": None, "apply_error": None,
+            "probe": dict(probe or {}),
         }
         return pid
+
+    async def attach_probe(self, pid, probe):
+        row = self.rows.get(pid)
+        if row is None or row["status"] != STATUS_PENDING:
+            return False
+        row["probe"] = dict(probe)
+        return True
 
     async def get_by_id(self, pid):
         return self.rows.get(pid)
@@ -283,3 +292,89 @@ def test_pending_count_exposed():
 def test_missing_token_rejected():
     client, _, _ = _client()
     assert client.get("/api/proposals").status_code == 401
+
+
+# ------------------------------------------------------------------
+# 제안 대비 — 접수와 대조를 함께 돌린다
+# ------------------------------------------------------------------
+
+RECORDS = [
+    {"src_ip": "10.0.0.5", "dst_port": 22, "ts": 1000.0},
+    {"src_ip": "10.0.0.5", "dst_port": 23, "ts": 1001.0},
+    {"src_ip": "10.0.0.5", "dst_port": 24, "ts": 1002.0},
+]
+
+
+def test_submit_without_input_records_reason():
+    client, _editor, _repo = _client()
+    response = client.post("/api/proposals", headers=_h(Role.ANALYST),
+                           json={"engine": "port_scan", "params": {"threshold": 2}})
+    assert response.status_code == 201
+    probe = response.json()["probe"]
+    assert probe["status"] == "skipped"
+    assert probe["reasons"][0]["code"] == "trace_unavailable"
+
+
+def test_submit_with_input_compares():
+    client, _editor, _repo = _client()
+    response = client.post("/api/proposals", headers=_h(Role.ANALYST),
+                           json={"engine": "port_scan", "params": {"threshold": 2},
+                                 "records": RECORDS})
+    assert response.status_code == 201
+    probe = response.json()["probe"]
+    assert probe["status"] == "compared"
+    assert probe["counts"]["added"] == 1
+    assert probe["candidate_label"] == "CAND-1"
+
+
+def test_probe_can_be_attached_after_submit():
+    client, _editor, repo = _client()
+    client.post("/api/proposals", headers=_h(Role.ANALYST),
+                json={"engine": "port_scan", "params": {"threshold": 2}})
+    response = client.post("/api/proposals/1/probe", headers=_h(Role.ANALYST),
+                           json={"records": RECORDS})
+    assert response.status_code == 200
+    assert response.json()["probe"]["status"] == "compared"
+    assert repo.rows[1]["probe"]["status"] == "compared"
+
+
+def test_probe_without_input_is_rejected():
+    client, _editor, _repo = _client()
+    client.post("/api/proposals", headers=_h(Role.ANALYST),
+                json={"engine": "port_scan", "params": {"threshold": 2}})
+    response = client.post("/api/proposals/1/probe", headers=_h(Role.ANALYST),
+                           json={"records": []})
+    assert response.status_code == 422
+
+
+def test_viewer_cannot_attach_probe():
+    client, _editor, _repo = _client()
+    client.post("/api/proposals", headers=_h(Role.ANALYST),
+                json={"engine": "port_scan", "params": {"threshold": 2}})
+    response = client.post("/api/proposals/1/probe", headers=_h(Role.VIEWER),
+                           json={"records": RECORDS})
+    assert response.status_code == 403
+
+
+def test_decision_is_recorded_in_the_ledger():
+    """제안 결정과 대비 결과가 한 건의 원장으로 남는다."""
+    client, _editor, _repo = _client()
+    recorded = []
+
+    class FakeAudit:
+        async def log(self, user, action, resource, details=None, ip="", tenant_id=None):
+            recorded.append({"action": action, "resource": resource, "details": details})
+            return True
+
+    client.app.state.audit_logger = FakeAudit()
+    client.post("/api/proposals", json={"engine": "port_scan", "params": {"threshold": 80}},
+                headers=_h(Role.ADMIN))
+    response = client.post("/api/proposals/1/approve",
+                           json={"decided_by": "admin", "note": "확인함"},
+                           headers=_h(Role.ADMIN))
+    assert response.status_code == 200
+    ledger = [entry for entry in recorded if entry["action"] == "proposal_decided"]
+    assert len(ledger) == 1
+    assert ledger[0]["details"]["proposal_id"] == 1
+    assert ledger[0]["details"]["approved"] is True
+    assert ledger[0]["details"]["probe"]["status"] == "skipped"

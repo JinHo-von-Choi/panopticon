@@ -11,7 +11,8 @@ from pydantic import BaseModel
 
 from netwatcher.detection.validation import validate_engine_config
 from netwatcher.web.rbac import Role, require_role
-from netwatcher.web.change_audit import ChangeAudit, state_summary
+from netwatcher.web.change_audit import ChangeAudit
+from netwatcher.utils.state_summary import state_summary
 
 if TYPE_CHECKING:
     from netwatcher.detection.registry import EngineRegistry

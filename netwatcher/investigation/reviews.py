@@ -4,31 +4,29 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 from netwatcher.inventory.context import asset_context
-
-NORMAL_DECISIONS = frozenset({"expected_backup", "approved_maintenance"})
-
-
-class ReviewConflict(ValueError):
-    pass
-
-
-def event_scope(event):
-    external = (event.get("metadata") or {}).get("external_eve") or {}
-    return {"source_ip": str(event.get("source_ip") or ""),
-            "source_mac": str(event.get("source_mac") or "").lower(),
-            "dest_ip": str(event.get("dest_ip") or ""),
-            "dest_mac": str(event.get("dest_mac") or "").lower(),
-            "flow_id": external.get("flow_id"),
-            "observed_at": str(event.get("timestamp") or ""),
-            "sensor_id": external.get("sensor_id"), "source_id": external.get("source_id"),
-            "src_port": external.get("src_port"), "dest_port": external.get("dest_port"),
-            "protocol": external.get("proto"),
-            "signature_id": (external.get("details") or {}).get("signature_id")}
+from netwatcher.investigation.review_contract import (
+    NORMAL_DECISIONS,
+    ReviewConflict,
+    event_scope,
+)
+from netwatcher.investigation.schedules import matches, serialize
 
 
 class BusinessReviews:
     def __init__(self, db):
         self.db = db
+
+    async def recent_notes(self, limit: int = 50):
+        """최근 판정 노트를 돌려준다.
+
+        이미 사람이 내린 판정 문장은 분석 프롬프트에 들어가면 안 된다.
+        누출 가드가 이 목록을 표식으로 쓴다.
+        """
+        rows = await self.db.pool.fetch(
+            "SELECT note FROM business_reviews ORDER BY reviewed_at DESC LIMIT $1",
+            limit,
+        )
+        return [row["note"] for row in rows if row["note"]]
 
     async def raw(self, event_id, *, connection=None):
         row = await (connection if connection is not None else self.db.pool).fetchrow("SELECT * FROM business_reviews WHERE event_id=$1", event_id)
@@ -192,7 +190,6 @@ class BusinessReviews:
             return reopen("flow_evidence_changed")
         work = review["scope"].get("work_schedule")
         if work:
-            from netwatcher.investigation.schedules import matches
             job = await conn.fetchrow("""SELECT w.*,l.version AS link_version FROM event_work_links l
                 JOIN work_schedules w ON w.id=l.schedule_id WHERE l.event_id=$1""", event_id)
             if job is None or str(job["id"]) != work["id"] or job["link_version"] != work["link_version"]:
@@ -236,7 +233,6 @@ class BusinessReviews:
                 scope.update(flow_evidence_id=str(flow["ingest_id"]), flow_bytes=volume,
                              flow_hash=flow["record"]["original_ref"]["sha256"], max_bytes=body.max_bytes)
                 scope.update(context_version=device["context_version"], mapping_version=device["ip_mapping_version"])
-                from netwatcher.investigation.schedules import matches, serialize
                 job = await conn.fetchrow("""SELECT w.*,l.version AS link_version FROM event_work_links l
                     JOIN work_schedules w ON w.id=l.schedule_id WHERE l.event_id=$1 FOR SHARE OF w""", event_id)
                 if job:

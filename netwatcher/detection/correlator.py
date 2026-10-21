@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -112,6 +113,10 @@ class AlertCorrelator:
         # 인메모리 캐시 (빠른 조회를 위해 최근 100개 인시던트로 제한).
         # id 는 DB 가 부여한다 — 인메모리 카운터로 대체하지 않는다 (PR 05).
         self._incidents: list[Incident] = []
+
+        # 백그라운드 작업 참조. 참조가 없으면 진행 중인 작업이 중간에
+        # 가비지 컬렉션될 수 있다.
+        self._tasks: set[asyncio.Task] = set()
 
         # 상관분석용 최근 알림: source_ip -> deque of (timestamp, alert_info)
         self._recent_alerts: dict[str, deque[tuple[float, dict[str, Any]]]] = defaultdict(deque)
@@ -350,12 +355,7 @@ class AlertCorrelator:
         """
         if self._incident_repo is None or incident.id is not None:
             return
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self.persist(incident))
-        except RuntimeError:
-            pass
+        self._spawn(lambda: self.persist(incident))
 
     async def _persist_update_async(self, incident: Incident) -> None:
         """인시던트 업데이트를 DB에 반영한다 (id 가 확인된 경우만)."""
@@ -376,20 +376,30 @@ class AlertCorrelator:
         """인시던트 업데이트를 DB에 영속화한다 (fire-and-forget)."""
         if self._incident_repo is None:
             return
-        import asyncio
+        self._spawn(lambda: self._incident_repo.update(
+            incident_id=incident.id,
+            severity=incident.severity.value,
+            alert_ids=incident.alert_ids,
+            engines=sorted(incident.engines),
+            kill_chain_stages=incident.kill_chain_stages,
+        ))
+
+    def _spawn(self, factory) -> None:
+        """백그라운드 작업을 만든다.
+
+        참조를 남기지 않으면 진행 중인 작업이 중간에 가비지 컬렉션될 수
+        있다 — 이벤트가 조용히 사라지는 경로가 된다.
+
+        작업은 이벤트 루프가 돌 때에만 만든다 — 루프가 없으면 만들어 놓고
+        실행하지 않는 작업이 된다.
+        """
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(
-                self._incident_repo.update(
-                    incident_id=incident.id,
-                    severity=incident.severity.value,
-                    alert_ids=incident.alert_ids,
-                    engines=sorted(incident.engines),
-                    kill_chain_stages=incident.kill_chain_stages,
-                )
-            )
         except RuntimeError:
-            pass
+            return
+        task = loop.create_task(factory())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def get_incidents(self, limit: int = 50, include_resolved: bool = False) -> list[dict]:
         """인메모리 캐시에서 최근 인시던트를 반환한다."""
@@ -415,14 +425,7 @@ class AlertCorrelator:
                 inc.resolved = True
                 # DB에 해결 상태 영속화
                 if persist and self._incident_repo is not None:
-                    import asyncio
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(
-                            self._incident_repo.resolve(incident_id)
-                        )
-                    except RuntimeError:
-                        pass
+                    self._spawn(lambda: self._incident_repo.resolve(incident_id))
                 return True
         return False
 

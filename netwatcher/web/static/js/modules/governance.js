@@ -184,6 +184,9 @@ export async function loadProposals() {
         body.querySelectorAll("[data-reject]").forEach(btn => {
             btn.addEventListener("click", () => decide(btn.dataset.reject, "reject"));
         });
+        body.querySelectorAll("[data-experience]").forEach(btn => {
+            btn.addEventListener("click", () => adoptExperience(btn.dataset.experience));
+        });
     } catch (e) {
         body.textContent = "";
         const tr = document.createElement("tr");
@@ -194,6 +197,25 @@ export async function loadProposals() {
         tr.appendChild(td);
         body.appendChild(tr);
     }
+}
+
+function probeSummary(p) {
+    const probe = p.probe || {};
+    const label = probe.candidate_label || "CAND-1";
+    const reasons = (probe.reasons || []).map(r => r.code).filter(Boolean);
+    if (probe.status !== "compared") {
+        const reason = reasons.length ? reasons.join(", ") : "unknown";
+        return `<div class="proposal-probe">${esc(tp('probe_label', {label: label}))} · ${esc(tp('probe_skipped'))} — ${esc(reason)}</div>`;
+    }
+    const counts = probe.counts || {};
+    const parts = [tp('probe_counts', {
+        added: counts.added || 0, removed: counts.removed || 0, changed: counts.changed || 0,
+    })];
+    if (counts.removed_unreproducible) {
+        parts.push(tp('probe_unreproducible', {count: counts.removed_unreproducible}));
+    }
+    if (reasons.length) parts.push(tp('probe_reason', {reason: reasons.join(", ")}));
+    return `<div class="proposal-probe">${esc(tp('probe_label', {label: label}))} · ${esc(parts.join(" · "))}</div>`;
 }
 
 function renderProposalRow(p) {
@@ -212,12 +234,16 @@ function renderProposalRow(p) {
 
     const evidence = p.validation_runs || {};
     const validated = Boolean(evidence.normal_run_id && evidence.attack_run_id);
+    const comparable = (p.probe || {}).status === "compared";
     const actions = pending
         ? `${canAnalyze() ? `<button class="btn-detail" data-validate="${escAttr(p.id)}">${esc(tp('validate'))}</button>` : ''}
            ${canConfigure() ? `<button class="btn-detail" data-approve="${escAttr(p.id)}" ${validationRequired && !validated ? `disabled title="${escAttr(tp('validation_required'))}"` : ''}>${esc(tp('approve'))}</button>
            <button class="btn-detail" data-reject="${escAttr(p.id)}">${esc(tp('reject'))}</button>` : ''}
            ${validated ? `<span>${esc(tp('feature_comparison'))} #${esc(evidence.normal_run_id)} / #${esc(evidence.attack_run_id)}</span>` : ''}`
         : `<span class="proposal-decided-by">${esc(p.decided_by || "-")}</span>`;
+    const adopt = canAnalyze() && comparable
+        ? `<button class="btn-detail" data-experience="${escAttr(p.id)}">${esc(tp('experience_adopt'))}</button>`
+        : "";
 
     const err = p.apply_error
         ? `<div class="proposal-error">${esc(p.apply_error)}</div>`
@@ -227,11 +253,11 @@ function renderProposalRow(p) {
         <tr>
             <td>${esc(p.id)}</td>
             <td><code>${esc(p.engine)}</code></td>
-            <td>${esc(params)}</td>
+            <td>${esc(params)}${probeSummary(p)}</td>
             <td>${esc(p.source)}</td>
             <td>${statusCell}${err}</td>
             <td>${esc(formatTime(p.created_at))}</td>
-            <td>${actions}</td>
+            <td>${actions}${adopt}</td>
         </tr>
     `;
 }
@@ -267,6 +293,25 @@ async function decide(id, action) {
         }
     } catch (e) {
         showToast(tp('load_failed'), e.message || String(e), "critical");
+    }
+    loadProposals();
+}
+
+async function adoptExperience(id) {
+    if (!canAnalyze()) return;
+    try {
+        const resp = await authFetch("/api/experiences", {
+            method: "POST",
+            body: JSON.stringify({proposal_id: Number(id)}),
+        });
+        if (resp && resp.ok) {
+            showToast(tp('experience_adopted'), `#${id}`, "info");
+        } else {
+            const detail = resp ? await resp.text() : "";
+            showToast(tp('experience_refused'), detail || tp('experience_refused'), "warning");
+        }
+    } catch (e) {
+        showToast(tp('experience_refused'), e.message || String(e), "critical");
     }
     loadProposals();
 }

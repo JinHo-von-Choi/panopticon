@@ -36,7 +36,7 @@ ignore = [
     "F811",
 
     # ── 아래는 도입 시점에 남아 있던 잔여 부채다. ──────────────────────
-    # 계측값: B904 12, B007 10, F841 10, B905 8, B023 1, B015 1
+    # 계측값: B904 12, B007 10, F841 8, B905 8, B023 1, B015 1
     # 모두 정리하면 위 목록에서 한 줄씩 지운다. 지금은 항상 켜는 규칙
     # (E9, F401, F541)만 회귀를 막고, 이들은 카운트가 늘면 되돌아오게
     # 별도 게이트에서 센다 (scripts/gates.py gate_static_analysis).
@@ -80,3 +80,13 @@ ignore_errors = true
 # 기존 동작 유지: asyncio 모드는 명시하지 않는다. 모든 비동기 시험이
 # @pytest.mark.asyncio 를 직접 달고 있어야 하고, 그렇게 되어 있다.
 testpaths = ["tests"]
+
+[tool.coverage.report]
+# 커버리지가 내려가면 회귀로 보고한다. 실측 84% — 여유를 두고 80% 로
+# 묶었다. 올리려면 실측값을 갱신한다.
+fail_under = 80
+show_missing = false
+omit = [
+    "netwatcher/web/static/*",
+    "netwatcher/ai/prompts/*",
+]

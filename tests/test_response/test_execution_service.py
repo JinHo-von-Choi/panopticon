@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from netwatcher.response.command import ExecutionCommand
-from netwatcher.response.executor import ExecutionResult
+from netwatcher.response.contract import ExecutionResult
 from netwatcher.response.lifecycle import Approval, LifecycleError, candidate_hash
 from netwatcher.response.service import ExecutionService
 from netwatcher.storage.execution_claims import ExecutionClaims

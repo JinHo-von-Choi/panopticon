@@ -197,6 +197,13 @@ def _canonical(value: Any) -> Any:
 # "각 후보는 G2·G3 를 통과한 것만 지원하고 나머지는 재현 미지원으로 남긴다"
 SUPPORTED_ENGINES: tuple[str, ...] = ("arp_spoof", "port_scan", "data_exfil")
 
+# 엔진마다 모델링된 파라미터. 이 밖의 파라미터가 바뀌면 비교가 답하지 못한다.
+MODELLED_PARAMS: dict[str, set[str]] = {
+    "arp_spoof": {"mac_change_threshold"},
+    "port_scan": {"threshold"},
+    "data_exfil": {"threshold", "window_seconds"},
+}
+
 Analyzer = Callable[[Sequence[dict], AnalysisContract], list[Observation]]
 
 

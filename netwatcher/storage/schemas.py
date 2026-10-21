@@ -1,9 +1,13 @@
 """NetWatcher용 PostgreSQL 스키마 정의."""
 
+import json
+
+# 마이그레이션 008(월별 파티셔닝)·038(테넌트 식별자)의 events 정의와 같다.
+# 두 정의가 달라지면 시험이 프로덕션과 다른 표 위에서 돌아간다 — 파티션
+# 범위 검사와 복합 키 동작이 시험되지 않는다.
 EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS events (
-    id          BIGSERIAL       PRIMARY KEY,
-    tenant_id   UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    id          BIGSERIAL       NOT NULL,
     timestamp   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     engine      VARCHAR(64)     NOT NULL,
     severity    VARCHAR(16)     NOT NULL,
@@ -13,15 +17,26 @@ CREATE TABLE IF NOT EXISTS events (
     source_mac  MACADDR,
     dest_ip     INET,
     dest_mac    MACADDR,
-    title_key        TEXT,
-    description_key  TEXT,
     metadata         JSONB           NOT NULL DEFAULT '{}',
     packet_info      JSONB           NOT NULL DEFAULT '{}',
     resolved         BOOLEAN         NOT NULL DEFAULT FALSE,
     reasoning        TEXT,
+    title_key        TEXT,
+    description_key  TEXT,
     mitre_attack_id  VARCHAR(64),
-    threat_level     SMALLINT        NOT NULL DEFAULT 0
-);
+    threat_level     SMALLINT        NOT NULL DEFAULT 0,
+    tenant_id        UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    PRIMARY KEY (id, timestamp)
+) PARTITION BY RANGE (timestamp)
+"""
+
+# 월별 파티션 이름은 시각에 따라 정해진다 — 정적 DDL 로는 만들 수 없다.
+# ALL_SCHEMAS 를 쓰는 곳은 월별 파티션을 직접 만들 수 없으므로 기본
+# 파티션을 둔다. 범위 밖 시각의 INSERT 는 실패하지 않고 기본 파티션에
+# 남는다. 프로덕션에는 기본 파티션이 없고, partition_manager 가 월별
+# 파티션을 미리 만들어 둔다.
+EVENTS_DEFAULT_PARTITION = """
+CREATE TABLE IF NOT EXISTS events_default PARTITION OF events DEFAULT
 """
 
 EVENTS_INDEXES = [
@@ -130,17 +145,6 @@ INCIDENTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_incidents_resolved ON incidents(resolved) WHERE resolved = FALSE;",
 ]
 
-USERS_TABLE = """
-CREATE TABLE IF NOT EXISTS users (
-    id              SERIAL          PRIMARY KEY,
-    username        VARCHAR(100)    UNIQUE NOT NULL,
-    password_hash   VARCHAR(200)    NOT NULL,
-    role            VARCHAR(20)     NOT NULL DEFAULT 'viewer',
-    created_at      TIMESTAMPTZ     DEFAULT NOW(),
-    last_login      TIMESTAMPTZ
-);
-"""
-
 AUDIT_LOG_TABLE = """
 CREATE TABLE IF NOT EXISTS audit_log (
     id          SERIAL          PRIMARY KEY,
@@ -166,7 +170,21 @@ AUDIT_LOG_INDEXES = [
 # 설정 제안 승인 큐 (PR 10). alembic 010 과 동일한 정의를 유지한다.
 # Database.connect() 가 이 목록을 실행하므로, 여기에 없으면 저장소가
 # 마이그레이션 없이 만든 스키마에서 테이블을 찾지 못한다.
-CONFIG_PROPOSALS_TABLE = """
+# 제안에 비교 결과가 없을 때 남는 값. 사유 없는 미실행은 남기지 않는다.
+CONFIG_PROPOSALS_PROBE_DEFAULT = {
+    "status": "skipped",
+    "comparable": False,
+    "counts": {
+        "added": 0, "removed": 0, "changed": 0, "unchanged": 0,
+        "removed_unreproducible": 0,
+    },
+    "added": [],
+    "removed": [],
+    "changed": [],
+    "reasons": [{"code": "trace_unavailable", "detail": "no comparison input"}],
+}
+
+CONFIG_PROPOSALS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS config_proposals (
     id            SERIAL          PRIMARY KEY,
     engine        VARCHAR(64)     NOT NULL,
@@ -179,7 +197,8 @@ CREATE TABLE IF NOT EXISTS config_proposals (
     decided_at    TIMESTAMPTZ,
     decided_by    VARCHAR(100),
     decision_note TEXT,
-    validation_runs JSONB NOT NULL DEFAULT '{}'::jsonb,
+    validation_runs JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    probe         JSONB           NOT NULL DEFAULT '{json.dumps(CONFIG_PROPOSALS_PROBE_DEFAULT)}'::jsonb,
     applied       BOOLEAN,
     apply_error   TEXT,
     sensor_id     VARCHAR(128),
@@ -188,9 +207,10 @@ CREATE TABLE IF NOT EXISTS config_proposals (
     CONSTRAINT config_proposals_origin_check CHECK (
         (sensor_id IS NULL AND sensor_owner IS NULL AND source_version IS NULL)
         OR (sensor_id IS NOT NULL AND length(sensor_id)>0 AND sensor_owner IS NOT NULL
-            AND source_version IS NOT NULL AND source_version ~ '^[a-f0-9]{64}$')),
+            AND source_version IS NOT NULL AND source_version ~ '^[a-f0-9]{{64}}$')),
     CONSTRAINT config_proposals_status_check
-        CHECK (status IN ('pending', 'approved', 'rejected', 'failed'))
+        CHECK (status IN ('pending', 'approved', 'rejected', 'failed')),
+    CONSTRAINT config_proposals_probe_check CHECK (probe ? 'status')
 );
 """
 
@@ -719,6 +739,32 @@ CREATE TABLE IF NOT EXISTS sensor_samples (
 CREATE INDEX IF NOT EXISTS idx_sensor_samples_time ON sensor_samples (sampled_at);
 """
 
+ANALYSIS_EXPERIENCES_TABLE = """
+CREATE TABLE IF NOT EXISTS analysis_experiences (
+    id                 BIGSERIAL      PRIMARY KEY,
+    engine             VARCHAR(64)   NOT NULL,
+    signature          VARCHAR(160)  NOT NULL,
+    domain             VARCHAR(96)   NOT NULL,
+    cue                TEXT          NOT NULL,
+    lesson             TEXT          NOT NULL,
+    evidence           JSONB         NOT NULL,
+    confidence         REAL          NOT NULL,
+    source_proposal_id BIGINT        NOT NULL REFERENCES config_proposals(id) ON DELETE CASCADE,
+    source_review_id   BIGINT        REFERENCES business_reviews(event_id) ON DELETE CASCADE,
+    created_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    expires_at         TIMESTAMPTZ,
+    CONSTRAINT analysis_experiences_evidence_check CHECK (evidence <> '{}'::jsonb),
+    CONSTRAINT analysis_experiences_confidence_check CHECK (confidence > 0 AND confidence <= 1)
+);
+"""
+
+ANALYSIS_EXPERIENCES_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_analysis_experiences_signature "
+    "ON analysis_experiences(engine, signature, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_experiences_expiry "
+    "ON analysis_experiences(expires_at) WHERE expires_at IS NOT NULL;",
+]
+
 ALL_SCHEMAS = [
     SENSOR_CONTROL_CLAIMS_SCHEMA,
     SENSOR_RUNTIME_STATE_SCHEMA,
@@ -734,6 +780,7 @@ ALL_SCHEMAS = [
     FLUSH_RECEIPTS_TABLE,
     EVENT_INGEST_TABLE,
     EVENTS_TABLE,
+    EVENTS_DEFAULT_PARTITION,
     *EVENTS_INDEXES,
     DEVICES_TABLE,
     ASSET_CONTEXT_SCHEMA,
@@ -744,7 +791,6 @@ ALL_SCHEMAS = [
     *TRAFFIC_STATS_INDEXES,
     INCIDENTS_TABLE,
     *INCIDENTS_INDEXES,
-    USERS_TABLE,
     AUDIT_LOG_TABLE,
     *AUDIT_LOG_INDEXES,
     SENSOR_CLAIM_RETENTION_SQL,
@@ -752,6 +798,8 @@ ALL_SCHEMAS = [
     OBSERVED_ASSETS_SCHEMA,
     CONFIG_PROPOSALS_TABLE,
     *CONFIG_PROPOSALS_INDEXES,
+    ANALYSIS_EXPERIENCES_TABLE,
+    *ANALYSIS_EXPERIENCES_INDEXES,
     EVIDENCE_RECORDS_TABLE,
     *EVIDENCE_RECORDS_INDEXES,
     REPLAY_TRACES_TABLE,
