@@ -86,6 +86,7 @@ Thumbs.db
 # ============================================================
 docs/*
 !docs/playbooks/
+!docs/gates/
 !docs/OPERATIONS-GUIDE.md
 !docs/GOVERNANCE.md
 !docs/EVE.md
