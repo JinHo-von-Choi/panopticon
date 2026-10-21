@@ -54,7 +54,7 @@ def test_baseline_covers_supported_python_versions():
 
 
 def test_baseline_lookup_is_version_specific():
-    """버전마다 다른 기준선을 쓴다 — 3.13 은 3.12 만큼 느슨하지 않다."""
+    """버전마다 자기 기준선을 쓴다 — 하나의 전역 상한이 아니다."""
     baseline = load_baseline()
 
     limit_312, key_312 = baseline_for("3.12.18", baseline)
@@ -62,7 +62,9 @@ def test_baseline_lookup_is_version_specific():
 
     assert key_312 == "3.12"
     assert key_313 == "3.13"
-    assert limit_313 <= limit_312, "3.13 기준선이 3.12 보다 느슨하다"
+    # 2026-10-22 CI 실측: 두 버전 모두 190. 지금은 같지만 지표는 나눈다 —
+    # 한쪽만 오류를 고치면 갈라질 수 있다.
+    assert (limit_312, limit_313) == (190, 190)
 
 
 def test_unknown_version_uses_the_strictest_available_baseline():
