@@ -507,7 +507,11 @@ HTTP 200 응답은 Navigator Layer JSON입니다. `domain: enterprise-attack`, `
 | `GET /api/observation` | 관측과 누락 상태 |
 | `GET /api/input/status` | EVE 수집 상태와 소스별 보존 사용량 |
 | `GET /api/proposals` | 설정 제안과 승인 상태 |
-| `POST /api/proposals` | 설정 후보 제출 |
+| `POST /api/proposals` | 설정 후보 제출. `records`를 주면 관측 차이(`probe`)를 함께 계산 |
+| `POST /api/proposals/{id}/probe` | 대기 중인 제안에 관측 차이 계산·첨부 |
+| `GET /api/experiences` | 남긴 판정 경험 목록 |
+| `GET /api/experiences/candidate` | `proposal_id`·`review_id`로 남길 경험 미리 보기 |
+| `POST /api/experiences` | 판정 경험 남기기. 조건 불충족 시 400과 `reason` |
 | `GET /api/replay-capabilities` | 비교 가능한 엔진·파라미터·상한 |
 | `POST /api/replay-runs` | 변경 전후 비교 시작 |
 | `GET /api/replay-runs/{id}/diff` | 비교 결과 조회 |

@@ -1,5 +1,23 @@
 # 변경 기록
 
+## 0.8.0 — 2026-10-22
+
+### 추가
+
+- 설정 제안에 관측 차이를 붙입니다. 같은 특징값 입력에 현재값과 제안값을 각각 적용해 추가·제거·변경 관측 수를 `config_proposals.probe`에 저장합니다. 비교하지 못하면 사유를 남깁니다(마이그레이션 042, `POST /api/proposals/{id}/probe`).
+- 판정 경험을 남길 수 있습니다. 관측 차이와 사람의 정상 판정이 일치할 때만 저장하고, AI 분석이 같은 신호를 다룰 때 참고 자료로 씁니다(마이그레이션 043, `/api/experiences`).
+- AI 분석 프롬프트를 `netwatcher/ai/prompts/`의 컴포넌트 파일(`system`, `format`, `context`, `analysis`)로 조립합니다.
+
+### 변경
+
+- 마이그레이션 명령이 `python -m netwatcher.storage.migrate`로 바뀌었습니다. `alembic upgrade head` 뒤에 `events` 월별 파티션을 이번 달부터 세 달 앞까지 만듭니다.
+- 콘솔과 센서는 이번 달 `events` 파티션을 확보하지 못하면 시작하지 않습니다. 상태는 `/api/input/status`의 `partitions`에 나옵니다.
+
+### 제거
+
+- syslog·Elasticsearch·STIX/TAXII 출력과 실험 ML 모듈을 제거했습니다. 설정 파일에 남은 `integrations` 구간은 읽지 않습니다.
+- 사용하지 않는 `users` 표를 삭제합니다(마이그레이션 044). 계정은 `user_accounts`에 있습니다.
+
 ## 0.7.1 — 2026-10-10
 
 ### 수정

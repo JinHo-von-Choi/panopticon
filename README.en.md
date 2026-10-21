@@ -53,7 +53,8 @@ The console opens at `http://127.0.0.1:38585`. The [installation guide](docs/INS
 | Decisions and handoff | Tracks owner, case status, handoff notes, and decision history. Admin, analyst, and viewer roles |
 | Priorities | Lists unclosed, unassigned, undecided, and expired-decision cases separately |
 | Evidence | Traces the original EVE record. Direct capture deployments offer PCAP download |
-| Tuning review | Compares a proposed change against normal and attack samples before administrator approval |
+| Tuning review | Every proposal carries the observation difference between current and proposed settings on the same input, for administrator approval |
+| Decision experience | Keeps a lesson only when the observed difference and a human "normal" decision agree, and feeds it to later AI proposals as context |
 | Host agent | Rust executable (about 1.6 MiB) sends TCP connections, load, and memory with HMAC signatures |
 | Audit trail | Stores administrative changes in a SHA-256 hash chain |
 | Observability dashboard | 20 panels for alerts, EVE ingest, traffic, case handling and sensor health. One shared range and reference time; click through to the event list |
