@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from netwatcher.hunting.ioc_correlator import IOCCorrelator
 from netwatcher.hunting.mitre_navigator import MITRENavigator
+from netwatcher.hunting.playbook_engine import PlaybookEngine
 from netwatcher.hunting.timeline import ThreatTimeline
 from netwatcher.storage.repositories import EventRepository
 
@@ -20,6 +21,7 @@ def create_hunting_router(
     ioc_correlator: IOCCorrelator,
     navigator: MITRENavigator,
     timeline: ThreatTimeline,
+    playbooks: PlaybookEngine | None = None,
 ) -> APIRouter:
     """Threat hunting 라우터를 생성한다."""
     router = APIRouter(prefix="/hunting", tags=["hunting"])
@@ -39,6 +41,14 @@ def create_hunting_router(
                 "related_events": related,
             })
         return JSONResponse(report.to_dict())
+
+    @router.get("/events/{event_id}/playbooks")
+    async def event_playbooks(event_id: int) -> JSONResponse:
+        """사건에 해당하는 대응 절차. 안내만 하며 실행은 담당자가 한다."""
+        event = await event_repo.get_by_id(event_id)
+        if event is None:
+            return JSONResponse({"error": "Event not found"}, status_code=404)
+        return JSONResponse({"playbooks": playbooks.match_event(event) if playbooks else []})
 
     @router.get("/navigator")
     async def get_navigator_layer(

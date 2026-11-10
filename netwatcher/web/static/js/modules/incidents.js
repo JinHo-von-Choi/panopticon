@@ -5,9 +5,10 @@
  * 우측에 킬체인 진행, 관련 엔진, 출발지 IP, 조치 버튼이 나타난다.
  */
 
+import { L } from '../core/utils.js';
 import { authFetch, canConfigure, getAuthToken } from '../core/api.js';
 import { featureEnabled } from '../core/capabilities.js';
-import { esc, formatTime, showToast } from '../core/utils.js';
+import { emptyStateAttrs, esc, formatTime, showToast } from '../core/utils.js';
 
 /** 백엔드 attack_mapping.KILL_CHAIN_ORDER와 동일한 순서를 유지한다. */
 const KILL_CHAIN_ORDER = [
@@ -116,10 +117,10 @@ function renderList() {
 
     if (!incidents.length) {
         if (needsRefresh) {
-            list.textContent = tr('load_failed');
+            list.innerHTML = `<div class="empty-state" ${emptyStateAttrs('failed')}>${esc(tr('load_failed'))}</div>`;
             return;
         }
-        list.innerHTML = `<div class="empty-state">${esc(label('empty'))}</div>`;
+        list.innerHTML = `<div class="empty-state" ${emptyStateAttrs('empty')}>${esc(label('empty'))}</div>`;
         return;
     }
 
@@ -180,8 +181,8 @@ function renderDetail() {
 
     const ips = (inc.source_ips || []).map(ip => `
         <span class="ip-chip">
-            <code class="hunt-link" data-hunt-ip="${esc(ip)}" title="조사">${esc(ip)}</code>
-            ${canConfigure() && featureEnabled('direct_blocks') ? `<button class="btn-chip" data-block-ip="${esc(ip)}" data-i18n="incidents.block">차단</button>` : ''}
+            <code class="hunt-link" data-hunt-ip="${esc(ip)}" title="${L('조사')}">${esc(ip)}</code>
+            ${canConfigure() && featureEnabled('direct_blocks') ? `<button class="btn-chip" data-block-ip="${esc(ip)}" data-i18n="incidents.block">${L('차단')}</button>` : ''}
         </span>
     `).join("") || "<span class='text-dim'>-</span>";
 
@@ -267,7 +268,7 @@ async function resolveIncident(id) {
 }
 
 async function blockIp(ip, incident) {
-    if (!confirm(`${ip} 를 차단하시겠습니까?`)) return;
+    if (!confirm(`${ip} ${L('를 차단하시겠습니까?')}`)) return;
     try {
         const resp = await authFetch("/api/blocks", {
             method: "POST",
@@ -277,10 +278,10 @@ async function blockIp(ip, incident) {
             }),
         });
         if (resp && resp.ok) {
-            showToast("Block", `${ip} 차단됨`, "INFO");
+            showToast("Block", `${ip} ${L('차단됨')}`, "INFO");
         } else {
             const err = resp ? await resp.json().catch(() => ({})) : {};
-            showToast("Block", err.error || `${ip} 차단 실패`, "CRITICAL");
+            showToast("Block", err.error || `${ip} ${L('차단 실패')}`, "CRITICAL");
         }
     } catch (e) {
         console.error("Failed to block IP", e);

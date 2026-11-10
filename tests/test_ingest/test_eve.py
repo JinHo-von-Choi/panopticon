@@ -32,6 +32,18 @@ def test_restart_identity_and_large_flow_id_are_preserved():
     assert first["details"]["severity"] == 2
 
 
+@pytest.mark.parametrize("metadata,expected", [
+    ({"mitre_technique_id": ["T1071"]}, "T1071"),
+    ({"mitre_technique_id": ["T1059_001"]}, "T1059.001"),
+    ({"mitre_technique_id": ["not-a-technique"]}, None),
+    ("unexpected", None),
+])
+def test_rule_metadata_supplies_attack_technique_without_rejecting_the_alert(metadata, expected):
+    record = alert()
+    record["alert"]["metadata"] = metadata
+    assert decode(record)["details"].get("mitre_technique_id") == expected
+
+
 @pytest.mark.parametrize("kind,detail", [
     ("alert", {"signature_id": 1, "severity": 1, "payload": "private"}),
     ("dns", {"rrname": "private.example", "rrtype": "A", "answers": [{"rdata": "private"}]}),

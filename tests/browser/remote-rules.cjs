@@ -30,9 +30,9 @@ async function ready(page) {await page.waitForFunction(() => window.rulesVerific
         assert.equal(await page.locator('#response-panel').isVisible(),false);
         assert.equal(await toggle.isChecked(),true);
         assert.equal(await page.locator('#rules-body tr').count(),50);
-        await page.locator('#rules-pagination').getByRole('button',{name:'Next',exact:true}).click(); await ready(page);
+        await page.locator('#rules-pagination').getByRole('button',{name:'다음',exact:true}).click(); await ready(page);
         assert.equal(await page.locator('#rules-body tr').count(),11);
-        await page.locator('#rules-pagination').getByRole('button',{name:'Prev',exact:true}).click(); await ready(page);
+        await page.locator('#rules-pagination').getByRole('button',{name:'이전',exact:true}).click(); await ready(page);
         await toggle.uncheck(); await ready(page);
         assert.equal(await toggle.isChecked(),false);
         await toggle.check(); await ready(page);

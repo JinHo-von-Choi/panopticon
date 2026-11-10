@@ -2,8 +2,9 @@
  * NetWatcher Events Module (Production Grade - No Omissions)
  */
 
-import { authFetch, canConfigure, getCurrentUserId } from '../core/api.js';
-import { esc, escAttr, formatTime, formatHexDump, showToast, renderPagination } from '../core/utils.js';
+import { L } from '../core/utils.js';
+import { authFetch, canAnalyze, canConfigure, getCurrentUserId } from '../core/api.js';
+import { emptyStateAttrs, esc, escAttr, formatTime, formatHexDump, showToast, renderPagination } from '../core/utils.js';
 import { openEventDrawer } from '../core/detail-drawer.js';
 import { whitelistData, toggleWhitelist, fetchWhitelist } from './devices.js';
 import { canChangeWhitelist } from '../core/whitelist-state.js';
@@ -26,6 +27,18 @@ function renderLivePending() {
     badge.textContent = window.i18next.t('console.event_context.new_pending', { count: livePending });
 }
 
+function eventsNoticeRow(kind, message) {
+    const columns = document.getElementById('events-body')?.closest('table')?.tHead?.rows[0]?.cells.length || 1;
+    return `<tr><td colspan="${columns}" class="empty-state" ${emptyStateAttrs(kind)}>${esc(message)}</td></tr>`;
+}
+
+// 이미 보이는 경보가 있으면 일시적인 조회 실패로 목록을 지우지 않는다
+function showEventsFailure() {
+    const body = document.getElementById('events-body');
+    if (!body || body.querySelector('tr[data-event-row]')) return;
+    body.innerHTML = eventsNoticeRow('failed', L('경보를 불러오지 못했습니다. 연결을 확인하고 새로고침하세요.'));
+}
+
 export function receiveLiveEvent(event) {
     const body = document.getElementById('events-body');
     if (!body) return;
@@ -37,6 +50,7 @@ export function receiveLiveEvent(event) {
         return;
     }
     if (body.querySelector('[data-event-id="' + CSS.escape(String(event.id)) + '"]')) return;
+    body.querySelector('tr:not([data-event-row]) td.empty-state')?.closest('tr').remove();
     body.insertBefore(renderEventRow(event), body.firstChild);
     const limit = parseInt(document.getElementById('filter-pagesize').value) || 100;
     while (body.children.length > limit) body.lastElementChild.remove();
@@ -75,7 +89,10 @@ export async function loadEvents(page = eventsPage) {
     }
     try {
         var resp = await authFetch("/api/events?" + params.toString());
-        if (!resp || !resp.ok) return;
+        if (!resp || !resp.ok) {
+            if (request === listRequest && resp?.status !== 429) showEventsFailure();
+            return;
+        }
         var data = await resp.json();
         if (request !== listRequest) return;
         eventsTotal = data.total || 0;
@@ -86,11 +103,19 @@ export async function loadEvents(page = eventsPage) {
         if (!body) return;
         body.innerHTML = "";
         
-        if (data.events) {
+        if (data.events?.length) {
             data.events.forEach(ev => body.appendChild(renderEventRow(ev)));
+        } else {
+            const filtered = [...params.keys()].some(key => key !== 'limit' && key !== 'offset');
+            body.innerHTML = eventsNoticeRow('empty', filtered
+                ? L('조건에 맞는 경보가 없습니다. 필터를 줄여 다시 조회하세요.')
+                : L('아직 수집한 경보가 없습니다. 상단의 수집 상태를 확인하세요.'));
         }
         renderPagination(document.getElementById("events-pagination"), eventsPage, eventsTotal, psize, loadEvents);
-    } catch (e) { console.error("Failed to load events", e); }
+    } catch (e) {
+        console.error("Failed to load events", e);
+        if (request === listRequest) showEventsFailure();
+    }
 }
 
 export async function exportEvents(format) {
@@ -118,23 +143,25 @@ export async function exportEvents(format) {
     }
     try {
         const resp = await authFetch("/api/events/export?" + params.toString());
-        if (!resp.ok) { alert("Export failed: Unauthorized"); return; }
+        if (!resp.ok) { showToast(window.i18next.t('console.shell.export_failed'), '', 'WARNING'); return; }
         
         const blob = await resp.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `events_${new Date().getTime()}.${format}`;
+        a.download = `events_${new Date().getTime()}.${format === 'ecs' ? 'ecs.ndjson' : format}`;
         document.body.appendChild(a);
         a.click();
         a.remove();
-    } catch (e) { alert("Export failed: " + e.message); }
+    } catch (e) { showToast(window.i18next.t('console.shell.export_failed'), e.message, 'WARNING'); }
 }
 
 export function renderEventRow(ev) {
     var tr = document.createElement("tr");
     tr.className = "clickable";
     var evId = ev.id || 0;
+    tr.dataset.eventRow = evId;
+    tr.dataset.timestamp = ev.timestamp || "";
     tr.addEventListener("click", () => window.showEventDetail(evId));
     
     var title = ev.title;
@@ -149,12 +176,12 @@ export function renderEventRow(ev) {
     tr.innerHTML = `
         <td>${esc(formatTime(ev.timestamp))}</td>
         <td><span class="severity-badge severity-${esc(ev.severity)}">${esc(ev.severity)}</span></td>
-        <td><span class="engine-tag">${esc(ev.engine)}</span></td>
+        <td ${featureEnabled('engines') ? '' : 'hidden'}><span class="engine-tag">${esc(ev.engine)}</span></td>
         <td>${esc(title)}</td>
         <td>${esc(ev.source_ip || ev.source_mac || "-")}</td>
         <td>${esc(ev.dest_ip || ev.dest_mac || "-")}</td>
         <td ${featureEnabled('case_workflows') ? '' : 'hidden'}>${esc(ev.case_owner || window.i18next.t('console.case_workflow.unassigned'))} · ${esc(window.i18next.t('console.case_workflow.statuses.' + (ev.case_status || 'open')))}</td>
-        <td><button class="btn-detail" data-event-id="${escAttr(evId)}">Detail</button></td>
+        <td><button class="btn-detail" data-event-id="${escAttr(evId)}">${esc(window.i18next.t('console.shell.detail'))}</button></td>
     `;
     tr.querySelector("[data-event-id]").addEventListener("click", function (e) {
         e.stopPropagation();
@@ -179,8 +206,10 @@ window.showEventDetail = async function(eventId) {
     selectedEvent = null;
     var modalBody = document.getElementById("modal-body");
     document.getElementById("modal-title").textContent = t("title");
-    modalBody.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">Loading Event Details...</div>';
+    modalBody.innerHTML = '<div class="empty-state">' + esc(window.i18next.t('console.shell.loading')) + '</div>';
     openEventDrawer();
+    document.querySelectorAll('#events-body tr.selected').forEach(row => row.classList.remove('selected'));
+    document.querySelector('#events-body tr[data-event-row="' + CSS.escape(String(eventId)) + '"]')?.classList.add('selected');
 
     try {
         await fetchWhitelist();
@@ -192,10 +221,29 @@ window.showEventDetail = async function(eventId) {
             selectedEvent = data.event;
             renderEventDetail(data.event);
             loadDrawerObservation(request);
+            loadDrawerPlaybooks(request, data.event.id);
         }
-        else modalBody.innerHTML = '<div style="padding:20px">Event not found.</div>';
-    } catch (e) { if (request !== detailRequest || document.getElementById("modal-overlay").classList.contains("hidden")) return; modalBody.innerHTML = '<div style="padding:20px">Error: ' + esc(e.message) + '</div>'; }
+        else modalBody.innerHTML = '<div class="empty-state">' + esc(window.i18next.t('console.shell.event_not_found')) + '</div>';
+    } catch (e) { if (request !== detailRequest || document.getElementById("modal-overlay").classList.contains("hidden")) return; modalBody.innerHTML = '<div class="empty-state" ' + emptyStateAttrs('failed') + '>' + esc(L('경보 상세를 불러오지 못했습니다. 닫았다가 다시 열어 보세요.')) + '</div>'; }
 };
+
+/** 이 사건에 해당하는 대응 절차를 표시한다. 안내만 하며 실행하지 않는다. */
+async function loadDrawerPlaybooks(request, eventId) {
+    try {
+        const response = await authFetch(`/api/hunting/events/${encodeURIComponent(eventId)}/playbooks`);
+        const data = response?.ok ? await response.json() : null;
+        if (request !== detailRequest || !data?.playbooks?.length) return;
+        const text = key => window.i18next.t('console.shell.' + key);
+        const section = document.createElement('section');
+        section.className = 'detail-section';
+        section.innerHTML = `<h3>${esc(text('playbook_title'))}</h3>` + data.playbooks.map(playbook =>
+            `<p><strong>${esc(playbook.name)}</strong></p><ol>${playbook.steps.map(step =>
+                `<li>${esc(window.i18next.t('console.shell.step_' + step, { defaultValue: step }))}</li>`).join('')}</ol>`).join('')
+            + `<p class="scope-note">${esc(text('playbook_manual'))}</p>`;
+        const body = document.getElementById('modal-body');
+        body.insertBefore(section, body.querySelector('.event-technical'));
+    } catch { /* 대응 절차는 부가 정보다. 조회 실패가 사건 상세를 막지 않는다. */ }
+}
 
 async function loadDrawerObservation(request) {
     try {
@@ -206,10 +254,10 @@ async function loadDrawerObservation(request) {
         if (!panel) return;
         panel.textContent = '';
         const state = document.createElement('strong');
-        state.textContent = ['observed', 'partial', 'stale', 'unknown'].includes(data?.state) ? data.state : 'unknown';
+        state.textContent = window.i18next.t('console.observation_state.' + (['observed', 'partial', 'stale', 'unknown'].includes(data?.state) ? data.state : 'unknown'));
         panel.appendChild(state);
         const reason = document.createElement('p');
-        reason.textContent = data?.reasons?.join(' · ') || t('observation_unknown');
+        reason.textContent = data?.reasons?.map(item => L(item)).join(' · ') || t('observation_unknown');
         panel.appendChild(reason);
     } catch (_) {
         const panel = document.getElementById('event-observation');
@@ -235,8 +283,25 @@ async function pinSelectedEvidence() {
     finally { if (button) button.disabled = false; }
 }
 
+/** 보존 패킷에서 찾은 전송 파일의 이름과 해시를 표시한다. */
+async function extractSelectedFiles() {
+    const target = document.getElementById('event-extracted-files');
+    if (!selectedEvent || !target) return;
+    const text = key => window.i18next.t('console.shell.' + key);
+    target.textContent = text('loading');
+    try {
+        const response = await authFetch(`/api/events/${encodeURIComponent(selectedEvent.id)}/evidence/extracted-files`);
+        const data = response?.ok ? await response.json() : null;
+        if (!data) { target.textContent = text('extract_failed'); return; }
+        target.innerHTML = data.files.length
+            ? '<ul>' + data.files.map(file => `<li><code>${esc(file.sha256)}</code> ${esc(file.filename)} (${esc(String(file.size))} B)</li>`).join('') + '</ul>'
+            : esc(text('extract_empty'));
+    } catch { target.textContent = text('extract_failed'); }
+}
+
 document.addEventListener('click', event => {
     if (event.target.closest('#event-evidence-pin')) pinSelectedEvidence();
+    if (event.target.closest('#event-extract-files')) extractSelectedFiles();
 });
 
 function renderContext(ev) {
@@ -299,6 +364,9 @@ function renderContext(ev) {
             if (ev.pcap_availability.state === 'available' && canConfigure() && !featureEnabled('evidence_control_remote')) {
                 html += `<button type="button" class="btn" id="event-evidence-pin">${esc(window.i18next.t('console.evidence_pin.action'))}</button>`;
             }
+            if (ev.pcap_availability.state === 'available' && canAnalyze()) {
+                html += `<button type="button" class="btn" id="event-extract-files">${esc(window.i18next.t('console.shell.extract_files'))}</button><div id="event-extracted-files"></div>`;
+            }
         }
         if (featureEnabled('evidence_control_remote')) html += '<div id="remote-evidence-control" class="evidence-controls"></div>';
         html += `</div><p class="text-dim">${esc(t('pcap_note'))}</p></section>`;
@@ -330,11 +398,13 @@ function row(label, value) {
 // 증거 봉투 (PR 09)
 // ────────────────────────────────────────────────────────────────────
 
-var EVIDENCE_LAYER_LABELS = {
-    summary:  { label: "요약",   hint: "무엇이 일어났는가" },
-    evidence: { label: "근거",   hint: "왜 그렇게 판단했는가" },
-    raw:      { label: "원자료", hint: "무엇을 관측했는가" }
-};
+function evidenceLayerLabels() {
+    return {
+    summary:  { label: L('요약'),   hint: L('무슨 일이 있었는지') },
+    evidence: { label: L('근거'),   hint: L('판단한 이유') },
+    raw:      { label: L('원자료'), hint: L('관측한 내용') }
+    };
+}
 
 /**
  * 탐지 결과의 세 층(요약·근거·원자료)을 명시적으로 그린다.
@@ -349,23 +419,23 @@ function renderEvidenceEnvelope(evidence) {
     var layers = evidence.layers || {};
     var complete = evidence.status === "complete";
     var banner = complete
-        ? '<div class="evidence-envelope" data-status="complete">검증 가능한 탐지 — 세 층이 모두 있습니다</div>'
-        : '<div class="evidence-envelope" data-status="incomplete">검증 근거가 빠졌습니다: '
+        ? ('<div class="evidence-envelope" data-status="complete">' + L('검증 가능한 탐지 — 세 층이 모두 있습니다') + '</div>')
+        : ('<div class="evidence-envelope" data-status="incomplete">' + L('검증 근거가 빠졌습니다:') + ' ')
           + '<span>' + esc((evidence.missing || []).map(function (k) {
-              return (EVIDENCE_LAYER_LABELS[k] || { label: k }).label;
+              return (evidenceLayerLabels()[k] || { label: k }).label;
           }).join(", ")) + '</span></div>';
 
-    var rows = Object.keys(EVIDENCE_LAYER_LABELS).map(function (key) {
-        var meta = EVIDENCE_LAYER_LABELS[key];
+    var rows = Object.keys(evidenceLayerLabels()).map(function (key) {
+        var meta = evidenceLayerLabels()[key];
         var present = layers[key] === true;
         return '<div class="detail-label">' + esc(meta.label)
              + '<div class="detail-hint">' + esc(meta.hint) + '</div></div>'
              + '<div class="detail-value"><span class="evidence-layer" data-present="'
              + (present ? "yes" : "no") + '">'
-             + (present ? "있음" : "없음") + '</span></div>';
+             + (present ? L('있음') : L('없음')) + '</span></div>';
     }).join("");
 
-    return '<div class="detail-section"><h3>증거 봉투</h3>' + banner
+    return ('<div class="detail-section"><h3>' + L('증거 구성') + '</h3>') + banner
          + '<div class="detail-grid">' + rows + '</div></div>';
 }
 
@@ -496,16 +566,16 @@ function renderReasoning(ev) {
     html += `<div class="reasoning-desc">${esc(description)}</div>`;
 
     var items = [];
-    var reasonLabel = window.i18next.t("detail.reason_label", { defaultValue: "판단 근거" });
+    var reasonLabel = window.i18next.t("detail.reason_label", { defaultValue: L('판단 근거') });
 
     if (engine === "arp_spoof") {
-        if (meta.original_mac) items.push([window.i18next.t("detail.original_mac", { defaultValue: "기존 MAC" }), meta.original_mac]);
-        if (meta.new_mac) items.push([window.i18next.t("detail.new_mac", { defaultValue: "변경된 MAC" }), meta.new_mac]);
+        if (meta.original_mac) items.push([window.i18next.t("detail.original_mac", { defaultValue: L('기존 MAC') }), meta.original_mac]);
+        if (meta.new_mac) items.push([window.i18next.t("detail.new_mac", { defaultValue: L('변경된 MAC') }), meta.new_mac]);
         if (meta.original_mac && meta.new_mac) items.push([reasonLabel, window.i18next.t("engines.arp_spoof.reasoning.spoof")]);
         if (meta.count) items.push([reasonLabel, window.i18next.t("engines.arp_spoof.reasoning.flood", { count: meta.count })]);
     } else if (engine === "port_scan") {
-        if (meta.count) items.push(["스캔된 포트 수", meta.count]);
-        if (meta.is_internal) items.push([reasonLabel, "내부망 기기의 다수 포트 접근 감지 (임계값 완화 적용됨)"]);
+        if (meta.count) items.push([L('스캔된 포트 수'), meta.count]);
+        if (meta.is_internal) items.push([reasonLabel, L('내부망 장치가 여러 포트에 접근했습니다 (완화된 임계값 적용)')]);
     } else if (engine === "dns_anomaly") {
         if (meta.qname) items.push(["Query", meta.qname]);
         if (meta.entropy) items.push(["Entropy", meta.entropy]);

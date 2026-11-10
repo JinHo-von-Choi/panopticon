@@ -4,6 +4,7 @@ import json
 import uuid
 
 from netwatcher.ingest.assets import parse_networks, record_assets
+from netwatcher.observability.tracing import traced
 from netwatcher.storage.repositories import EventRepository
 
 
@@ -36,6 +37,7 @@ class EveRepository:
         )
         return (row["revision"], row["state"]) if row else (None, None)
 
+    @traced("eve.commit")
     async def commit(self, sensor_id, source_id, revision, state, records):
         published = []
         prepared = self._prepare_records(records)
@@ -155,7 +157,8 @@ class EveRepository:
                 "title": detail.get("signature") or f"Suricata #{detail['signature_id']}",
                 "timestamp": record["observed_at"], "source_ip": record.get("src_ip"),
                 "dest_ip": record.get("dest_ip"), "source_mac": record.get("src_mac"),
-                "dest_mac": record.get("dest_mac"), "metadata": {"external_eve": record}})
+                "dest_mac": record.get("dest_mac"), "mitre_attack_id": detail.get("mitre_technique_id"),
+                "metadata": {"external_eve": record}})
         reserved = {uuid.UUID(event["ingest_id"]): event_ids[uuid.UUID(event["ingest_id"])]
                     for event in events}
         saved = await self._events.insert_batch_mapped(events, connection=conn, event_ids=reserved)

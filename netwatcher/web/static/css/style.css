@@ -27,8 +27,8 @@
     --green-glow:   rgba(46, 213, 115, 0.2);
 
     /* 폰트 */
-    --font-display: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-mono:    'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    --font-display: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono:    'JetBrains Mono', 'Pretendard', 'SF Mono', 'Consolas', monospace;
 
     /* 그림자 */
     --shadow-xs: 0 1px 4px rgba(0, 0, 0, 0.3);
@@ -1804,7 +1804,8 @@ textarea.input-search {
     grid-template-columns: 3em repeat(24, 1fr);
 }
 
-.obs-heatmap-cell { aspect-ratio: 1; background: var(--warning); border-radius: 2px; }
+.obs-heatmap-cell.empty { background: var(--surface3); }
+.obs-heatmap-cell { aspect-ratio: 1; background: var(--copper); border-radius: 2px; }
 .obs-heatmap-day { font-size: 11px; color: var(--text-dim); }
 
 @media (max-width: 600px) {

@@ -4,6 +4,7 @@ import json
 import stat
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from dotenv import dotenv_values
@@ -28,6 +29,7 @@ def test_preparation_creates_private_credentials_without_changing_source(tmp_pat
     environment = prepare_installation(destination, path)
     assert stat.S_IMODE(environment.stat().st_mode) == 0o600
     assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+    assert (destination / "config/threatfeeds.yaml").read_bytes() == (Path(__file__).parents[2] / "config/threatfeeds.yaml").read_bytes()
     values = dotenv_values(environment)
     assert values["NETWATCHER_DB_HOST"] == "db"
     assert values["NETWATCHER_LOGIN_ENABLED"] == "true"

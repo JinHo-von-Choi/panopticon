@@ -8,9 +8,10 @@
  * 탐지 매칭용 Blocklist와 실제 차단인 Blocks는 별개다. 두 개념을 섞지 않는다.
  */
 
+import { L } from '../core/utils.js';
 import { authFetch, getAuthToken } from '../core/api.js';
 import { loadResponse } from './response.js';
-import { esc, formatTime, showToast } from '../core/utils.js';
+import { emptyStateAttrs, esc, formatTime, showToast } from '../core/utils.js';
 
 import {loadRules, registerRulesListeners} from './rules.js';
 import {featureEnabled} from '../core/capabilities.js';
@@ -30,7 +31,9 @@ export async function loadBlocks() {
     try {
         const resp = await authFetch("/api/blocks");
         if (!resp || !resp.ok) {
-            body.innerHTML = `<tr><td colspan="5" class="empty-state" data-i18n="defense.blocks_unavailable">차단 기능이 비활성 상태입니다. config의 response.enabled를 확인하세요.</td></tr>`;
+            body.innerHTML = resp && resp.status !== 404 && resp.status !== 503
+                ? `<tr><td colspan="5" class="empty-state" ${emptyStateAttrs('failed')}>${L('차단 목록을 불러오지 못했습니다. 연결을 확인하고 다시 조회하세요.')}</td></tr>`
+                : `<tr><td colspan="5" class="empty-state" ${emptyStateAttrs('unconfigured')} data-i18n="defense.blocks_unavailable">${L('차단 기능이 비활성 상태입니다. config의 response.enabled를 확인하세요.')}</td></tr>`;
             if (count) count.textContent = "-";
             return;
         }
@@ -39,7 +42,7 @@ export async function loadBlocks() {
         if (count) count.textContent = blocks.length;
 
         if (!blocks.length) {
-            body.innerHTML = `<tr><td colspan="5" class="empty-state" data-i18n="defense.no_blocks">적용 중인 차단이 없습니다.</td></tr>`;
+            body.innerHTML = `<tr><td colspan="5" class="empty-state" ${emptyStateAttrs('empty')} data-i18n="defense.no_blocks">${L('적용 중인 차단이 없습니다.')}</td></tr>`;
             return;
         }
 
@@ -48,7 +51,7 @@ export async function loadBlocks() {
                 <td class="mono"><code>${esc(b.ip)}</code></td>
                 <td>${esc(b.reason || "-")}</td>
                 <td class="time">${esc(formatTime(b.created_at))}</td>
-                <td class="time">${b.expires_at ? esc(formatTime(b.expires_at)) : "영구"}</td>
+                <td class="time">${b.expires_at ? esc(formatTime(b.expires_at)) : L('영구')}</td>
                 <td><button class="btn-detail" data-unblock="${esc(b.ip)}">Unblock</button></td>
             </tr>
         `).join("");
@@ -62,15 +65,15 @@ export async function loadBlocks() {
 }
 
 async function unblock(ip) {
-    if (!confirm(`${ip} 차단을 해제하시겠습니까?`)) return;
+    if (!confirm(`${ip} ${L('차단을 해제하시겠습니까?')}`)) return;
     try {
         const resp = await authFetch(`/api/blocks/${encodeURIComponent(ip)}`, { method: "DELETE" });
         if (resp && resp.ok) {
-            showToast("Block", `${ip} 차단 해제됨`, "INFO");
+            showToast("Block", `${ip} ${L('차단 해제됨')}`, "INFO");
             await loadBlocks();
         } else {
             const err = resp ? await resp.json().catch(() => ({})) : {};
-            showToast("Block", err.error || `${ip} 해제 실패`, "CRITICAL");
+            showToast("Block", err.error || `${ip} ${L('해제 실패')}`, "CRITICAL");
         }
     } catch (e) {
         console.error("Failed to unblock", e);
@@ -89,13 +92,13 @@ async function addBlock() {
             body: JSON.stringify({ ip, reason: (reasonEl?.value || "").trim() || "Manual block" }),
         });
         if (resp && resp.ok) {
-            showToast("Block", `${ip} 차단됨`, "INFO");
+            showToast("Block", `${ip} ${L('차단됨')}`, "INFO");
             if (ipEl) ipEl.value = "";
             if (reasonEl) reasonEl.value = "";
             await loadBlocks();
         } else {
             const err = resp ? await resp.json().catch(() => ({})) : {};
-            showToast("Block", err.error || `${ip} 차단 실패`, "CRITICAL");
+            showToast("Block", err.error || `${ip} ${L('차단 실패')}`, "CRITICAL");
         }
     } catch (e) {
         console.error("Failed to add block", e);

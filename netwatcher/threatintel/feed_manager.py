@@ -344,10 +344,29 @@ class FeedManager:
             raise ValueError("Feed runtime update callback is required")
         self._runtime_update_hook = callback
 
+    def attach_cache(self, cache) -> None:
+        """Redis 피드 캐시를 연결한다. 다운로드에 실패한 인스턴스가 다른 인스턴스의 결과를 쓴다."""
+        self._cache = cache
+
+    async def _sync_cache(self, result) -> None:
+        cache = getattr(self, "_cache", None)
+        if cache is None:
+            return
+        if result.succeeded:
+            await cache.set_feed("combined", "ip", set(self._blocked_ips))
+            await cache.set_feed("combined", "domain", set(self._blocked_domains))
+        elif not self._blocked_ips and not self._blocked_domains:
+            self._blocked_ips = await cache.get_feed("combined", "ip") or set()
+            self._blocked_domains = await cache.get_feed("combined", "domain") or set()
+            if self._blocked_ips or self._blocked_domains:
+                logger.warning("위협 피드 다운로드 실패 — Redis 캐시의 지표 %d IP / %d 도메인을 사용한다",
+                               len(self._blocked_ips), len(self._blocked_domains))
+
     async def update_all(self) -> "FeedUpdateSummary":
         """동시 갱신을 직렬화하고 마지막 완료 시점의 사용자 항목을 반영한다."""
         async with self._update_lock:
             result = await self._update_all()
+            await self._sync_cache(result)
             if self._runtime_update_hook is not None:
                 self._runtime_update_hook(self)
             return result
@@ -402,10 +421,11 @@ class FeedManager:
             )
             self._pending_outcomes = dict(acc.outcomes)
             self._record_status(summary, ok=False)
-            logger.error(
-                "모든 위협 피드 갱신 실패 — 기존 차단 목록 %d IP / %d 도메인을 유지한다",
-                len(self._blocked_ips), len(self._blocked_domains),
-            )
+            if self._sources:
+                logger.error(
+                    "모든 위협 피드 갱신 실패 — 기존 차단 목록 %d IP / %d 도메인을 유지한다",
+                    len(self._blocked_ips), len(self._blocked_domains),
+                )
             return summary
 
         # 원자적 교체: 여기까지는 라이브 집합을 건드리지 않았다
@@ -485,7 +505,7 @@ class FeedManager:
                 'last_success_epoch': epoch or None, 'age_hours': round(age, 2) if age is not None else None,
                 'outcome': self._feed_outcomes.get(source.name)})
         fresh = sum(source['status'] == 'ok' for source in sources)
-        status = ('ok' if fresh == len(sources) else 'degraded' if fresh else 'stale') if sources else ('stale' if stale else 'ok')
+        status = ('ok' if fresh == len(sources) else 'degraded' if fresh else 'stale') if sources else ('unconfigured' if stale else 'ok')
         return {
             # 실행 중이어도 데이터가 오래되면 stale 로 보고한다
             "status": status,
@@ -525,7 +545,7 @@ class FeedManager:
             remediation = '피드별 성공 시각과 캐시·실패 결과를 확인합니다'
         elif age is None:
             message = "위협 피드가 한 번도 성공적으로 갱신된 적이 없다"
-            remediation = "threat_intel 엔진을 끄거나, 네트워크·피드 URL 을 점검한다"
+            remediation = "네트워크와 피드 URL 을 점검한다"
         else:
             message = f"위협 피드 데이터가 {age}시간 전 상태로 정체되어 있다"
             remediation = "피드 다운로드 실패 원인(네트워크·인증·URL)을 확인한다"

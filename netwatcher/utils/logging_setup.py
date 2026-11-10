@@ -32,6 +32,15 @@ class JSONFormatter(logging.Formatter):
 
 def setup_logging(config: Config) -> logging.Logger:
     """콘솔 + 로테이팅 파일 핸들러로 루트 로거를 설정한다."""
+    from netwatcher.observability.tracing import setup_tracing
+
+    setup_tracing(config)
+    if config.get("observability.structlog", False) is True:
+        from netwatcher.observability.structlog_setup import setup_structlog
+
+        setup_structlog(config)
+        return logging.getLogger("netwatcher")
+
     level_str    = config.get("logging.level", "INFO")
     log_dir      = Path(config.get("logging.directory", "data/logs"))
     max_bytes    = config.get("logging.max_bytes", 10_485_760)

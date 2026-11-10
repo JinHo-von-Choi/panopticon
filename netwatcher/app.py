@@ -137,6 +137,13 @@ class NetWatcher:
             self._yaml_editor = None
             logger.warning("Config file path not available; engine config editing disabled")
 
+    def _async_registry(self):
+        """engine_dispatch.async 가 켜져 있을 때만 비동기 분배기를 만든다."""
+        if self.config.get("engine_dispatch.async", False) is not True:
+            return None
+        from netwatcher.detection.async_registry import AsyncEngineRegistry
+        return AsyncEngineRegistry(self.registry)
+
     def _register_sensor_cleanup(self, name, operation):
         if self.sensor_only:
             self._sensor_cleanup.append((name, operation))
@@ -354,6 +361,10 @@ class NetWatcher:
 
         checkpoint_service: CheckpointService | None = None
         if redis_client.available:
+            from netwatcher.cache.rate_limiter_redis import RateLimiterRedis
+            limit_cfg = self.config.section("alerts").get("rate_limit", {})
+            dispatcher.use_shared_rate_limiter(RateLimiterRedis(
+                redis_client, window_seconds=limit_cfg.get("window_seconds", 300), max_count=limit_cfg.get("max_per_key", 5)))
             checkpoint_interval = self.config.get("redis.checkpoint_interval", 60)
             state_manager = EngineStateManager(redis_client, interval_seconds=checkpoint_interval)
             checkpoint_service = CheckpointService(
@@ -384,6 +395,9 @@ class NetWatcher:
         try:
             from netwatcher.threatintel.feed_manager import FeedManager
             feed_mgr = FeedManager(self.config)
+            if redis_client.available:
+                from netwatcher.cache.feed_cache import FeedCache
+                feed_mgr.attach_cache(FeedCache(redis_client))
 
             custom_ips     = await blocklist_repo.get_all_custom_ips()
             custom_domains = await blocklist_repo.get_all_custom_domains()
@@ -434,7 +448,10 @@ class NetWatcher:
             pcap_writer=self.pcap_writer,
             dns_resolver=self._dns_resolver,
             worker_pool=worker_pool,
+            async_registry=self._async_registry(),
+            async_queue_size=int(self.config.get("engine_dispatch.queue_size", 10_000)),
         )
+        self._register_sensor_cleanup("async_dispatch", packet_processor.stop_async_dispatch)
         await packet_processor.init_seen_macs(device_repo)
 
         tick_service = TickService(

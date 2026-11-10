@@ -9,6 +9,7 @@ opentelemetry 패키지가 설치되지 않은 경우 no-op 트레이서로 대�
 from __future__ import annotations
 
 import functools
+import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Generator, TypeVar
 
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
     from netwatcher.utils.config import Config
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+logger = logging.getLogger("netwatcher.observability.tracing")
 
 _HAS_OTEL = False
 _tracer_provider: Any = None
@@ -74,13 +77,14 @@ def setup_tracing(config: Config) -> None:
     """
     global _tracer_provider
 
-    if not _HAS_OTEL:
-        return
-
     tracing_cfg  = config.get("observability.tracing", {}) or {}
     enabled      = tracing_cfg.get("enabled", False)
 
     if not enabled:
+        return
+
+    if not _HAS_OTEL:
+        logger.warning("observability.tracing.enabled is true but opentelemetry is not installed; no spans are exported")
         return
 
     endpoint     = tracing_cfg.get("endpoint", "http://localhost:4317")

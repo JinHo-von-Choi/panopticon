@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panopticon Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/img/mark.svg">
     <link rel="stylesheet" href="/fonts/fonts.css">
     <link rel="stylesheet" href="/css/style.css">
     <link rel="stylesheet" href="/css/console.css">
-    <!-- 트라이 테마(Operator/Auditor/Cinematic) 토큰은 콘솔 스타일에 최종 덮어쓰기한다 -->
+    <!-- 테마 토큰은 콘솔 스타일에 최종 덮어쓰기한다 -->
     <link rel="stylesheet" href="/css/themes.css">
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/vendor/i18next.min.js"></script>
@@ -16,17 +17,11 @@
         // 첫 페인트 전에 저장된 테마를 복원해 기본 테마 깜빡임을 막는다.
         // themes.css 의 기본값(:root)은 Operator 이므로 실패해도 레이아웃은 정상이다.
         (function () {
-            var themes = ['operator', 'auditor', 'cinematic'];
+            var themes = ['operator', 'auditor'];
             try {
                 var stored = localStorage.getItem('nw_theme');
                 var theme = themes.indexOf(stored) >= 0 ? stored : 'operator';
                 document.documentElement.dataset.theme = theme;
-                var fx = {};
-                try { fx = JSON.parse(localStorage.getItem('nw_hud_fx') || '{}') || {}; } catch (e) { fx = {}; }
-                if (theme === 'cinematic') {
-                    if (fx.scanlines === true) document.documentElement.dataset.hudScanlines = 'on';
-                    if (fx.sound === true) document.documentElement.dataset.hudSound = 'on';
-                }
             } catch (e) {
                 document.documentElement.dataset.theme = 'operator';
             }
@@ -51,124 +46,103 @@
                 <div id="login-error" class="login-error" role="alert"></div>
                 <button type="submit" class="btn btn-accent" style="width:100%;margin-top:4px" data-i18n="login.button">Login</button>
             </form>
-            <a id="login-sso" href="/api/auth/oidc/start" class="btn btn-outline hidden" style="width:100%;margin-top:12px" data-i18n="login.sso">SSO 로그인</a>
+            <a id="login-sso" href="/api/auth/oidc/start" class="btn btn-outline hidden" data-i18n="login.sso">SSO 로그인</a>
         </div>
     </div>
 
     <header>
         <div class="header-left">
-            <img class="console-brand" src="/img/panopticon.png" alt="">
-            <span id="connection-status" class="status-dot disconnected" data-i18n="header.status.disconnected" title="WebSocket disconnected"></span>
-            <div><p class="console-eyebrow" data-i18n="console.subtitle">LOCAL NETWORK OBSERVATORY</p><h1>PANOPTICON</h1></div>
+            <img class="console-brand" src="/img/mark.svg" alt="">
+            <h1>PANOPTICON</h1>
+            <span class="header-sep" aria-hidden="true">/</span>
+            <h2 id="console-title"></h2>
         </div>
         <div class="header-right">
-            <button id="console-search" class="btn console-search" data-i18n="console.navigate">Navigate · Ctrl K</button>
-            <div class="theme-switch">
-                <label for="theme-selector" data-i18n="console.theme.label">THEME</label>
-                <select id="theme-selector" data-i18n-aria-label="console.theme.label" aria-label="Console theme">
-                    <option value="operator" data-i18n="console.theme.operator">Operator</option>
-                    <option value="auditor" data-i18n="console.theme.auditor">Auditor</option>
-                    <option value="cinematic" data-i18n="console.theme.cinematic">Cinematic</option>
-                </select>
-            </div>
-            <div class="hud-fx-toggles">
-                <label><input type="checkbox" id="hud-scanlines-toggle" data-i18n-aria-label="console.theme.scanlines_aria"><span data-i18n="console.theme.scanlines">Scanlines</span></label>
-                <label><input type="checkbox" id="hud-sound-toggle" data-i18n-aria-label="console.theme.sound_aria"><span data-i18n="console.theme.sound">Sound</span></label>
-                <span id="hud-sound-state" class="hud-sound-state" aria-live="polite"></span>
-            </div>
-            <select id="lang-selector" class="input-search" style="padding:4px 8px;margin-right:8px;background:var(--bg-card);border-color:var(--border-color)">
-                <option value="ko">🇰🇷 한국어</option>
-                <option value="en">🇺🇸 English</option>
-            </select>
-            <button id="btn-logout" class="btn" style="display:none;padding:5px 12px" data-i18n="header.logout">Logout</button>
+            <button class="console-readiness" id="console-readiness" data-state="unknown">
+                <span class="console-readiness-dot" aria-hidden="true"></span>
+                <span class="console-eyebrow visually-hidden" data-i18n="console.readiness">SENSOR READINESS</span>
+                <strong id="console-ready-label" data-i18n="console.unknown">Unknown</strong>
+                <span id="console-ready-reason" class="visually-hidden" data-i18n="console.unchecked">Waiting for a state check</span>
+            </button>
+            <span id="connection-status" class="status-dot disconnected" data-i18n="header.status.disconnected" title="WebSocket disconnected"></span>
             <span id="clock"></span>
+            <button id="console-search" class="btn console-search" data-i18n="console.navigate">Navigate · Ctrl K</button>
+            <details class="user-menu">
+                <summary data-i18n="console.shell.settings">Settings</summary>
+                <div class="user-menu-panel">
+                    <div class="theme-switch">
+                        <label for="theme-selector" data-i18n="console.theme.label">THEME</label>
+                        <select id="theme-selector" data-i18n-aria-label="console.theme.label" aria-label="Console theme">
+                            <option value="operator" data-i18n="console.theme.operator">Operator</option>
+                            <option value="auditor" data-i18n="console.theme.auditor">Auditor</option>
+                        </select>
+                    </div>
+                    <select id="lang-selector" aria-label="Language">
+                        <option value="ko">한국어</option>
+                        <option value="en">English</option>
+                    </select>
+                    <button id="btn-logout" class="btn" style="display:none" data-i18n="header.logout">Logout</button>
+                </div>
+            </details>
         </div>
     </header>
 
     <main>
-        <section class="console-intro" aria-labelledby="console-title">
-            <div><p class="console-eyebrow" data-i18n="console.workspace">OBSERVATION / INVESTIGATION / RESPONSE</p>
-                <h2 id="console-title" data-i18n="console.title">Network operations console</h2>
-                <p class="console-description" data-i18n="console.description">Read the observation scope. Follow the evidence. Review every response.</p>
-            </div>
-            <button class="console-readiness" id="console-readiness" data-state="unknown">
-                <span class="console-eyebrow" data-i18n="console.readiness">SENSOR READINESS</span>
-                <strong id="console-ready-label" data-i18n="console.unknown">Unknown</strong>
-                <span id="console-ready-reason" data-i18n="console.unchecked">Waiting for a state check</span>
-            </button>
-        </section>
-        <details class="console-stats"><summary data-i18n="console.overview.metrics">Detailed metrics</summary>
-        <!-- Stats Cards -->
-        <section class="stats-grid">
-            <div class="stat-card critical">
-                <div class="stat-icon">&#9888;</div>
-                <div class="stat-value" id="stat-critical">0</div>
-                <div class="stat-label" data-i18n="stats.critical">Critical</div>
-            </div>
-            <div class="stat-card warning">
-                <div class="stat-icon">&#9651;</div>
-                <div class="stat-value" id="stat-warning">0</div>
-                <div class="stat-label" data-i18n="stats.warning">Warning</div>
-            </div>
-            <div class="stat-card info">
-                <div class="stat-icon">&#9432;</div>
-                <div class="stat-value" id="stat-info">0</div>
-                <div class="stat-label" data-i18n="stats.info">Info</div>
-            </div>
-            <div class="stat-card neutral">
-                <div class="stat-icon">&#9654;</div>
-                <div class="stat-value" id="stat-packets">0</div>
-                <div class="stat-label" data-i18n="stats.total_packets">Total Packets</div>
-            </div>
-            <div class="stat-card neutral">
-                <div class="stat-icon">&#9632;</div>
-                <div class="stat-value" id="stat-devices">0</div>
-                <div class="stat-label" data-i18n="stats.devices">Devices</div>
-            </div>
-            <div class="stat-card risk" id="stat-highrisk-card">
-                <div class="stat-icon">&#9760;</div>
-                <div class="stat-value" id="stat-highrisk">0</div>
-                <div class="stat-label" data-i18n="stats.high_risk">High Risk</div>
-            </div>
-            <div class="stat-card visibility-card" id="stat-visibility-card" data-i18n="stats.visibility_hint" title="SPAN 포트 구성 시 다수 호스트 트래픽이 가시화됩니다">
-                <div class="stat-icon">&#9673;</div>
-                <div class="stat-value" id="stat-visibility">-</div>
-                <div class="stat-label" data-i18n="stats.hosts_visible">Hosts Visible</div>
-            </div>
-        </section>
-
-        </details>
-
         <!-- Tabs -->
         <nav class="tabs" data-i18n-aria-label="console.navigation" aria-label="Console navigation">
-            <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
-            <button class="tab" data-tab="incidents" data-i18n="tabs.incidents">Incidents</button>
-            <button class="tab" data-tab="traffic" data-i18n="tabs.traffic">Traffic</button>
-            <button class="tab" data-tab="devices" data-i18n="tabs.devices">Devices</button>
-            <button class="tab" data-tab="defense" data-i18n="tabs.defense">Defense</button>
-            <button class="tab" data-tab="blocklist" data-i18n="tabs.blocklist">Blocklist</button>
-            <button class="tab" data-tab="whitelist" data-i18n="tabs.whitelist">Whitelist</button>
-            <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
-            <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none" data-i18n="tabs.ai_analyzer">AI Analyzer</button>
-            <button class="tab" data-tab="governance" data-i18n="tabs.governance">Governance</button>
-            <button class="tab" type="button" data-tab="observability" aria-controls="tab-observability" data-i18n="tabs.observability">Observability</button>
-            <button class="tab" type="button" data-tab="topology" aria-controls="tab-topology" data-i18n="tabs.topology">Topology</button>
-            <button class="tab" type="button" data-tab="agents" aria-controls="tab-agents" data-i18n="tabs.agents">Agents</button>
-            <button class="tab" type="button" data-tab="compliance" aria-controls="tab-compliance" data-i18n="tabs.compliance">Compliance</button>
-            <button class="tab" type="button" data-tab="mitre" aria-controls="tab-mitre" data-i18n="tabs.mitre">MITRE Matrix</button>
-            <button class="tab" data-tab="users" style="display:none" data-i18n="console.users.title">Accounts</button>
+            <div class="nav-group" data-nav-group>
+                <p class="nav-group-label" data-i18n="console.shell.nav_investigate">Investigate</p>
+                <button class="tab active" data-tab="events" data-i18n="tabs.events">Events</button>
+                <button class="tab" data-tab="incidents" data-i18n="tabs.incidents">Incidents</button>
+            </div>
+            <div class="nav-group" data-nav-group>
+                <p class="nav-group-label" data-i18n="console.shell.nav_assets">Assets</p>
+                <button class="tab" data-tab="devices" data-i18n="tabs.devices">Devices</button>
+                <button class="tab" type="button" data-tab="topology" aria-controls="tab-topology" data-i18n="tabs.topology">Topology</button>
+                <button class="tab" type="button" data-tab="agents" aria-controls="tab-agents" data-i18n="tabs.agents">Agents</button>
+            </div>
+            <div class="nav-group" data-nav-group>
+                <p class="nav-group-label" data-i18n="console.shell.nav_detect">Detect</p>
+                <button class="tab" data-tab="engines" data-i18n="tabs.engines">Engines</button>
+                <button class="tab" data-tab="blocklist" data-i18n="tabs.blocklist">Blocklist</button>
+                <button class="tab" data-tab="whitelist" data-i18n="tabs.whitelist">Whitelist</button>
+                <button class="tab" type="button" data-tab="mitre" aria-controls="tab-mitre" data-i18n="tabs.mitre">MITRE Matrix</button>
+                <button class="tab" data-tab="ai-analyzer" id="tab-btn-ai-analyzer" style="display:none" data-i18n="tabs.ai_analyzer">AI Analyzer</button>
+                <button class="tab" data-tab="defense" data-i18n="tabs.defense">Defense</button>
+            </div>
+            <div class="nav-group" data-nav-group>
+                <p class="nav-group-label" data-i18n="console.shell.nav_observe">Observe</p>
+                <button class="tab" type="button" data-tab="observability" aria-controls="tab-observability" data-i18n="tabs.observability">Observability</button>
+                <button class="tab" data-tab="traffic" data-i18n="tabs.traffic">Traffic</button>
+            </div>
+            <div class="nav-group" data-nav-group>
+                <p class="nav-group-label" data-i18n="console.shell.nav_admin">Admin</p>
+                <button class="tab" data-tab="governance" data-i18n="tabs.governance">Governance</button>
+                <button class="tab" type="button" data-tab="compliance" aria-controls="tab-compliance" data-i18n="tabs.compliance">Compliance</button>
+                <button class="tab" data-tab="users" style="display:none" data-i18n="console.users.title">Accounts</button>
+            </div>
         </nav>
 
         <!-- Events Tab -->
         <section id="tab-events" class="tab-content active">
-            <div class="onboarding-banner">
-                <div><span class="console-eyebrow" data-i18n="console.onboarding.eyebrow">INSTALLATION SIGNAL</span>
-                <p id="onboarding-summary" aria-live="polite" data-i18n="console.onboarding.unavailable">Installation checks unknown</p></div>
-                <button type="button" class="btn" id="onboarding-open" data-i18n="console.onboarding.open">Review installation</button>
-            </div>
-            <div class="onboarding-check-heading"><h3 data-i18n="console.overview.title">Observation priorities</h3>
-                <button type="button" class="btn" id="overview-refresh" data-i18n="common.refresh">Refresh</button></div>
-            <section id="console-overview" class="console-overview" aria-label="Observation priorities"></section>
+            <section class="stats-grid" data-i18n-aria-label="console.overview.metrics" aria-label="Metrics">
+                <button type="button" class="stat-card critical" data-filter-severity="CRITICAL" aria-pressed="false"><span class="stat-value" id="stat-critical">0</span><span class="stat-label" data-i18n="stats.critical">Critical</span></button>
+                <button type="button" class="stat-card warning" data-filter-severity="WARNING" aria-pressed="false"><span class="stat-value" id="stat-warning">0</span><span class="stat-label" data-i18n="stats.warning">Warning</span></button>
+                <button type="button" class="stat-card info" data-filter-severity="INFO" aria-pressed="false"><span class="stat-value" id="stat-info">0</span><span class="stat-label" data-i18n="stats.info">Info</span></button>
+                <div class="stat-card neutral" data-requires-feature="traffic"><span class="stat-value" id="stat-packets">0</span><span class="stat-label" data-i18n="stats.total_packets">Total Packets</span></div>
+                <div class="stat-card neutral" data-requires-state="devices"><span class="stat-value" id="stat-devices">0</span><span class="stat-label" data-i18n="stats.devices">Devices</span></div>
+                <div class="stat-card risk" id="stat-highrisk-card" data-requires-state="devices"><span class="stat-value" id="stat-highrisk">0</span><span class="stat-label" data-i18n="stats.high_risk">High Risk</span></div>
+                <div class="stat-card visibility-card" id="stat-visibility-card" data-requires-feature="traffic" data-i18n="stats.visibility_hint" title="SPAN"><span class="stat-value" id="stat-visibility">-</span><span class="stat-label" data-i18n="stats.hosts_visible">Hosts Visible</span></div>
+            </section>
+            <details class="overview-details">
+                <summary><span data-i18n="console.shell.summary">Observation and review summary</span><span id="onboarding-summary" aria-live="polite" data-i18n="console.onboarding.unavailable">Installation checks unknown</span></summary>
+                <div class="onboarding-banner">
+                    <span class="console-eyebrow" data-i18n="console.onboarding.eyebrow">INSTALLATION SIGNAL</span>
+                    <button type="button" class="btn" id="onboarding-open" data-i18n="console.onboarding.open">Review installation</button>
+                    <button type="button" class="btn" id="overview-refresh" data-i18n="common.refresh">Refresh</button>
+                </div>
+                <section id="console-overview" class="console-overview" aria-label="Observation priorities"></section>
+            </details>
             <div class="toolbar">
                 <select id="filter-severity">
                     <option value="" data-i18n="toolbar.all_severities">All Severities</option>
@@ -176,21 +150,23 @@
                     <option value="WARNING" data-i18n="stats.warning">Warning</option>
                     <option value="INFO" data-i18n="stats.info">Info</option>
                 </select>
-                <select id="filter-engine">
+                <select id="filter-engine" data-requires-feature="engines">
                     <option value="" data-i18n="toolbar.all_engines">All Engines</option>
                 </select>
                 <input type="text" id="filter-search" class="input-search" data-i18n="toolbar.search_placeholder" placeholder="Search events..." />
-                <input type="date" id="filter-since" class="input-date" title="Since" />
-                <input type="date" id="filter-until" class="input-date" title="Until" />
+                <input type="date" id="filter-since" class="input-date" data-i18n="console.shell.since" title="Since" />
+                <input type="date" id="filter-until" class="input-date" data-i18n="console.shell.until" title="Until" />
                 <select id="filter-pagesize">
-                    <option value="50">50 / page</option>
-                    <option value="100" selected>100 / page</option>
-                    <option value="200">200 / page</option>
+                    <option value="50" data-i18n="console.shell.per_page" data-i18n-options='{"count":50}'>50 / page</option>
+                    <option value="100" selected data-i18n="console.shell.per_page" data-i18n-options='{"count":100}'>100 / page</option>
+                    <option value="200" data-i18n="console.shell.per_page" data-i18n-options='{"count":200}'>200 / page</option>
                 </select>
                 <button id="btn-refresh" class="btn" data-i18n="toolbar.refresh">Refresh</button>
+                <span class="scope-hint" data-i18n="console.shell.key_hint">J/K moves between alerts</span>
                 <span id="events-live-pending" class="events-live-pending" hidden aria-live="polite"></span>
                 <button id="btn-export-csv" class="btn btn-export" data-i18n="toolbar.export_csv">Export CSV</button>
                 <button id="btn-export-json" class="btn btn-export" data-i18n="toolbar.export_json">Export JSON</button>
+                <button id="btn-export-ecs" class="btn btn-export" data-i18n="console.shell.export_ecs">Export ECS</button>
             </div>
             <div class="toolbar case-queue-toolbar" id="case-queue-toolbar" hidden>
                 <label for="filter-case-status" data-i18n="console.case_queue.status">Case status</label>
@@ -205,15 +181,15 @@
                 <label><input id="filter-case-unassigned" type="checkbox"><span data-i18n="console.case_queue.unassigned">Unassigned only</span></label>
                 <label id="case-mine-control" hidden><input id="filter-case-mine" type="checkbox"><span data-i18n="console.case_queue.mine">Assigned to me</span></label>
                 <button id="btn-weekly-report" type="button" class="btn" data-i18n="console.case_queue.report">Last 7 days CSV</button>
-                <span class="scope-hint" data-i18n="console.case_queue.scope">Report covers the last 7 days independently of list filters.</span>
+                <span class="hint-icon" data-i18n="console.case_queue.scope" title="Report covers the last 7 days independently of list filters.">?</span>
             </div>
             <details id="event-groups-panel" class="detail-section" hidden>
-                <summary>반복 경보 묶음</summary>
-                <p class="scope-note">개별 목록의 필터와 별도로 조회합니다. 원본 경보와 판정은 경보별로 유지됩니다.</p>
+                <summary data-ko="반복 경보 묶음">반복 경보 묶음</summary>
+                <p class="scope-note" data-ko="개별 목록의 필터와 별도로 조회합니다. 원본 경보와 판정은 경보별로 유지됩니다.">개별 목록의 필터와 별도로 조회합니다. 원본 경보와 판정은 경보별로 유지됩니다.</p>
                 <div class="toolbar">
-                    <label>묶음 조회 시작 <input id="group-period-start" type="datetime-local"></label>
-                    <label>묶음 조회 종료 <input id="group-period-end" type="datetime-local"></label>
-                    <button class="btn" id="group-period-load" type="button">묶음 조회</button>
+                    <label data-ko="묶음 조회 시작">묶음 조회 시작 <input id="group-period-start" type="datetime-local"></label>
+                    <label data-ko="묶음 조회 종료">묶음 조회 종료 <input id="group-period-end" type="datetime-local"></label>
+                    <button class="btn" id="group-period-load" type="button" data-ko="묶음 조회">묶음 조회</button>
                 </div>
                 <div id="event-group-list" aria-live="polite"></div>
             </details>
@@ -223,7 +199,7 @@
                         <tr>
                             <th data-i18n="table.time">Time</th>
                             <th data-i18n="table.severity">Severity</th>
-                            <th data-i18n="table.engine">Engine</th>
+                            <th data-requires-feature="engines" data-i18n="table.engine">Engine</th>
                             <th data-i18n="table.title">Title</th>
                             <th data-i18n="table.source">Source</th>
                             <th data-i18n="table.destination">Destination</th>
@@ -326,7 +302,7 @@
                     <canvas id="chart-traffic"></canvas>
                 </div>
                 <div class="chart-card">
-                    <h3>Protocol Distribution</h3>
+                    <h3 data-i18n="console.shell.protocol_distribution">Protocol Distribution</h3>
                     <canvas id="chart-protocols"></canvas>
                 </div>
             </div>
@@ -365,6 +341,7 @@
                         <th data-i18n="console.observed_assets.last_seen">Last seen</th>
                         <th data-i18n="console.observed_assets.evidence">Records by type</th>
                         <th data-i18n="console.observed_assets.source">Source</th>
+                        <th id="observed-assets-authorization" hidden data-i18n="console.observed_assets.authorization">Authorization</th>
                     </tr></thead>
                     <tbody id="observed-assets-body"></tbody>
                 </table>
@@ -374,48 +351,50 @@
                 </div>
             </div>
             <div id="inv-summary" class="inv-summary"></div>
+            <div data-requires-state="devices">
             <div class="toolbar">
                 <select id="devices-filter-type">
                     <option value="" data-i18n="console.blocklist_control.all_types">All Types</option>
                     <option value="pc">PC</option>
-                    <option value="mobile">Mobile</option>
-                    <option value="printer">Printer</option>
-                    <option value="router">Router</option>
+                    <option value="mobile" data-i18n="console.shell.type_mobile">Mobile</option>
+                    <option value="printer" data-i18n="console.shell.type_printer">Printer</option>
+                    <option value="router" data-i18n="console.shell.type_router">Router</option>
                     <option value="nas">NAS</option>
-                    <option value="server">Server</option>
+                    <option value="server" data-i18n="console.shell.type_server">Server</option>
                     <option value="iot">IoT</option>
-                    <option value="unknown">Unknown</option>
+                    <option value="unknown" data-i18n="console.shell.type_unknown">Unknown</option>
                 </select>
                 <select id="devices-filter-known">
-                    <option value="">All Devices</option>
-                    <option value="known">Registered</option>
-                    <option value="unregistered">Unregistered</option>
+                    <option value="" data-i18n="console.shell.all_devices">All Devices</option>
+                    <option value="known" data-i18n="console.shell.registered">Registered</option>
+                    <option value="unregistered" data-i18n="console.shell.unregistered">Unregistered</option>
                 </select>
-                <input type="text" id="devices-search" class="input-search" placeholder="Search devices..." />
-                <button id="btn-register-device" class="btn btn-accent">Register Device</button>
+                <input type="text" id="devices-search" class="input-search" data-i18n="[placeholder]console.shell.search_devices" placeholder="Search devices..." />
+                <button id="btn-register-device" class="btn btn-accent" data-i18n="console.shell.register_device">Register Device</button>
             </div>
             <div class="table-wrapper">
                 <table id="devices-table">
                     <thead>
                         <tr>
-                            <th>Risk</th>
-                            <th>Type</th>
-                            <th>Nickname</th>
+                            <th data-i18n="console.shell.risk">Risk</th>
+                            <th data-i18n="console.shell.type">Type</th>
+                            <th data-i18n="console.shell.nickname">Nickname</th>
                             <th>MAC Address</th>
-                            <th>Vendor</th>
+                            <th data-i18n="console.shell.vendor">Vendor</th>
                             <th>IP Address</th>
-                            <th>Hostname</th>
+                            <th data-i18n="console.shell.hostname">Hostname</th>
                             <th>OS</th>
-                            <th>First Seen</th>
-                            <th>Last Seen</th>
-                            <th>Packets</th>
-                            <th>Actions</th>
+                            <th data-i18n="console.shell.first_seen">First Seen</th>
+                            <th data-i18n="console.shell.last_seen">Last Seen</th>
+                            <th data-i18n="console.shell.packets">Packets</th>
+                            <th data-i18n="console.shell.actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="devices-body"></tbody>
                 </table>
             </div>
             <div class="pagination" id="devices-pagination"></div>
+            </div>
         </section>
 
         <!-- Blocklist Tab -->
@@ -423,7 +402,7 @@
             <p class="capability-notice" data-capability-notice="blocklist" role="status" hidden></p>
             <div class="toolbar">
                 <select id="bl-filter-type">
-                    <option value="">All Types</option>
+                    <option value="" data-i18n="console.shell.all_types">All Types</option>
                     <option value="ip">IP</option>
                     <option value="domain" data-i18n="console.blocklist_control.domain">Domain</option>
                 </select>
@@ -534,19 +513,13 @@
                 <div id="onboarding-box" class="onboarding-grid"></div>
             </section>
             <div class="detail-section">
-                <h3>지원 프로필 (관측 범위)</h3>
-                <p class="scope-hint">
-                    이 도구가 실제로 무엇을 하는지 확인하는 곳입니다.
-                    계약 위반이 있으면 배포하지 마세요.
-                </p>
+                <h3 data-ko="지원 프로필 (관측 범위)">지원 프로필 (관측 범위)</h3>
+                <p class="scope-hint" data-i18n="console.shell.scope_profile">이 도구가 실제로 무엇을 하는지 확인하는 곳입니다. 지원 조건을 벗어난 항목이 있으면 해결한 뒤 배포하세요.</p>
                 <div id="support-profile-box"></div>
             </div>
             <div class="detail-section">
-                <h3>관측 범위</h3>
-                <p class="scope-hint">
-                    "경보가 없다" 는 "문제가 없다" 와 뜻이 다릅니다.
-                    무엇을 관측했고, 무엇을 관측하지 못했는지 여기서 구분합니다.
-                </p>
+                <h3 data-ko="관측 범위">관측 범위</h3>
+                <p class="scope-hint" data-i18n="console.shell.scope_observation">경보가 없다고 문제가 없다는 뜻은 아닙니다. 무엇을 관측했고 무엇을 관측하지 못했는지 여기서 구분합니다.</p>
                 <div id="observation-box"></div>
             </div>
             <div id="proposal-panel" class="detail-section">
@@ -772,8 +745,8 @@
                     <option value="adjustment" data-i18n="console.ai_status.adjustment">Adjustment</option>
                 </select>
                 <select id="ai-filter-pagesize" aria-label="페이지당 기록 수">
-                    <option value="50" selected>50 / page</option>
-                    <option value="100">100 / page</option>
+                    <option value="50" selected data-i18n="console.shell.per_page" data-i18n-options='{"count":50}'>50 / page</option>
+                    <option value="100" data-i18n="console.shell.per_page" data-i18n-options='{"count":100}'>100 / page</option>
                 </select>
                 <button id="btn-ai-refresh" class="btn" data-i18n="console.ai_status.refresh">새로고침</button>
             </div>

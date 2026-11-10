@@ -29,7 +29,7 @@ import { loadObservedAssets, registerObservedAssetListeners } from './modules/ob
 import { loadCompliance, registerComplianceListeners } from './modules/compliance.js';
 import { loadMitreMatrix, registerMitreListeners } from './modules/mitre.js';
 import { loadUsers } from './modules/users.js';
-import { showToast } from './core/utils.js';
+import { formatTime, showToast } from './core/utils.js';
 
 var ws = null;
 var statsInterval = null;
@@ -40,6 +40,7 @@ async function initApp() {
     document.getElementById("login-overlay").classList.add("hidden");
     document.getElementById("btn-logout").style.display = getAuthToken() ? "" : "none";
     await loadCapabilities();
+    showScreenTitle();
 
     await Promise.all([
         loadStats(),
@@ -58,36 +59,59 @@ async function initApp() {
             if (document.getElementById("tab-events").classList.contains("active")) loadOverview();
         }
     }, 30000);
+    seedFreshness();
     startFreshnessClock();
+    openLinkedScreen();
+}
+
+/** 현재 화면 이름을 상단 바에 표시한다. */
+function showScreenTitle() {
+    const title = document.getElementById('console-title');
+    if (title) title.textContent = document.querySelector('.tab.active')?.textContent.trim() || '';
+}
+
+/** 주소의 해시가 가리키는 화면을 연다. 이 구성에서 숨긴 화면은 열지 않는다. */
+function openLinkedScreen() {
+    const name = decodeURIComponent(location.hash.slice(1));
+    if (!name || name === 'events') return;
+    const tab = [...document.querySelectorAll('.tab[data-tab]')].find(item => item.dataset.tab === name);
+    if (tab && tab.style.display !== 'none') tab.click();
 }
 
 let lastDataAt = null;
 let freshnessInterval = null;
 
-/** 알림 수신 시각을 기록한다. 파이프라인 생존 여부 표시의 기준점이 된다. */
+/** 실시간 경보를 받은 시각을 기록한다. */
 function markDataReceived() {
     lastDataAt = Date.now();
 }
 
-/**
- * 헤더에 마지막 데이터 수신 후 경과 시간을 표시한다.
- * 벽시계보다 캡처 파이프라인이 살아 있는지를 알려주는 편이 유용하다.
- */
+/** 첫 화면의 가장 최근 경보 시각으로 시작값을 잡는다. */
+function seedFreshness() {
+    const latest = Date.parse(document.querySelector('#events-body tr[data-timestamp]')?.dataset.timestamp || '');
+    if (!Number.isNaN(latest) && (lastDataAt === null || latest > lastDataAt)) lastDataAt = latest;
+}
+
+/** 헤더에 마지막 경보 이후 경과 시간을 표시한다. */
 function startFreshnessClock() {
     const el = document.getElementById("clock");
     if (!el || freshnessInterval) return;
 
     const render = () => {
+        const t = (key, options) => window.i18next.t('console.shell.' + key, options);
         if (lastDataAt === null) {
-            el.textContent = "—";
-            el.title = "아직 수신한 알림이 없습니다";
+            el.textContent = "";
+            el.title = t('no_alert');
             return;
         }
-        const seconds = Math.floor((Date.now() - lastDataAt) / 1000);
-        if (seconds < 60)      el.textContent = `${seconds}s ago`;
-        else if (seconds < 3600) el.textContent = `${Math.floor(seconds / 60)}m ago`;
-        else                   el.textContent = `${Math.floor(seconds / 3600)}h ago`;
-        el.title = `마지막 알림 수신: ${new Date(lastDataAt).toLocaleString()}`;
+        const seconds = Math.max(0, Math.floor((Date.now() - lastDataAt) / 1000));
+        const relative = new Intl.RelativeTimeFormat(window.i18next.language, { style: 'narrow', numeric: 'always' });
+        const when = seconds < 60 ? relative.format(-seconds, 'second')
+            : seconds < 3600 ? relative.format(-Math.floor(seconds / 60), 'minute')
+            : seconds < 86400 ? relative.format(-Math.floor(seconds / 3600), 'hour')
+            : relative.format(-Math.floor(seconds / 86400), 'day');
+        el.textContent = t('last_alert', { when, interpolation: { escapeValue: false } });
+        el.title = formatTime(lastDataAt);
     };
 
     render();
@@ -157,12 +181,16 @@ function registerListeners() {
     // Tabs
     document.querySelectorAll(".tab").forEach(tab => {
         tab.addEventListener("click", () => {
-            if (!isAuthEnabled()) return;
+            if (!isAuthEnabled() || tab.style.display === 'none') return;
+            closeEventDrawer();
+            document.querySelector('.user-menu')?.removeAttribute('open');
             document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
             document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
             tab.classList.add("active");
             const target = tab.dataset.tab;
             document.getElementById(`tab-${target}`).classList.add("active");
+            showScreenTitle();
+            history.replaceState(null, '', target === 'events' ? location.pathname + location.search : '#' + target);
             
             if (target === "events")       loadEvents(0);
             if (target === "devices")      { loadDevices(); loadObservedAssets(0); }
@@ -187,6 +215,42 @@ function registerListeners() {
         });
     });
 
+    // 심각도 수치를 누르면 그 심각도만 표시한다. 다시 누르면 해제한다.
+    const severityFilter = document.getElementById('filter-severity');
+    const syncSeverityCards = () => document.querySelectorAll('[data-filter-severity]').forEach(card => {
+        card.setAttribute('aria-pressed', String(card.dataset.filterSeverity === severityFilter.value));
+    });
+    severityFilter?.addEventListener('change', syncSeverityCards);
+    document.querySelectorAll('[data-filter-severity]').forEach(card => card.addEventListener('click', () => {
+        severityFilter.value = severityFilter.value === card.dataset.filterSeverity ? '' : card.dataset.filterSeverity;
+        severityFilter.dispatchEvent(new Event('change'));
+    }));
+
+    // J/K로 목록의 이전·다음 사건을 연다.
+    document.addEventListener('keydown', event => {
+        if (!['j', 'k'].includes(event.key) || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.target.closest('input, select, textarea, dialog') || !document.getElementById('tab-events').classList.contains('active')) return;
+        const rows = [...document.querySelectorAll('#events-body tr[data-event-row]')];
+        if (!rows.length) return;
+        const current = rows.findIndex(row => row.classList.contains('selected'));
+        const next = current < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, current + (event.key === 'j' ? 1 : -1)));
+        event.preventDefault();
+        rows[next].scrollIntoView({ block: 'nearest' });
+        window.showEventDetail(rows[next].dataset.eventRow);
+    });
+
+    // 설정 메뉴는 바깥을 누르거나 Esc를 누르면 닫는다.
+    const userMenu = document.querySelector('.user-menu');
+    document.addEventListener('click', event => { if (!event.target.closest('.user-menu')) userMenu?.removeAttribute('open'); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') userMenu?.removeAttribute('open'); });
+
+    let rateNoticeAt = 0;
+    window.addEventListener('nw-rate-limited', () => {
+        if (Date.now() - rateNoticeAt < 15000) return;
+        rateNoticeAt = Date.now();
+        showToast(window.i18next.t('console.shell.rate_limited_title'), window.i18next.t('console.shell.rate_limited'), 'WARNING');
+    });
+
     // Event Filters & Refresh
     ["filter-severity", "filter-engine", "filter-pagesize", "filter-case-status", "filter-case-unassigned", "filter-case-mine"].forEach(id => {
         document.getElementById(id)?.addEventListener("change", event => {
@@ -207,6 +271,7 @@ function registerListeners() {
     // Export Buttons
     document.getElementById("btn-export-csv")?.addEventListener("click", () => exportEvents('csv'));
     document.getElementById("btn-export-json")?.addEventListener("click", () => exportEvents('json'));
+    document.getElementById("btn-export-ecs")?.addEventListener("click", () => exportEvents('ecs'));
 
     // Device Filters
     document.getElementById("devices-search")?.addEventListener("input", () => { filterDevices(); renderDevicesPage(0); });
@@ -221,7 +286,7 @@ function registerListeners() {
         if (modeEl) modeEl.value = "register";
         const errEl = document.getElementById("df-error");
         if (errEl) errEl.style.display = "none";
-        document.getElementById("device-form-title").textContent = "Register Device";
+        document.getElementById("device-form-title").textContent = window.i18next.t('console.shell.register_device');
         document.getElementById("device-form-overlay").classList.remove("hidden");
     });
     document.getElementById("device-form-close-btn")?.addEventListener("click", () => {
@@ -264,7 +329,7 @@ function registerListeners() {
                 const nickname = document.getElementById("df-nickname").value.trim();
                 const errEl    = document.getElementById("df-error");
                 if (!mac || !nickname) {
-                    if (errEl) { errEl.textContent = "MAC Address and Nickname are required"; errEl.style.display = "block"; }
+                    if (errEl) { errEl.textContent = window.i18next.t('console.shell.required_device'); errEl.style.display = "block"; }
                     return;
                 }
                 try {
@@ -277,7 +342,7 @@ function registerListeners() {
                         loadDevices();
                     } else {
                         const data = await resp.json().catch(() => ({}));
-                        if (errEl) { errEl.textContent = data.detail || data.error || "Registration failed"; errEl.style.display = "block"; }
+                        if (errEl) { errEl.textContent = data.detail || data.error || window.i18next.t('console.shell.registration_failed'); errEl.style.display = "block"; }
                     }
                 } catch (err) { console.error("Register failed", err); }
             } else {
@@ -332,9 +397,9 @@ function registerListeners() {
                     setCurrentUserId(identity.user_id);
                     initApp();
                 } else {
-                    errEl.textContent = data.error || "Login failed";
+                    errEl.textContent = data.error || window.i18next.t('console.shell.login_failed');
                 }
-            } catch (err) { errEl.textContent = "Server connection failed"; }
+            } catch (err) { errEl.textContent = window.i18next.t('console.shell.server_failed'); }
         }
     });
 
@@ -365,7 +430,7 @@ window.addEventListener("DOMContentLoaded", () => {
     registerListeners();
     initConsole();
     initTheme();
-    initI18n(() => { if (isAuthEnabled()) { loadEvents(); loadEngines(); loadConsoleState(); } }).then(async () => {
+    initI18n(() => { showScreenTitle(); if (isAuthEnabled()) { loadEvents(); if (featureEnabled('engines')) loadEngines(); loadConsoleState(); } }).then(async () => {
         initOnboarding();
         initReplay();
         initOverview();

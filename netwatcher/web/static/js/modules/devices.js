@@ -2,8 +2,9 @@
  * NetWatcher Devices Module (Production Grade - No Omissions)
  */
 
+import { L } from '../core/utils.js';
 import { authFetch, canConfigure } from '../core/api.js';
-import { esc, escAttr, textEl, formatTime, formatBytes, renderPagination, showToast } from '../core/utils.js';
+import { esc, escAttr, textEl, formatTime, formatBytes, markEmptyState, renderPagination, showToast } from '../core/utils.js';
 import { openDeviceDrawer } from '../core/detail-drawer.js';
 import { DEVICE_TYPE_MAP } from '../core/constants.js';
 import { featureEnabled } from '../core/capabilities.js';
@@ -67,11 +68,11 @@ function renderInventorySummary(devices) {
         .join(" · ");
 
     var parts = [
-        "전체 " + devices.length,
-        "등록 " + known,
-        "미등록 " + unregistered,
+        (L('전체') + " ") + devices.length,
+        (L('등록') + " ") + known,
+        (L('미등록') + " ") + unregistered,
     ];
-    if (highRisk) parts.push("고위험 " + highRisk);
+    if (highRisk) parts.push((L('고위험') + " ") + highRisk);
     if (topTypes) parts.push(topTypes);
 
     el.textContent = parts.join("  |  ");
@@ -111,6 +112,7 @@ export function renderDevicesPage(page) {
         const cell = document.createElement('td');
         cell.colSpan = 12;
         cell.className = 'console-empty';
+        markEmptyState(cell, 'empty');
         cell.dataset.i18n = devicesAll.length ? 'console.no_device_match' : 'console.no_devices';
         cell.textContent = window.i18next.t(cell.dataset.i18n);
         row.append(cell);
@@ -132,7 +134,8 @@ function renderDeviceRow(d) {
     var wlHtml = isWhitelisted ? ` <span class="known-badge" style="background:#2ed573" title="${window.i18next.t("whitelist.status_whitelisted")}">\u2713</span>` : '';
     var nickHtml = d.nickname
         ? `<span class="nickname-tag">${esc(d.nickname)}</span>${d.is_known ? ' <span class="known-badge">R</span>' : ''}${wlHtml}`
-        : (d.is_known ? `<span class="known-badge">Registered</span>${wlHtml}` : wlHtml || '-');
+        : (d.is_known ? `<span class="known-badge">${esc(window.i18next.t('console.shell.registered'))}</span>${wlHtml}` : wlHtml || '-');
+    if (d.authorized === false) nickHtml += ` <span data-authorized="false" title="${esc(d.authorization_reason || '')}">${esc(window.i18next.t('console.observed_assets.unauthorized'))}</span>`;
 
     tr.innerHTML = `
         <td>${renderRiskBadge(d.risk_level, d.risk_score)}</td>
@@ -167,8 +170,8 @@ window.showDeviceDetail = async function(mac) {
     if (!mac) return;
     const request = ++deviceDetailRequest;
     var body = document.getElementById("device-modal-body");
-    body.innerHTML = '<div style="text-align:center;padding:20px">Loading...</div>';
-    document.getElementById("device-modal-title").textContent = "Device Detail: " + mac;
+    body.innerHTML = '<div class="empty-state">' + esc(window.i18next.t('console.shell.loading')) + '</div>';
+    document.getElementById("device-modal-title").textContent = L('장치 상세: ') + mac;
     openDeviceDrawer();
 
     try {

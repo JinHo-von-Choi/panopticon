@@ -1,5 +1,5 @@
 /* ===========================================================================
-   Tri-Theme 토큰 체계 — Operator / Auditor / Cinematic
+   테마 토큰 체계 — Operator / Auditor
    ---------------------------------------------------------------------------
    콘솔(load order: style.css → console.css → themes.css)은 이 파일보다 먼저
    같은 이름의 토큰을 :root 에 선언한다. 이 파일이 마지막에 로드되므로 아래
@@ -10,8 +10,6 @@
    - Operator  : 기본값. 저채도 슬레이트 그레이(#0f172a), 본문 13px 이상,
                  WCAG 2.1 AA(본문 4.5:1 이상) 기준. 24x7 교대근무용.
    - Auditor   : 백색/고대비 배경 + 대형 폰트. 감사 로그·증적·인쇄/PDF 전용.
-   - Cinematic : 사이버네틱 네온 HUD. 월보드·시연용이며, CRT 스캔라인과 사운드는
-                 기본 OFF(헤더 토글로만 활성화).
 
    상태 표시는 색상 단독으로 인코딩하지 않는다. `.badge-sev-*` 계열은
    [색상] + [고유 형태의 아이콘] + [텍스트 라벨] 3중 인코딩을 함께 쓴다.
@@ -26,21 +24,27 @@
 html[data-theme="operator"] {
     color-scheme: dark;
 
-    --bg:            #0f172a;   /* 슬레이트 900 — 저채도 다크 베이스 */
-    --surface:       #16203a;
-    --surface2:      #1e293b;
-    --surface3:      #293650;
-    --border:        #33415c;
-    --border-focus:  #7dd3fc;
-    --text:          #e2e8f0;   /* 본문 대비 ≈ 14:1 */
-    --text-dim:      #a3b1c6;   /* 보조 텍스트 대비 ≈ 7.5:1 */
-    --text-faint:    #a3b1c6;
+    --bg:            #0a1017;   /* 로고 렌즈의 청흑색 */
+    --surface:       #101a24;
+    --surface2:      #16232f;
+    --surface3:      #1f303e;
+    --border:        #2a3f4f;
+    --border-focus:  #63dae8;
+    --text:          #e6eef4;   /* 본문 대비 ≈ 15:1 */
+    --text-dim:      #a3b5c4;   /* 보조 텍스트 대비 ≈ 8:1 */
+    --text-faint:    #a3b5c4;
 
     --accent:        #63dae8;
     --accent-dim:    #2b8f9e;
     --accent-bg:     rgba(99, 218, 232, .10);
     --accent-glow:   rgba(99, 218, 232, .20);
     --copper:        #ff9a62;
+
+    --chart-1: #63dae8;
+    --chart-2: #ff9a62;
+    --chart-3: #9db8ff;
+    --chart-4: #58d3a0;
+    --chart-5: #d9c07a;
 
     /* 심각도 — 본문 대비가 모두 4.5:1 이상 */
     --critical:      #f87171;
@@ -56,11 +60,10 @@ html[data-theme="operator"] {
     --theme-body-size:   14px;
     --theme-small-size:  13px;   /* 표/메타 텍스트 하한선 */
     --theme-micro-size:  13px;   /* 배지·eyebrow 도 12px 아래로 내려가지 않는다 */
-    --theme-row-h:       38px;
+    --theme-row-h:       34px;
     --theme-line:        1.65;
     --theme-focus-width: 2px;
 
-    /* HUD 장식 — Operator 는 모두 꺼짐 */
     --font-size-body: var(--theme-body-size);
     --font-size-table: var(--theme-small-size);
     --table-header-bg: var(--surface2);
@@ -68,10 +71,6 @@ html[data-theme="operator"] {
     --table-row-selected: var(--accent-bg);
     --bg-card: var(--surface);
     --border-color: var(--border);
-
-    --hud-scanline: none;
-    --hud-glow: none;
-    --hud-sound: none;
 
     --shadow-xs: 0 1px 4px rgba(0, 0, 0, .30);
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, .35);
@@ -119,77 +118,10 @@ html[data-theme="auditor"] {
     --theme-line:        1.8;
     --theme-focus-width: 3px;
 
-    --hud-scanline: none;
-    --hud-glow: none;
-    --hud-sound: none;
-
     --shadow-xs: 0 1px 2px rgba(15, 23, 42, .12);
     --shadow-sm: 0 2px 6px rgba(15, 23, 42, .14);
     --shadow-md: 0 4px 14px rgba(15, 23, 42, .16);
     --shadow-lg: 0 8px 28px rgba(15, 23, 42, .18);
-}
-
-/* ---------------------------------------------------------------------------
-   3. Cinematic — 사이버네틱 네온 HUD
-   데모/월보드 전용. 장식 효과는 전부 선택 사항이며 기본값은 꺼짐이다.
-   스캔라인은 사용자가 명시적으로 켠 경우에만, 그리고 prefers-reduced-motion
-   을 존중하는 환경에서는 절대 렌더링되지 않는다.
-   --------------------------------------------------------------------------- */
-html[data-theme="cinematic"] {
-    color-scheme: dark;
-
-    /* 계획서 §3-4 지정 팔레트 */
-    --hud-cyan:     #00f0ff;
-    --hud-red:      #ff003c;
-    --hud-emerald:  #00ff66;
-
-    --bg:            #04060f;
-    --surface:       #070d1c;
-    --surface2:      #0b1428;
-    --surface3:      #122040;
-    --border:        #1c3560;
-    --border-focus:  var(--hud-cyan);
-    --text:          #d7f9ff;
-    --text-dim:      #8fb8cc;
-    --text-faint:    #6d94ab;
-
-    --accent:        var(--hud-cyan);
-    --accent-dim:    #0891b2;
-    --accent-bg:     rgba(0, 240, 255, .10);
-    --accent-glow:   rgba(0, 240, 255, .30);
-    --copper:        #ffb000;
-
-    --critical:      var(--hud-red);
-    --critical-bg:   rgba(255, 0, 60, .14);
-    --warning:       #ffb000;
-    --warning-bg:    rgba(255, 176, 0, .14);
-    --info:          var(--hud-cyan);
-    --info-bg:       rgba(0, 240, 255, .12);
-    --green:         var(--hud-emerald);
-    --green-bg:      rgba(0, 255, 102, .12);
-
-    --theme-body-size:   15px;
-    --theme-small-size:  14px;
-    --theme-micro-size:  13px;
-    --theme-row-h:       42px;
-    --theme-line:        1.7;
-    --theme-focus-width: 2px;
-
-    /* 기본 OFF. [data-hud-scanlines="on"] 이 켜는 유일한 통로다. */
-    --hud-scanline: none;
-    --hud-glow: none;
-    --hud-sound: none;
-
-    --shadow-xs: 0 0 8px rgba(0, 240, 255, .10);
-    --shadow-sm: 0 0 14px rgba(0, 240, 255, .16);
-    --shadow-md: 0 0 24px rgba(0, 240, 255, .22);
-    --shadow-lg: 0 0 40px rgba(0, 240, 255, .28);
-}
-
-/* Cinematic 에서만 글로우를 허용한다. Operator/Auditor 의 box-shadow 를
-   무조건 네온으로 바꾸지 않고 토큰만 교체해 대비를 유지한다. */
-html[data-theme="cinematic"][data-hud-scanlines="on"] {
-    --hud-glow: 0 0 12px rgba(0, 240, 255, .35);
 }
 
 /* ---------------------------------------------------------------------------
@@ -232,11 +164,8 @@ html[data-theme="auditor"] .overview-panel {
     border-width: 2px;
 }
 
-/* Cinematic 전용 테두리 발광. 고대비 모드에서는 꺼진다. */
 @media (forced-colors: active) {
-    html[data-theme="cinematic"] { --hud-glow: none; }
     .badge-sev { border: 1px solid CanvasText; }
-    html[data-theme="cinematic"][data-hud-scanlines="on"] body::after { display: none; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -307,53 +236,6 @@ html[data-theme="auditor"] .overview-panel {
 }
 
 /* ---------------------------------------------------------------------------
-   6. Cinematic HUD 장식 — 전부 기본 OFF
-   ---------------------------------------------------------------------------
-   스캔라인과 사운드는 사용자가 명시적으로 활성화해야만 동작한다.
-   - 스캔라인: html[data-hud-scanlines="on"][data-theme="cinematic"]
-   - 사운드:    html[data-hud-sound="on"][data-theme="cinematic"] (+ JS 재생)
-   헤더 토글이 이 두 속성의 유일한 쓰기자다. prefers-reduced-motion 과
-   forced-colors 환경에서는 장식이 렌더링되지 않는다.
-   --------------------------------------------------------------------------- */
-
-/* CRT 스캔라인 — 오버레이이며, 클릭/스크롤을 가로채지 않는다. */
-html[data-theme="cinematic"][data-hud-scanlines="on"] body::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 9998;
-    pointer-events: none;
-    background:
-        repeating-linear-gradient(
-            to bottom,
-            rgba(0, 240, 255, .05) 0 1px,
-            transparent 1px 3px
-        ),
-        radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0, 0, 0, .45) 100%);
-    mix-blend-mode: screen;
-    opacity: .55;
-}
-
-html[data-theme="cinematic"][data-hud-scanlines="on"] .tabs,
-html[data-theme="cinematic"][data-hud-scanlines="on"] .tab.active,
-html[data-theme="cinematic"][data-hud-scanlines="on"] .stat-card {
-    box-shadow: inset 0 0 0 1px rgba(0, 240, 255, .18), var(--hud-glow);
-}
-
-@media (prefers-reduced-motion: reduce) {
-    html[data-theme="cinematic"][data-hud-scanlines="on"] body::after {
-        display: none;
-    }
-}
-
-/* 사운드는 JS(WebAudio)가 재생하며, CSS 는 상태 표시에만 쓰인다.
-   기본 상태 표시는 음소거 아이콘이며 소리를 내지 않는다. */
-.hud-sound-state { color: var(--text-dim); font-family: var(--font-mono); }
-html[data-theme="cinematic"][data-hud-sound="on"] .hud-sound-state {
-    color: var(--accent);
-}
-
-/* ---------------------------------------------------------------------------
    7. 헤더 테마 컨트롤
    --------------------------------------------------------------------------- */
 .theme-switch {
@@ -380,33 +262,9 @@ html[data-theme="cinematic"][data-hud-sound="on"] .hud-sound-state {
     border-radius: 4px;
 }
 
-/* HUD 토글은 Cinematic 에서만 의미가 있으므로 그때만 노출한다. */
-.hud-fx-toggles {
-    display: none;
-    align-items: center;
-    gap: .5rem;
-    margin-right: 8px;
-    font-size: var(--theme-small-size);
-}
-
-html[data-theme="cinematic"] .hud-fx-toggles { display: inline-flex; }
-
-.hud-fx-toggles label {
-    display: inline-flex;
-    align-items: center;
-    gap: .3rem;
-    min-height: 32px;
-    color: var(--text-dim);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.hud-fx-toggles input[type="checkbox"] { accent-color: var(--accent); }
-
 @media (max-width: 768px) {
     .theme-switch > label { display: none; }
-    .theme-switch, .hud-fx-toggles { margin-right: 0; }
-    .hud-fx-toggles label { min-height: 44px; }
+    .theme-switch { margin-right: 0; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -542,7 +400,6 @@ html[data-theme="cinematic"] .hud-fx-toggles { display: inline-flex; }
 .console-description, .scope-hint, .badge, .filter-group label,
 .response-state, .response-facts dd { font-size: var(--theme-small-size); }
 
-header { height: auto; min-height: 84px; padding-block: 12px; }
 .theme-switch select { border-color: var(--text-dim); }
 .theme-switch select:focus-visible { outline-color: var(--border-focus); }
 
@@ -604,7 +461,7 @@ header { height: auto; min-height: 84px; padding-block: 12px; }
     font-variant-numeric: tabular-nums;
 }
 .mitre-empty { color: var(--text-dim); font-size: var(--theme-small-size); }
-.mitre-technique-card:hover { border-color: var(--accent); box-shadow: var(--hud-glow); }
+.mitre-technique-card:hover { border-color: var(--accent); }
 .mitre-technique-card:focus-visible, .mitre-matrix-scroll:focus-visible,
 .mitre-toolbar :focus-visible, .mitre-detail button:focus-visible {
     outline: var(--theme-focus-width) solid var(--border-focus);
@@ -629,7 +486,6 @@ header { height: auto; min-height: 84px; padding-block: 12px; }
     background: var(--surface);
     border: 1px solid var(--accent);
     border-radius: 6px;
-    box-shadow: var(--hud-glow);
 }
 .mitre-detail::backdrop { background: rgba(0, 0, 0, .65); }
 .mitre-detail dt { color: var(--text-dim); margin-top: 12px; }

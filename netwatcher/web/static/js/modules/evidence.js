@@ -1,6 +1,6 @@
 /** 분리 센서 증거의 조회·보존·제한된 다운로드. */
 import {authFetch, canConfigure, getAuthToken} from '../core/api.js';
-import {esc, newRequestId} from '../core/utils.js';
+import {esc, formatTime, newRequestId} from '../core/utils.js';
 
 const text = key => window.i18next.t('console.evidence_control.' + key);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -34,7 +34,7 @@ function render(message = 'ready') {
     panel.innerHTML = `<p id="evidence-control-status" role="status">${esc(text(message))}</p>
         ${state ? `<p>${esc(text(state.state))} · ${esc(text(state.pin_state))}</p>` : ''}
         ${available ? `<p class="text-dim">${esc(text(state.integrity))} · ${esc(String(state.size))} B</p>` : ''}
-        ${state?.pin ? `<p>${esc(text('expires'))}: ${esc(new Date(state.pin.expires_at * 1000).toLocaleString())}</p>` : ''}
+        ${state?.pin ? `<p>${esc(text('expires'))}: ${esc(formatTime(state.pin.expires_at * 1000))}</p>` : ''}
         <div class="btn-group"><button type="button" class="btn" id="evidence-refresh" ${busy ? 'disabled' : ''}>${esc(text('refresh'))}</button>
         <button type="button" class="btn" id="evidence-download" ${!available || busy ? 'disabled' : ''}>${esc(text('download'))}</button>
         ${canConfigure() ? `<button type="button" class="btn" id="evidence-change" ${!available || busy || state.pin_state === 'unknown' ? 'disabled' : ''}>${esc(text(state?.pin_state === 'pinned' ? 'release' : 'pin'))}</button>` : ''}</div>`;

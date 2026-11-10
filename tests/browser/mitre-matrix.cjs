@@ -54,7 +54,7 @@ const server = http.createServer((req, res) => {
         const errors = []; page.on('pageerror', e => errors.push(e.message));
         await page.goto(`http://127.0.0.1:${server.address().port}`);
         await page.waitForFunction(() => window.i18next?.isInitialized);
-        await page.selectOption('#lang-selector', 'en');
+        await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#lang-selector', 'en');await page.evaluate(()=>{document.querySelector('.user-menu').open=false});
         await page.click('[data-tab="mitre"]');
         await page.waitForFunction(() => document.querySelectorAll('.mitre-technique-card').length === 6);
         assert.deepEqual(requests, ['24']);
@@ -88,15 +88,15 @@ const server = http.createServer((req, res) => {
         await page.waitForFunction(() => document.querySelectorAll('.mitre-technique-card').length === 6);
         assert.deepEqual(requests.slice(-2), ['1', '168']);
         for (const lang of ['ko', 'en']) {
-            await page.selectOption('#lang-selector', lang);
+            await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#lang-selector', lang);await page.evaluate(()=>{document.querySelector('.user-menu').open=false});
             await page.waitForFunction(l => window.i18next.language === l, lang);
             assert.equal(await page.locator('#mitre-hours').inputValue(), '168');
             const missing = await page.evaluate(() => [...document.querySelectorAll('#tab-mitre [data-i18n], #tab-mitre [data-i18n-aria-label]')].map(e => e.dataset.i18n || e.dataset.i18nAriaLabel).filter(key => !window.i18next.exists(key)));
             assert.deepEqual(missing, []);
             assert.equal(await card.locator('.mitre-frequency').innerText(), lang === 'ko' ? '탐지 2회' : '2 detections');
         }
-        for (const theme of ['operator', 'auditor', 'cinematic']) {
-            await page.selectOption('#theme-selector', theme);
+        for (const theme of ['operator', 'auditor']) {
+            await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#theme-selector', theme);await page.evaluate(()=>{document.querySelector('.user-menu').open=false});
             const ratios = await page.evaluate(() => {
                 const rgb = color => color.match(/[\d.]+/g).slice(0, 3).map(Number);
                 const lum = c => rgb(c).map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((a, v, i) => a + v * [.2126, .7152, .0722][i], 0);
@@ -108,7 +108,7 @@ const server = http.createServer((req, res) => {
             assert.ok(ratios.every(r => r >= 4.5), `${theme}: ${ratios}`);
             assert.equal(new Set(await page.locator('.mitre-technique-card[data-heat]:not([data-heat="0"])').evaluateAll(cards => cards.map(c => getComputedStyle(c).borderLeftColor))).size, 5);
         }
-        await page.check('#hud-scanlines-toggle'); await card.click();
+        await card.click();
         await page.click('#mitre-detail button');
         await page.setViewportSize({ width: 390, height: 844 });
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'page overflow');

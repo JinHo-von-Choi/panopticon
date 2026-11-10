@@ -11,6 +11,7 @@ import logging
 
 from netwatcher.services.ai_analyzer import AIAnalyzerService
 from netwatcher.services.sensor_control import SensorControlError
+from netwatcher.storage.batch_writer import BatchWriter
 
 logger = logging.getLogger("netwatcher.services.console_ai")
 
@@ -51,13 +52,13 @@ class RemoteEngineView:
 class EventAlertSink:
     """경보 디스패처 대신 사건 테이블에 판정 경보를 기록한다."""
 
-    def __init__(self, event_repo, spawn):
-        self.event_repo, self.spawn = event_repo, spawn
+    def __init__(self, writer, spawn):
+        self.writer, self.spawn = writer, spawn
 
     def enqueue(self, alert) -> None:
-        self.spawn(self.event_repo.insert(
-            engine=alert.engine, severity=alert.severity.value, title=alert.title,
-            title_key=alert.title_key, description=alert.description, metadata=alert.metadata))
+        self.spawn(self.writer.enqueue({
+            "engine": alert.engine, "severity": alert.severity.value, "title": alert.title,
+            "title_key": alert.title_key, "description": alert.description, "metadata": alert.metadata}))
 
 
 class RemoteProposals:
@@ -89,9 +90,18 @@ class ConsoleAIAnalyzer(AIAnalyzerService):
             raise ValueError("ai_analyzer.service_account is required when the console runs AI analysis")
         self._view = RemoteEngineView()
         self._remote_proposals = RemoteProposals(control, self._view, str(ai_cfg.get("provider", "")))
-        super().__init__(config, event_repo, registry=self._view, dispatcher=EventAlertSink(event_repo, self._spawn),
+        self._event_writer = BatchWriter(event_repo, batch_size=20, flush_interval_ms=1000)
+        super().__init__(config, event_repo, registry=self._view, dispatcher=EventAlertSink(self._event_writer, self._spawn),
                          yaml_editor=self._view, whitelist=None, proposal_service=self._remote_proposals)
         self._control, self._accounts, self._account = control, accounts, account
+
+    async def start(self) -> None:
+        await self._event_writer.start()
+        await super().start()
+
+    async def stop(self) -> None:
+        await super().stop()
+        await self._event_writer.stop()
 
     async def _actor(self) -> dict:
         """계정 권한·비활성·비밀번호 변경을 매번 다시 읽는다."""

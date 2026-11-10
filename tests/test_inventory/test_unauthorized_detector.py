@@ -164,6 +164,12 @@ class TestEdgeCases:
         result = d.check("", "192.168.1.100")
         assert result is not None  # 빈 MAC은 인가 목록에 없음
 
+    def test_mac_only_policy_does_not_flag_listed_device_for_its_address(self):
+        d = UnauthorizedDetector()
+        d.load_policy({"enabled": True, "authorized_macs": ["aa:bb:cc:dd:ee:01"]})
+        assert d.check("aa:bb:cc:dd:ee:01", "192.168.1.100") is None
+        assert d.check_ip("192.168.1.100") is None
+
     def test_empty_ip_string(self):
         """IP가 빈 문자열이면 MAC만으로 판단."""
         d = UnauthorizedDetector()

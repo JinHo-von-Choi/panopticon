@@ -8,8 +8,9 @@
  * 커버리지 갭은 일일 운영 행동으로 이어지지 않아 여기에 넣지 않는다.
  */
 
+import { L } from '../core/utils.js';
 import { authFetch } from '../core/api.js';
-import { esc, formatTime } from '../core/utils.js';
+import { emptyStateAttrs, esc, formatTime } from '../core/utils.js';
 
 let drawerEl = null;
 
@@ -50,7 +51,7 @@ export async function openHuntDrawer(type, value) {
     const body  = el.querySelector("#hunt-drawer-body");
 
     title.textContent = `${type.toUpperCase()} · ${value}`;
-    body.innerHTML = `<div class="empty-state">조회 중…</div>`;
+    body.innerHTML = `<div class="empty-state">${L('조회 중…')}</div>`;
     el.classList.remove("hidden");
 
     const [ioc, timeline] = await Promise.all([
@@ -74,38 +75,38 @@ async function fetchJson(url) {
 
 function renderSummary(ioc) {
     if (!ioc) {
-        return `<div class="empty-state">상관 정보를 가져오지 못했습니다.</div>`;
+        return `<div class="empty-state" ${emptyStateAttrs('failed')}>${L('상관 정보를 가져오지 못했습니다.')}</div>`;
     }
 
     const rows = [
-        ["최초 관측", ioc.first_seen ? formatTime(ioc.first_seen) : "-"],
-        ["최근 관측", ioc.last_seen ? formatTime(ioc.last_seen) : "-"],
-        ["이벤트 수", ioc.event_count ?? 0],
-        ["최고 심각도", ioc.severity_max || "-"],
-        ["관련 IP", (ioc.related_ips || []).length],
-        ["관련 도메인", (ioc.related_domains || []).length],
+        [L('최초 관측'), ioc.first_seen ? formatTime(ioc.first_seen) : "-"],
+        [L('최근 관측'), ioc.last_seen ? formatTime(ioc.last_seen) : "-"],
+        [L('이벤트 수'), ioc.event_count ?? 0],
+        [L('최고 심각도'), ioc.severity_max || "-"],
+        [L('관련 IP'), (ioc.related_ips || []).length],
+        [L('관련 도메인'), (ioc.related_domains || []).length],
     ];
 
     const engines = (ioc.engines_triggered || [])
         .map(e => `<span class="type-tag">${esc(e)}</span>`).join(" ") || "-";
 
     return `
-        <h4>요약</h4>
+        <h4>${L('요약')}</h4>
         <table class="hunt-summary">
             ${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join("")}
         </table>
-        <h4>탐지 엔진</h4>
+        <h4>${L('탐지 엔진')}</h4>
         <div>${engines}</div>
     `;
 }
 
 function renderTimeline(entries) {
     if (!Array.isArray(entries) || !entries.length) {
-        return `<h4>타임라인 (24h)</h4><div class="empty-state">기록된 활동이 없습니다.</div>`;
+        return `<h4>${L('타임라인 (24h)')}</h4><div class="empty-state" ${emptyStateAttrs('empty')}>${L('기록된 활동이 없습니다.')}</div>`;
     }
 
     return `
-        <h4>타임라인 (24h)</h4>
+        <h4>${L('타임라인 (24h)')}</h4>
         <ul class="hunt-timeline">
             ${entries.map(e => `
                 <li class="hunt-timeline-item sev-${esc(e.severity)}">

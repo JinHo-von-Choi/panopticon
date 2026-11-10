@@ -6,10 +6,19 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 from fastapi import APIRouter, HTTPException, Query
 
 from netwatcher.inventory.topology_mapper import TopologyMapper
 from netwatcher.inventory.dynamic_risk import DynamicRiskScorer
+
+
+def _is_internal(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_private
+    except ValueError:
+        return False
 
 
 def create_topology_router(
@@ -45,12 +54,12 @@ def create_topology_router(
 
     @router.get("/gateways")
     async def get_gateways():
-        """탐지된 게이트웨이 노드 목록."""
+        """탐지된 게이트웨이 노드 목록. 외부 주소는 통신 상대이므로 후보에서 뺀다."""
         gateway_ips = topology_mapper.detect_gateway_nodes()
         gateways    = []
         for ip in gateway_ips:
             node = topology_mapper.get_node(ip)
-            if node:
+            if node and _is_internal(ip):
                 gateways.append(node)
         return {"gateways": gateways}
 

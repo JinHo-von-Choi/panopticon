@@ -1,3 +1,4 @@
+import { L } from '../core/utils.js';
 import { authFetch } from '../core/api.js';
 import { closeEventDrawer } from '../core/detail-drawer.js';
 
@@ -16,6 +17,8 @@ export async function loadConsoleState() {
     reason.removeAttribute('data-i18n');
     try {
         const response = await authFetch('/api/health');
+        // 요청 제한은 수집 상태와 무관하다. 마지막으로 확인한 상태를 유지한다.
+        if (response.status === 429) return;
         if (!response.ok) throw new Error('state unavailable');
         const data = await response.json();
         if (typeof data.ready !== 'boolean') throw new Error('invalid state');
@@ -33,11 +36,13 @@ export async function loadConsoleState() {
         if (components.stats_flush) checks.push(['stats_flush', 'stats_unavailable']);
         const failed = checks.find(([name]) => components[name]?.status !== 'healthy');
         reason.textContent = data.ready ? t(eveMode ? 'eve_ready_reason' : 'ready_reason') : failed ? t(failed[1]) :
-            components.observation?.reasons?.[0] || t('observation_unavailable');
+            (components.observation?.reasons?.[0] && L(components.observation.reasons[0])) || t('observation_unavailable');
+        box.title = reason.textContent;
     } catch {
         box.dataset.state = 'unknown';
         label.textContent = t('unknown');
         reason.textContent = t('state_unavailable');
+        box.title = reason.textContent;
     }
 }
 

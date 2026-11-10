@@ -15,6 +15,7 @@ from netwatcher.ingest.feeds import feed_matches
 SUPPORTED_TYPES = frozenset({"alert", "flow", "dns", "tls"})
 MAX_LINE_BYTES = 256 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_MITRE_TECHNIQUE = re.compile(r"T\d{4}(?:[._]\d{3})?")
 
 
 def _reject_constant(value):
@@ -31,6 +32,19 @@ def _integer(value, maximum=2**64 - 1):
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
         raise ValueError("Invalid integer field")
     return value
+
+
+def _mitre_technique(metadata) -> str | None:
+    """규칙 메타데이터의 첫 ATT&CK 기법 ID를 돌려준다. 형식이 다르면 경보는 유지하고 기법만 비운다."""
+    if not isinstance(metadata, dict):
+        return None
+    values = metadata.get("mitre_technique_id")
+    if not isinstance(values, list):
+        return None
+    for value in values[:8]:
+        if isinstance(value, str) and _MITRE_TECHNIQUE.fullmatch(value):
+            return value.replace("_", ".")
+    return None
 
 
 def decode_eve_line(raw: bytes, *, source_id: str, sensor_id: str,
@@ -115,6 +129,9 @@ def decode_eve_line(raw: bytes, *, source_id: str, sensor_id: str,
                 data[key] = _text(detail[key])
         if "severity" not in data or "signature_id" not in data:
             raise ValueError("Alert identification is missing")
+        technique = _mitre_technique(detail.get("metadata"))
+        if technique:
+            data["mitre_technique_id"] = technique
     elif event_type == "flow":
         for key in ("pkts_toserver", "pkts_toclient", "bytes_toserver", "bytes_toclient", "age"):
             if key in detail:

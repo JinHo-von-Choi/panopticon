@@ -73,7 +73,7 @@ class ConfirmContextRequest(BaseModel):
         return value
 
 
-def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
+def create_devices_router(device_repo: DeviceRepository, authorization=None) -> APIRouter:
     router = APIRouter(prefix="/devices", tags=["devices"])
     changes = ChangeAudit()
 
@@ -90,7 +90,13 @@ def create_devices_router(device_repo: DeviceRepository) -> APIRouter:
     @router.get("")
     async def list_devices():
         devices = await device_repo.list_all()
-        return {"devices": devices}
+        policy_on = authorization is not None and authorization.enabled
+        if policy_on:
+            for device in devices:
+                violation = authorization.check(device.get("mac_address") or "", device.get("ip_address") or "")
+                device["authorized"] = violation is None
+                device["authorization_reason"] = violation["reason"] if violation else None
+        return {"devices": devices, "authorization_enabled": policy_on}
 
     @router.put('/{mac_address}/context')
     @changes.guard(snapshot)

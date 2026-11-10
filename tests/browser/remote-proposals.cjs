@@ -90,7 +90,7 @@ async function refresh(page) {await page.locator('#proposal-control-refresh').cl
         await page.locator(`[data-proposal-reject="${other}"]`).click();await started;
         await page.evaluate(()=>window.i18next.emit('languageChanged','ko'));
         assert.equal(await page.locator(`[data-proposal-reject="${other}"]`).isDisabled(),true);
-        await page.locator('#btn-logout').click();
+        await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.locator('#btn-logout').click();
         release();await page.locator('#login-overlay:not(.hidden)').waitFor();
         await page.waitForTimeout(100);
         assert.equal(await page.locator('#proposals-body tr').count(),0);
@@ -101,7 +101,7 @@ async function refresh(page) {await page.locator('#proposal-control-refresh').cl
         let releaseReplay,enteredReplay;const replayStarted=new Promise(r=>enteredReplay=r);const replayHold=new Promise(r=>releaseReplay=r);
         await analyst.route('**/api/replay-runs?*',async r=>{enteredReplay();await replayHold;await r.continue();});
         await analyst.locator('[data-proposal-validate]').first().click();await replayStarted;
-        await analyst.locator('#btn-logout').click();releaseReplay();
+        await analyst.evaluate(()=>{document.querySelector('.user-menu').open=true});await analyst.locator('#btn-logout').click();releaseReplay();
         await analyst.locator('#login-overlay:not(.hidden)').waitFor();await analyst.waitForTimeout(100);
         assert.equal(await analyst.locator('#replay-comparison').textContent(),'');
         assert.equal(await analyst.locator('#replay-runs').textContent(),'');

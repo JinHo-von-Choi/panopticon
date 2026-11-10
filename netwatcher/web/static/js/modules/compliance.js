@@ -1,4 +1,5 @@
 import { authFetch, isAuthEnabled } from '../core/api.js';
+import { markEmptyState } from '../core/utils.js';
 
 let requestId = 0;
 let registered = false;
@@ -17,6 +18,8 @@ async function read(url) {
 
 function render() {
     document.getElementById('compliance-state').textContent = state ? t(state) : '';
+    markEmptyState(document.getElementById('compliance-state'),
+        { report_failed: 'failed', unavailable: 'failed', empty: 'unconfigured' }[state] || null);
     const grid = document.getElementById('compliance-kpis');
     grid.replaceChildren();
     const gauge = document.getElementById('compliance-coverage');

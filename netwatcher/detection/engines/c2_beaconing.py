@@ -19,6 +19,7 @@ from scapy.all import IP, TCP, UDP, Raw, Packet
 from netwatcher.detection.base import DetectionEngine
 from netwatcher.detection.eviction import BoundedDefaultDict, prune_empty_keys, prune_expired_entries
 from netwatcher.detection.models import Alert, Severity
+from netwatcher.detection.periodicity import autocorrelation_score, fft_periodicity_score, iat_entropy
 
 logger = logging.getLogger("netwatcher.detection.engines.c2_beaconing")
 
@@ -382,6 +383,11 @@ class C2BeaconingEngine(DetectionEngine):
                     "cv": round(cv, 4),
                     "composite_score": round(score, 4),
                     "sample_count": len(iats),
+                    "periodicity": {
+                        "fft": round(fft_periodicity_score(iats), 4),
+                        "autocorrelation": round(autocorrelation_score(iats), 4),
+                        "iat_entropy": round(iat_entropy(iats), 4),
+                    },
                 },
             ))
 

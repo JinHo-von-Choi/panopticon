@@ -66,6 +66,7 @@ export async function authFetch(url, options) {
     
     try {
         const resp = await fetch(url, options);
+        if (resp.status === 429) window.dispatchEvent(new Event("nw-rate-limited"));
         if (resp.status === 401) {
             console.warn("Session unauthorized for URL:", url);
             // 로그인 중일 때는 무시 (로그인 자체가 401일 수 있음)

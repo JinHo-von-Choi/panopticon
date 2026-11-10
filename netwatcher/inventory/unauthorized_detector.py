@@ -68,6 +68,25 @@ class UnauthorizedDetector:
     def enabled(self) -> bool:
         return self._enabled
 
+    def _ip_allowed(self, ip_str: str) -> bool:
+        """주소 목록이 없거나 관측 주소가 없으면 주소 차원은 통과시킨다."""
+        if not ip_str or (not self._authorized_ips and not self._authorized_subnets):
+            return True
+        if ip_str in self._authorized_ips:
+            return True
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except (ValueError, TypeError):
+            return False
+        return any(addr in net for net in self._authorized_subnets)
+
+    def check_ip(self, ip: str) -> dict[str, Any] | None:
+        """MAC 정보가 없는 관측을 주소 목록만으로 판정한다."""
+        ip_str = ip.strip() if ip else ""
+        if not self._enabled or self._ip_allowed(ip_str):
+            return None
+        return {"mac": "", "ip": ip_str, "reason": f"IP {ip_str} 미인가", "timestamp": time.time()}
+
     def check(self, mac: str, ip: str) -> dict[str, Any] | None:
         """MAC/IP 조합을 검사하여 비인가 시 위반 dict, 인가 시 None 반환.
 
@@ -84,22 +103,9 @@ class UnauthorizedDetector:
         ip_str    = ip.strip() if ip else ""
 
         # MAC 인가 확인
-        mac_ok = mac_lower in self._authorized_macs if self._authorized_macs else True
+        mac_ok = not self._authorized_macs or mac_lower in self._authorized_macs
 
-        # IP 인가 확인 (IP 목록 또는 서브넷)
-        ip_ok = False
-        if ip_str:
-            if ip_str in self._authorized_ips:
-                ip_ok = True
-            else:
-                try:
-                    addr = ipaddress.ip_address(ip_str)
-                    ip_ok = any(addr in net for net in self._authorized_subnets)
-                except (ValueError, TypeError):
-                    ip_ok = False
-        else:
-            # IP가 없으면 MAC만으로 판단
-            ip_ok = True
+        ip_ok = self._ip_allowed(ip_str)
 
         # 인가 목록이 비어 있으면 해당 차원은 통과
         if not self._authorized_macs and not self._authorized_ips and not self._authorized_subnets:

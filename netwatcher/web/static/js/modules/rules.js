@@ -1,6 +1,6 @@
 /** 시그니처 규칙 조회와 명시적인 상태 변경. */
 import {authFetch, canConfigure, getAuthToken} from '../core/api.js';
-import {esc, escAttr, newRequestId, renderPagination} from '../core/utils.js';
+import {emptyStateAttrs, esc, escAttr, newRequestId, renderPagination} from '../core/utils.js';
 import {featureEnabled} from '../core/capabilities.js';
 
 const size = 50;
@@ -38,7 +38,7 @@ function render(data) {
         <td>${esc(rule.protocol || text('any_protocol'))}</td><td><label class="toggle-inline">
         <input type="checkbox" data-rule-toggle="${escAttr(rule.id)}" ${rule.enabled ? 'checked' : ''}
         aria-label="${escAttr(rule.name + ' · ' + text('toggle'))}"><span>${esc(text(rule.enabled ? 'enabled' : 'disabled'))}</span></label></td>
-        </tr>`).join('') : `<tr><td colspan="5" class="empty-state">${esc(text('empty'))}</td></tr>`;
+        </tr>`).join('') : `<tr><td colspan="5" class="empty-state" ${emptyStateAttrs('empty')}>${esc(text('empty'))}</td></tr>`;
     body.querySelectorAll('[data-rule-toggle]').forEach(input => input.addEventListener('change', () => changeRule(input.dataset.ruleToggle, input.checked)));
     const count = document.getElementById('rules-count');
     if (count) count.textContent = data.total;

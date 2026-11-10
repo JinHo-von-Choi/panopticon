@@ -124,7 +124,7 @@ async function login(page, username) {
         });
         await page.getByRole('button', {name:'설정 저장',exact:true}).click();
         await enteredPromise;
-        await page.locator('#btn-logout').click();
+        await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.locator('#btn-logout').click();
         await page.locator('#login-overlay').waitFor({state:'visible'});
         release();
         await page.waitForTimeout(500);

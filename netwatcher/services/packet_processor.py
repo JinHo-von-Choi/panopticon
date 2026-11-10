@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -13,6 +14,7 @@ from netwatcher.detection.utils import get_ip_addrs
 from netwatcher.inventory import hostname_resolver, port_tracker
 from netwatcher.observability.observation import (
     KIND_ACCEPTED,
+    KIND_DROPPED,
     KIND_RECEIVED,
     STAGE_ENGINE,
 )
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
     from netwatcher.capture.pcap_writer import PCAPWriter
     from netwatcher.capture.pool import WorkerPool
     from netwatcher.observability.observation import ObservationService
+    from netwatcher.detection.async_registry import AsyncEngineRegistry
     from netwatcher.detection.registry import EngineRegistry
     from netwatcher.utils.network import AsyncDNSResolver
 
@@ -52,6 +55,8 @@ class PacketProcessor:
         dns_resolver: AsyncDNSResolver,
         worker_pool: WorkerPool | None = None,
         observation: "ObservationService | None" = None,
+        async_registry: "AsyncEngineRegistry | None" = None,
+        async_queue_size: int = 10_000,
     ) -> None:
         """패킷 프로세서를 초기화한다. 레지스트리, 디스패처, PCAP 기록기 등을 주입받는다."""
         self.registry     = registry
@@ -60,6 +65,11 @@ class PacketProcessor:
         self._dns_resolver = dns_resolver
         self._worker_pool  = worker_pool
         self._observation  = observation
+        self._async_registry = async_registry
+        self._async_queue: asyncio.Queue | None = None
+        self._async_queue_size = max(1, async_queue_size)
+        self._async_task: asyncio.Task | None = None
+        self.async_dropped = 0
 
         # 트래픽 카운터 (플러시 간격 단위)
         self._pkt_count  = 0
@@ -183,7 +193,13 @@ class PacketProcessor:
         """단일프로세스 모드: 로컬에서 엔진을 실행하고 알림을 디스패치한다."""
         if self._observation is not None:
             self._observation.record(STAGE_ENGINE, KIND_RECEIVED)
-        alerts = self.registry.process_packet(packet)
+        if self._async_registry is not None:
+            self._enqueue_async(packet)
+            return
+        self._deliver_alerts(packet, self.registry.process_packet(packet))
+
+    def _deliver_alerts(self, packet: Packet, alerts: list) -> None:
+        """엔진이 낸 알림에 패킷 문맥을 붙여 디스패처로 보낸다."""
         if self._observation is not None and alerts:
             self._observation.record(STAGE_ENGINE, KIND_ACCEPTED, len(alerts))
         for alert in alerts:
@@ -191,6 +207,35 @@ class PacketProcessor:
             enrich_alert_metadata(alert.metadata, alert.source_ip, alert.dest_ip)
             if self.dispatcher:
                 self.dispatcher.enqueue(alert)
+
+    def _enqueue_async(self, packet: Packet) -> None:
+        """패킷을 비동기 분배 큐에 넣는다. 가득 차면 버리고 손실로 기록한다."""
+        if self._async_queue is None:
+            self._async_queue = asyncio.Queue(maxsize=self._async_queue_size)
+            self._async_task = asyncio.create_task(self._async_consumer())
+        try:
+            self._async_queue.put_nowait(packet)
+        except asyncio.QueueFull:
+            self.async_dropped += 1
+            if self._observation is not None:
+                self._observation.record(STAGE_ENGINE, KIND_DROPPED)
+
+    async def _async_consumer(self) -> None:
+        """패킷을 하나씩 처리한다. 엔진끼리는 병렬이지만 한 엔진이 두 패킷을 동시에 보지 않는다."""
+        while True:
+            packet = await self._async_queue.get()
+            try:
+                self._deliver_alerts(packet, await self._async_registry.process_packet_async(packet))
+            except Exception:
+                logger.exception("Async engine dispatch failed")
+
+    async def stop_async_dispatch(self) -> None:
+        """비동기 분배 작업을 멈춘다."""
+        if self._async_task is None:
+            return
+        self._async_task.cancel()
+        await asyncio.gather(self._async_task, return_exceptions=True)
+        self._async_task = None
 
     def collect_worker_alerts(self) -> int:
         """멀티프로세스 워커에서 수집한 Alert dict를 디스패처로 전달한다.

@@ -158,6 +158,7 @@ def create_events_router(
     device_repo=None,
     sensor_control=None,
 ) -> APIRouter:
+    extraction_slot = asyncio.Semaphore(1)
     router = APIRouter(prefix="/events", tags=["events"])
     evidence_reader = LocalEvidenceReader(event_repo, pcap_writer)
     evidence_slots = asyncio.Semaphore(2)
@@ -183,7 +184,7 @@ def create_events_router(
 
     @router.get("/export")
     async def export_events(
-        format: str = Query("json", pattern="^(json|csv)$"),
+        format: str = Query("json", pattern="^(json|csv|ecs)$"),
         limit: int = Query(10000, ge=1, le=100000),
         severity: str | None = Query(None),
         engine: str | None = Query(None),
@@ -206,6 +207,17 @@ def create_events_router(
                     row = {k: (str(v) if isinstance(v, dict) else v) for k, v in e.items()}
                     writer.writerow({key: safe_cell(value) for key, value in row.items()})
             return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=events.csv"})
+        if format == "ecs":
+            import json
+            from netwatcher.detection.models import Alert
+            from netwatcher.integrations.ecs_mapper import alert_to_ecs
+            lines = []
+            for event in events:
+                document = alert_to_ecs(Alert.from_event_row(event))
+                document["event"]["id"] = str(event.get("id"))
+                lines.append(json.dumps(document, ensure_ascii=False, default=str))
+            return Response(content="\n".join(lines) + "\n" if lines else "", media_type="application/x-ndjson",
+                            headers={"Content-Disposition": "attachment; filename=events.ecs.ndjson"})
         return {"events": events, "total": len(events)}
 
     @router.post('/{event_id}/evidence/pin', include_in_schema=sensor_control is None)
@@ -249,6 +261,26 @@ def create_events_router(
 
         return await evidence_download(event_id, read_state, read_chunk, evidence_slots)
 
+    @router.get('/{event_id}/evidence/extracted-files', include_in_schema=sensor_control is None)
+    async def extracted_files(event_id: int, actor: dict = Depends(require_role(Role.ANALYST))):
+        """보존 패킷에서 HTTP 전송 파일의 이름·크기·해시만 돌려준다. 파일 자체는 남기지 않는다."""
+        import tempfile
+        from netwatcher.analysis.pcap_analyzer import PcapAnalyzer
+        if pcap_writer is None:
+            raise HTTPException(503, 'Evidence storage unavailable')
+        path = await asyncio.to_thread(pcap_writer.get_pcap_path, event_id)
+        if not path:
+            raise HTTPException(404, 'Evidence file unavailable')
+        if extraction_slot.locked():
+            raise HTTPException(429, '다른 추출이 진행 중입니다. 잠시 후 다시 시도하세요.')
+        async with extraction_slot:
+            with tempfile.TemporaryDirectory(prefix='panopticon-extract-') as workspace:
+                analyzer = PcapAnalyzer(output_dir=workspace)
+                if not analyzer.is_available():
+                    raise HTTPException(503, 'tshark가 설치되어 있지 않습니다.')
+                files = await analyzer.extract_files(path)
+        return {'files': [{key: item[key] for key in ('filename', 'size', 'sha256')} for item in files]}
+
     @router.get("/{event_id}")
     async def get_event(event_id: int, actor: dict = Depends(require_role(Role.VIEWER))):
         event = await event_repo.get_by_id(event_id)
@@ -269,7 +301,7 @@ def create_events_router(
         return {"event": _with_evidence(event)}
 
     if sensor_control is not None:
-        router.routes = [route for route in router.routes if not route.path.endswith(("/evidence/pin", "/evidence/file"))]
+        router.routes = [route for route in router.routes if not route.path.endswith(("/evidence/pin", "/evidence/file", "/evidence/extracted-files"))]
     return router
 
 

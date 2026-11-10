@@ -2,7 +2,7 @@ id: "PB-001"
 name: "Critical Alert Response"
 trigger:
   severity: "CRITICAL"
-  engines: ["threat_intel", "c2_beaconing"]
+  engines: ["threat_intel", "c2_beaconing", "suricata"]
 actions:
   - type: "enrich"
     params:

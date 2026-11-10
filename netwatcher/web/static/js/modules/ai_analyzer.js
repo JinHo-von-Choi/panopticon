@@ -2,6 +2,7 @@
  * NetWatcher AI Analyzer Module
  */
 
+import { L } from '../core/utils.js';
 import { authFetch, getAuthToken } from '../core/api.js';
 import { esc, formatTime, renderPagination } from '../core/utils.js';
 
@@ -54,7 +55,7 @@ function renderStatus() {
     // 작업이 살아 있어도 분석이 계속 실패할 수 있으므로 마지막 성공과 실패 종류를 따로 보여 준다.
     const health = statusData?.health;
     _setText('ai-last-success', !health ? '—'
-        : health.last_success_at === null ? t('never') : new Date(health.last_success_at * 1000).toLocaleString());
+        : health.last_success_at === null ? t('never') : formatTime(health.last_success_at * 1000));
     _setText('ai-failures', !health ? '—'
         : health.consecutive_failures === 0 ? '0'
         : `${health.consecutive_failures} (${t('failure_' + health.last_failure)})`);
@@ -98,9 +99,9 @@ export async function loadAiLogs(page) {
     } else {
         engineFilter = "ai_analyzer";
         const verdictMap = {
-            "CONFIRMED_THREAT": "AI 확인",
-            "FALSE_POSITIVE":   "AI 오탐",
-            "UNCERTAIN":        "AI 불확실",
+            "CONFIRMED_THREAT": L('AI 확인'),
+            "FALSE_POSITIVE":   L('AI 오탐'),
+            "UNCERTAIN":        L('AI 불확실'),
         };
         searchTerm = verdictMap[verdictFilter] || "";
     }

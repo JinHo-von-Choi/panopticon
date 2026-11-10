@@ -548,7 +548,7 @@ def gate_observation_scope_ui() -> GateResult:
 
     # 3) 위반/실패를 숨기지 않는지
     for needle, label in (
-        ("운영 검증을 통과했다는 뜻이 아니다", "no enforcement overclaim"),
+        ("운영 검증을 통과했다는 뜻은 아닙니다", "no enforcement overclaim"),
 
     ):
         present = needle in gtext

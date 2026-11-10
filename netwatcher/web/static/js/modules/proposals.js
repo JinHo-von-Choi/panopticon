@@ -1,6 +1,6 @@
 /** 분리 센서의 제안 작성·검증·승인과 미확정 결과 처리. */
 import {authFetch, canAnalyze, canConfigure, getAuthToken} from '../core/api.js';
-import {esc, escAttr, formatTime, newRequestId, showToast} from '../core/utils.js';
+import {emptyStateAttrs, esc, escAttr, formatTime, newRequestId, showToast} from '../core/utils.js';
 import {featureEnabled} from '../core/capabilities.js';
 
 const t = (key, options = {}) => window.i18next.t('console.proposal_control.' + key, options);
@@ -68,7 +68,7 @@ function render() {
                 (canConfigure() ? `<button class="btn-detail" data-proposal-approve="${escAttr(row.id)}" ${locked || stale || !validated ? 'disabled' : ''}>${esc(tp('approve'))}</button>
                  <button class="btn-detail" data-proposal-reject="${escAttr(row.id)}" ${disabled}>${esc(tp('reject'))}</button>` : '') : esc(row.decided_by || '—')}
                  ${validated ? `<div>${esc(tp('feature_comparison'))} #${esc(evidence.normal_run_id)} / #${esc(evidence.attack_run_id)}</div>` : ''}</td></tr>`;
-    }).join('') : `<tr><td colspan="7" class="empty-state">${esc(loaded ? tp('empty') : t('load_required'))}</td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="empty-state" ${loaded ? emptyStateAttrs('empty') : ''}>${esc(loaded ? tp('empty') : t('load_required'))}</td></tr>`;
     for (const action of ['approve','reject']) {
         body.querySelectorAll(`[data-proposal-${action}]`).forEach(button => button.addEventListener('click', () => decideProposal(Number(button.dataset[action === 'approve' ? 'proposalApprove' : 'proposalReject']), action)));
     }

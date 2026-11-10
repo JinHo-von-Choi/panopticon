@@ -3,6 +3,10 @@ let opener = null;
 let openerSelector = null;
 let overflow = '';
 let activeOverlay = null;
+let docked = false;
+
+/** 넓은 화면에서 사건 상세는 목록 옆에 고정해, 목록을 보면서 다음 사건으로 넘어갈 수 있게 한다. */
+const dockable = id => id === 'modal-overlay' && window.matchMedia('(min-width: 1280px)').matches;
 
 function openDrawer(id, closeId) {
     const overlay = document.getElementById(id);
@@ -15,6 +19,9 @@ function openDrawer(id, closeId) {
     }
     overlay.classList.remove('hidden');
     activeOverlay = overlay;
+    docked = dockable(id);
+    document.body.classList.toggle('drawer-docked', docked);
+    if (docked) return;
     document.body.style.overflow = 'hidden';
     document.querySelector('main').inert = true;
     document.querySelector('header').inert = true;
@@ -27,7 +34,10 @@ function closeDrawer(id) {
     overlay.classList.add('hidden');
     if (activeOverlay !== overlay) return;
     activeOverlay = null;
-    document.body.style.overflow = overflow;
+    document.body.classList.remove('drawer-docked');
+    const wasDocked = docked;
+    docked = false;
+    document.body.style.overflow = wasDocked ? '' : overflow;
     document.querySelector('main').inert = false;
     document.querySelector('header').inert = false;
     const target = opener?.isConnected ? opener : openerSelector ? document.querySelector(openerSelector) : null;
@@ -48,7 +58,7 @@ document.addEventListener('keydown', event => {
         event.preventDefault();
         event.stopImmediatePropagation();
         closeDrawer(overlay.id);
-    } else if (event.key === 'Tab') {
+    } else if (event.key === 'Tab' && !docked) {
         const items = [...overlay.querySelectorAll('button, a[href], input, select, textarea, summary, [tabindex="0"]')]
             .filter(item => {
                 const closed = item.closest('details:not([open])');

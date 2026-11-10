@@ -185,7 +185,7 @@ netwatcher:
 | 기능 | 켜는 방법 | 주의 |
 | --- | --- | --- |
 | 알림 | `.env`에 채널 접속 정보, `alerts.channels`에서 채널 활성화 | 값이 빠지면 알림 상태 패널에 오류 표시 |
-| NetFlow/IPFIX | `netflow.enabled: true`, 수신 주소·포트 지정 | 패킷 본문은 받지 않음 |
+| NetFlow v5 | `netflow.enabled: true`, 수신 주소·포트 지정 | 패킷 본문은 받지 않음. v9·IPFIX는 지원하지 않음 |
 | AI 분석 | `ai_analyzer.enabled: true`, `apply_mode: propose`, 공급자 선택 | 외부로 나가는 자료 범위를 먼저 검토 |
 | API 문서 | `web.enable_docs: true` | `/docs`, `/openapi.json` 노출 |
 
@@ -226,6 +226,22 @@ ai_analyzer:
 - `netflow.host`는 센서가 수신할 로컬 주소입니다(라우터 주소가 아님).
 - 방화벽에서 허용한 라우터만 해당 UDP 포트에 닿게 합니다.
 - 엔진 옵션은 `netflow.engines.flow_port_scan`, `netflow.engines.flow_data_exfil`입니다. 이름이 비슷한 패킷 엔진 설정과 다릅니다.
+
+### 비인가 장치 표시
+
+`inventory.authorization.enabled`를 켜면 `authorized_macs`, `authorized_ips`, `authorized_subnets`에 없는 장치를 장치 화면에 **미인가**로 표시합니다. 표시만 하며 차단하지 않습니다. 비워 둔 목록은 판정에 쓰지 않고, MAC 없이 관측된 주소는 주소 목록으로만 판정합니다.
+
+### 비동기 엔진 분배
+
+단일 프로세스 센서에서 `engine_dispatch.async`를 켜면 탐지 엔진을 스레드로 병렬 실행합니다. 패킷은 한 번에 하나씩 처리합니다. `engine_dispatch.queue_size`를 넘는 패킷은 버리고 관측 지표에 손실로 기록합니다.
+
+### 로그와 추적
+
+`observability.structlog`를 켜면 로그를 `observability.log_format`(`json` 또는 `console`)으로 출력합니다. `observability.tracing.enabled`를 켜면 EVE 저장과 경보 처리 구간을 OTLP로 보냅니다. `opentelemetry` 패키지를 따로 설치해야 하며, 없으면 시작할 때 경고를 남기고 내보내지 않습니다.
+
+### Redis
+
+`redis.enabled`를 켜면 위협 피드를 Redis에 공유해 다운로드에 실패한 인스턴스가 사용할 수 있고, 경보 속도 제한을 여러 프로세스가 함께 적용합니다.
 
 ## 지원 범위
 

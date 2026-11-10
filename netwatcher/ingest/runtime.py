@@ -121,7 +121,7 @@ class EveConsole:
         while True:
             try:
                 summary = await self.feeds.update_all()
-                if not summary.succeeded:
+                if summary.failed and not summary.succeeded:
                     logger.error("Threat feed refresh failed (%d feed(s)); keeping previous data", summary.failed)
             except Exception:
                 logger.exception("Threat feed refresh failed")

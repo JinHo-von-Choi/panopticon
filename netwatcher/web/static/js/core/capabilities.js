@@ -16,7 +16,9 @@ function renderNotices() {
     }
     document.querySelectorAll('[data-capability-notice]').forEach(el => {
         const { state, reason } = featureState(el.dataset.capabilityNotice);
-        el.hidden = state === 'available';
+        // 장치 대신 관측 주소를 보여 주는 구성에서는 미지원 안내가 혼란만 준다.
+        const replaced = el.dataset.capabilityNotice === 'devices' && featureState('observed_assets').state === 'available';
+        el.hidden = state === 'available' || replaced;
         if (el.hidden) { el.textContent = ''; return; }
         const t = key => window.i18next.t(key);
         el.textContent = `${t('console.capability.state.' + state)} — ${t('console.capability.reason.' + (reason || 'none'))}`;
@@ -45,6 +47,11 @@ export async function loadCapabilities() {
     }
     document.querySelectorAll('[data-tab="users"]').forEach(button => {
         button.style.display = featureEnabled('users') && canConfigure() ? '' : 'none';
+    });
+    document.querySelectorAll('[data-requires-feature]').forEach(el => { el.hidden = !featureEnabled(el.dataset.requiresFeature); });
+    document.querySelectorAll('[data-requires-state]').forEach(el => { el.hidden = featureState(el.dataset.requiresState).state === 'unsupported'; });
+    document.querySelectorAll('[data-nav-group]').forEach(group => {
+        group.hidden = ![...group.querySelectorAll('.tab')].some(tab => tab.style.display !== 'none');
     });
     const mine = document.getElementById('case-mine-control');
     if (mine) mine.hidden = !featureEnabled('users') || !getCurrentUserId();

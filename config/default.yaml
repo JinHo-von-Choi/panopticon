@@ -61,6 +61,19 @@ netwatcher:
     ssl_ca_file: ""       # verify-ca/full의 CA PEM. 빈 값이면 시스템 신뢰 저장소
     tenant_id: "00000000-0000-0000-0000-000000000000"  # 연결 기본 테넌트(RLS). 빈 값이면 끔
 
+  # 단일 프로세스 센서에서 엔진을 스레드로 병렬 실행한다. 큐가 차면 패킷을 버리고 관측에 기록한다.
+  engine_dispatch:
+    async: false
+    queue_size: 10000
+
+  # 켜면 아래 목록에 없는 장치를 자산 화면에 미인가로 표시한다. 차단하지 않는다.
+  inventory:
+    authorization:
+      enabled: false
+      authorized_macs: []
+      authorized_ips: []
+      authorized_subnets: []
+
   logging:
     level: "INFO"
     directory: "data/logs"

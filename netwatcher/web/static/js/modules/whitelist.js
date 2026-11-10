@@ -2,7 +2,7 @@
  * NetWatcher Whitelist Module
  */
 
-import { esc, showToast, escAttr } from '../core/utils.js';
+import { emptyStateAttrs, esc, showToast, escAttr } from '../core/utils.js';
 import { whitelistData, refreshWhitelist, changeWhitelist, containsWhitelist, canChangeWhitelist,
     whitelistStatus, whitelistText } from '../core/whitelist-state.js';
 export { whitelistData } from '../core/whitelist-state.js';
@@ -43,7 +43,7 @@ function renderWhitelistTable() {
     });
 
     if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="3">${esc(whitelistText(state.loaded ? 'empty' : 'load_required'))}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="3" class="empty-state" ${state.loaded ? emptyStateAttrs('empty') : ''}>${esc(whitelistText(state.loaded ? 'empty' : 'load_required'))}</td></tr>`;
         return;
     }
 

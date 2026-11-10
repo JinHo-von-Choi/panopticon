@@ -91,7 +91,7 @@ async function login(page, username) {
         });
         await page.locator('#incident-resolve').click();
         await enteredFinalPromise;
-        await page.getByRole('button',{name:'로그아웃',exact:true}).click();
+        await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.getByRole('button',{name:'로그아웃',exact:true}).click();
         releaseFinal();
         await page.waitForTimeout(500);
         assert.equal(writes, 2);

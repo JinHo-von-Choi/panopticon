@@ -193,3 +193,14 @@ class TestPlaybookAction:
         d = action.to_dict()
         assert d["playbook_id"] == "PB-001"
         assert d["action_type"] == "enrich"
+
+
+def test_stored_event_matches_playbook_without_running_it(playbooks_dir):
+    engine = PlaybookEngine(playbooks_dir=str(playbooks_dir))
+    engine.load_playbooks()
+    trigger = engine.playbooks[0].trigger
+    event = {"severity": trigger.get("severity", "CRITICAL"), "engine": (trigger.get("engines") or ["any"])[0],
+             "title": "stored", "mitre_attack_id": None}
+    matched = engine.match_event(event)
+    assert matched and matched[0]["id"] == engine.playbooks[0].id
+    assert set(matched[0]) == {"id", "name", "steps"}

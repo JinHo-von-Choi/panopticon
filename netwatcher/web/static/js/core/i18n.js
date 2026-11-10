@@ -3,6 +3,7 @@
  */
 
 import { isAuthEnabled } from './api.js';
+import { L } from './utils.js';
 
 export async function initI18n(onLangChange) {
     var currentLang = localStorage.getItem("nw_lang") || "ko";
@@ -45,11 +46,23 @@ export async function initI18n(onLangChange) {
 }
 
 export function updateContent() {
+    document.querySelectorAll('[data-empty-kind]').forEach(el => {
+        el.dataset.emptyLabel = window.i18next.t('console.shell.empty_kind.' + el.dataset.emptyKind);
+    });
+    document.querySelectorAll('[data-ko]').forEach(el => {
+        const node = [...el.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim());
+        if (node) node.textContent = L(el.dataset.ko) + (el.children.length ? ' ' : '');
+    });
     document.querySelectorAll("[data-i18n-aria-label]").forEach(el => {
         el.setAttribute("aria-label", window.i18next.t(el.dataset.i18nAriaLabel));
     });
     document.querySelectorAll("[data-i18n]").forEach(function (el) {
         var key = el.getAttribute("data-i18n");
+        var attribute = /^\[([a-z-]+)\](.+)$/.exec(key);
+        if (attribute) {
+            el.setAttribute(attribute[1], window.i18next.t(attribute[2]));
+            return;
+        }
         var options = el.getAttribute("data-i18n-options");
         if (options) {
             try {

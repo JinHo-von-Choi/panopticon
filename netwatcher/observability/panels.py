@@ -93,7 +93,7 @@ PANELS: dict[str, Panel] = {
         SELECT CASE WHEN age < interval '1 hour' THEN '<1h' WHEN age < interval '1 day' THEN '1h-1d'
                     WHEN age < interval '7 days' THEN '1-7d' ELSE '>=7d' END AS label, count(*) AS value
         FROM (SELECT $1::timestamptz - created_at AS age FROM incidents
-              WHERE NOT resolved AND created_at < $1) s GROUP BY 1""", _BOTH, "incidents", ("to",)),
+              WHERE NOT resolved AND created_at < $1) s GROUP BY 1""", _NATIVE, "incidents", ("to",)),
     "case_status": Panel("bar", """
         SELECT COALESCE(w.status, 'open') AS label, count(*) AS value FROM events e
         LEFT JOIN case_workflows w ON w.event_id = e.id

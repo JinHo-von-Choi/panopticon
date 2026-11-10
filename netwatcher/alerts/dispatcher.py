@@ -30,6 +30,7 @@ from netwatcher.observability.observation import (
 from netwatcher.storage.repositories import DeviceRepository, EventRepository
 from netwatcher.utils.config import Config
 from netwatcher.observability import metrics
+from netwatcher.observability.tracing import traced
 
 if TYPE_CHECKING:
     from netwatcher.observability.observation import ObservationService
@@ -120,6 +121,7 @@ class AlertDispatcher(EventStream):
             window_seconds=rl_config.get("window_seconds", 300),
             max_count=rl_config.get("max_per_key", 5),
         )
+        self._shared_rate_limiter = None
         budget_cfg = config.section("alerts").get("event_budget", {})
         self._event_budget = EventBudget(
             normal=budget_cfg.get("normal_per_minute", 120),
@@ -419,6 +421,18 @@ class AlertDispatcher(EventStream):
                 logger.warning("Shutdown prefetched alert unconfirmed: 1")
                 self._queue.task_done()
 
+    def use_shared_rate_limiter(self, limiter) -> None:
+        """여러 프로세스가 같은 경보 한도를 쓰도록 Redis 제한기를 연결한다."""
+        self._shared_rate_limiter = limiter
+
+    async def _allowed_across_instances(self, alert: Alert) -> bool:
+        if self._shared_rate_limiter is None or await self._shared_rate_limiter.allow(alert.rate_limit_key):
+            return True
+        metrics.alerts_suppressed.labels(reason="rate_limit").inc()
+        if self._observation is not None:
+            self._observation.record(STAGE_ALERT, KIND_SUPPRESSED)
+        return False
+
     def _prepare_alert(self, alert: Alert) -> bool:
         if self._observation is not None:
             self._observation.record(STAGE_ALERT, KIND_RECEIVED)
@@ -499,7 +513,7 @@ class AlertDispatcher(EventStream):
 
     async def _process_alert(self, alert: Alert) -> None:
         await self._apply_business_context([alert])
-        if not self._prepare_alert(alert):
+        if not self._prepare_alert(alert) or not await self._allowed_across_instances(alert):
             return
         # 2. DB 삽입
         event_id = None
@@ -547,12 +561,13 @@ class AlertDispatcher(EventStream):
                 'severity': alert.severity.value}])
         await self._deliver_committed(alert, event_id)
 
+    @traced("alerts.process_batch")
     async def _process_alert_batch(self, alerts: list[Alert]) -> None:
         if len(alerts) == 1:
             await self._process_alert(alerts[0])
             return
         await self._apply_business_context(alerts)
-        accepted = [alert for alert in alerts if self._prepare_alert(alert)]
+        accepted = [alert for alert in alerts if self._prepare_alert(alert) and await self._allowed_across_instances(alert)]
         if not accepted:
             return
         pairs = [(uuid.uuid4(), alert) for alert in accepted]

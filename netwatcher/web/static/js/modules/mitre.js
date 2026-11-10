@@ -1,4 +1,5 @@
 import { authFetch, isAuthEnabled } from '../core/api.js';
+import { markEmptyState } from '../core/utils.js';
 
 const TACTICS = [
     'reconnaissance', 'initial-access', 'execution', 'persistence',
@@ -69,6 +70,7 @@ function render() {
     const filtered = items.filter(item => `${item.id} ${item.name} ${item.tactic} ${t(`tactics.${item.tactic}`)}`
         .toLocaleLowerCase().includes(query));
     el('state').textContent = state ? t(state) : t('summary', { shown: filtered.length, total: items.length });
+    markEmptyState(el('state'), { empty: 'empty', unavailable: 'failed' }[state] || null);
     const tactics = [...TACTICS];
     if (items.some(item => item.tactic === 'resource-development')) tactics.splice(1, 0, 'resource-development');
     if (items.some(item => item.tactic === 'unassigned')) tactics.push('unassigned');

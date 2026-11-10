@@ -70,6 +70,22 @@ class Alert:
         )
     )
 
+    @classmethod
+    def from_event_row(cls, row: dict[str, Any]) -> "Alert":
+        """저장된 events 행을 조회·내보내기용 Alert로 복원한다."""
+        try:
+            severity = Severity(row.get("severity"))
+        except ValueError:
+            severity = Severity.INFO
+        timestamp = row.get("timestamp")
+        return cls(
+            engine=row.get("engine") or "unknown", severity=severity, title=row.get("title") or "",
+            description=row.get("description") or "", source_ip=row.get("source_ip"), source_mac=row.get("source_mac"),
+            dest_ip=row.get("dest_ip"), dest_mac=row.get("dest_mac"), mitre_attack_id=row.get("mitre_attack_id"),
+            threat_level=row.get("threat_level") or 0, metadata=row.get("metadata") or {},
+            timestamp=timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp or ""),
+        )
+
     def __post_init__(self) -> None:
         """하위 호환성을 위해 metadata의 confidence를 인스턴스 필드로 추출한다."""
         # 하위 호환성을 위해 metadata에 설정된 confidence 추출

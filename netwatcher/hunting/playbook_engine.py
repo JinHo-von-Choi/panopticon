@@ -103,6 +103,14 @@ class PlaybookEngine:
 
         return actions
 
+    def match_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        """저장된 사건에 해당하는 플레이북과 단계를 돌려준다. 실행하지 않는다."""
+        alert = Alert.from_event_row(event)
+        return [
+            {"id": pb.id, "name": pb.name, "steps": [action.get("type", "unknown") for action in pb.actions]}
+            for pb in self._playbooks if self._matches_trigger(alert, pb.trigger)
+        ]
+
     async def execute(self, actions: list[PlaybookAction]) -> list[dict[str, Any]]:
         """플레이북 액션을 실행하고 결과를 반환한다."""
         results: list[dict[str, Any]] = []

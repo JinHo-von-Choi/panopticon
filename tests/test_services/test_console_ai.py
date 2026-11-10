@@ -3,6 +3,8 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncio
+
 import pytest
 
 from netwatcher.services.console_ai import ConsoleAIAnalyzer
@@ -27,6 +29,7 @@ def analyzer(account=None, read=None):
     config.get.return_value = "en"
     events = MagicMock()
     events.insert = AsyncMock()
+    events.insert_batch = AsyncMock(return_value=1)
     control = MagicMock()
     control.read = AsyncMock(return_value=STATE) if read is None else read
     control.proposals = AsyncMock(return_value={"proposal": {"id": 7}})
@@ -64,8 +67,11 @@ async def test_false_positive_becomes_capped_proposal_from_service_account():
 async def test_confirmed_threat_is_written_as_event():
     svc, events, control = analyzer()
     await run(svc, decision("CONFIRMED_THREAT"))
-    assert events.insert.await_args.kwargs["engine"] == "ai_analyzer"
-    assert events.insert.await_args.kwargs["severity"] == "CRITICAL"
+    await asyncio.gather(*list(svc._proposal_tasks))
+    await svc._event_writer.flush()
+    written = events.insert_batch.await_args.args[0][0]
+    assert written["engine"] == "ai_analyzer"
+    assert written["severity"] == "CRITICAL"
     control.proposals.assert_not_awaited()
 
 

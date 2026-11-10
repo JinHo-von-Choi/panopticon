@@ -57,7 +57,7 @@ const server=http.createServer((req,res)=>{
 const browser=await chromium.launch({executablePath:process.env.PANOPTICON_CHROME||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base);await page.waitForFunction(()=>window.i18next?.isInitialized);await page.selectOption('#lang-selector','en');
+ await page.goto(base);await page.waitForFunction(()=>window.i18next?.isInitialized);await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#lang-selector','en');await page.evaluate(()=>{document.querySelector('.user-menu').open=false});
  await page.waitForFunction(()=>window.i18next.language==='en');
 
  // 기능 상태: 지원하지 않는 장치 화면은 이유를 글로 보여 준다.
@@ -66,12 +66,12 @@ try{
  await notice.waitFor({state:'visible'});
  assert.match(await notice.innerText(),/does not collect devices/);
 
- // 관측 탭: 지원 패널은 그리고, 미지원 패널은 고를 수 없다.
+ // 관측 탭: 지원 패널만 그리고, 미지원 패널은 선택 목록에도 없다.
  await page.click('[data-tab="observability"]');
  await page.waitForFunction(()=>document.querySelector('#obs-status').textContent.startsWith('As of'));
- assert.equal(await page.locator('#obs-grid .obs-card').count(),5);
- assert.equal(await page.locator('#obs-panel-picker input[type=checkbox]:disabled').count(),1);
- assert.equal(await page.locator('#obs-panel-eve_event_types .empty-state').innerText(),'This panel is not supported in this deployment.');
+ assert.equal(await page.locator('#obs-grid .obs-card').count(),4);
+ assert.equal(await page.locator('#obs-panel-picker input[type=checkbox]').count(),4);
+ assert.equal(await page.locator('#obs-panel-eve_event_types').count(),0);
  assert.ok(await page.locator('#obs-panel-alerts_by_severity canvas').count()===1);
  assert.equal(await page.locator('#obs-panel-new_devices .empty-state').innerText(),'No records in the selected range.');
  assert.equal(await page.locator('#obs-panel-alert_heatmap .obs-heatmap-cell').count(),7*24);
@@ -95,7 +95,7 @@ try{
  // 패널 선택은 브라우저에 남는다.
  await page.click('.obs-picker summary');
  await page.locator('#obs-panel-picker input[type=checkbox]').first().uncheck();
- assert.equal(await page.locator('#obs-grid .obs-card').count(),4);
+ assert.equal(await page.locator('#obs-grid .obs-card').count(),3);
  assert.ok((await page.evaluate(()=>localStorage.getItem('panopticon.observability'))).includes('alerts_by_severity'));
 
  // 에이전트 탭: 연결 상태와 연결 이벤트.

@@ -46,7 +46,7 @@ const fixture=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
   await page.waitForFunction(()=>document.querySelector('#ai-state').textContent==='정지');
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:fixture.screenshot,fullPage:true});
-  await page.locator('#btn-logout').click();await page.locator('#login-overlay:not(.hidden)').waitFor();
+  await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.locator('#btn-logout').click();await page.locator('#login-overlay:not(.hidden)').waitFor();
   assert.equal(await page.locator('#ai-provider').textContent(),'—');assert.equal(await page.locator('#tab-btn-ai-analyzer').evaluate(el=>el.style.display),'none');
   assert.deepEqual(errors,[]);console.log('ai browser checks passed');
  } finally {await browser.close();}

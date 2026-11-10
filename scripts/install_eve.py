@@ -105,6 +105,18 @@ def prepare_installation(output, eve_file, *, log_gid=None, username="admin"):
         json.dump(config, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
     path.chmod(0o644)
+    # compose가 /app/config를 이 디렉터리로 덮으므로, 콘솔이 읽는 피드 목록도 함께 둔다.
+    feeds = Path(__file__).resolve().parents[1] / "config/threatfeeds.yaml"
+    path = output / "config/threatfeeds.yaml"
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), "wb") as stream:
+        stream.write(feeds.read_bytes())
+    path.chmod(0o644)
+    (output / "config/playbooks").mkdir(mode=0o755)
+    for source in sorted((feeds.parent / "playbooks").glob("*.yaml")):
+        path = output / "config/playbooks" / source.name
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), "wb") as stream:
+            stream.write(source.read_bytes())
+        path.chmod(0o644)
     return output / ".env"
 
 

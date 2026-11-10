@@ -194,7 +194,10 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     from netwatcher.web.routes.work_schedules import create_work_schedules_router
     schedules = WorkSchedules(event_repo._db) if isinstance(event_repo, EventRepository) else None
     app.include_router(create_work_schedules_router(schedules), prefix=api_prefix)
-    app.include_router(create_devices_router(device_repo), prefix=api_prefix)
+    from netwatcher.inventory.unauthorized_detector import UnauthorizedDetector
+    authorization = UnauthorizedDetector()
+    authorization.load_policy(config.get("inventory.authorization") or {})
+    app.include_router(create_devices_router(device_repo, authorization), prefix=api_prefix)
     from netwatcher.inventory.topology_mapper import TopologyMapper
     from netwatcher.inventory.dynamic_risk import DynamicRiskScorer
     from netwatcher.web.routes.topology import create_topology_router
@@ -242,7 +245,7 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
                        input_mode=config.get("input.mode", "native")), prefix=api_prefix)
     from netwatcher.web.routes.observed_assets import create_observed_assets_router
     app.include_router(create_observed_assets_router(
-        event_repo._db if isinstance(event_repo, EventRepository) else None), prefix=api_prefix)
+        event_repo._db if isinstance(event_repo, EventRepository) else None, authorization), prefix=api_prefix)
     from netwatcher.web.routes.observability import create_observability_router
     app.include_router(create_observability_router(event_repo._db if isinstance(event_repo, EventRepository) else None,
                        config.get("input.mode", "native")), prefix=api_prefix)
@@ -341,8 +344,11 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
     _ioc_correlator = IOCCorrelator(event_repo)
     _navigator      = MITRENavigator()
     _timeline       = ThreatTimeline(event_repo)
+    from netwatcher.hunting.playbook_engine import PlaybookEngine
+    _playbooks = PlaybookEngine()
+    _playbooks.load_playbooks()
     app.include_router(
-        create_hunting_router(event_repo, _ioc_correlator, _navigator, _timeline),
+        create_hunting_router(event_repo, _ioc_correlator, _navigator, _timeline, _playbooks),
         prefix=api_prefix,
     )
 
@@ -422,13 +428,13 @@ def create_app(config, event_repo, device_repo, stats_repo, dispatcher, auth_man
                 health = {"status": "unknown", "reason": "위협 피드 상태 조회 실패"}
                 violations = []
             payload["feeds"] = health
-            if health["status"] != "ok":
+            if violations:
                 payload["violations"] = list(payload["violations"]) + [
                     v.as_dict() for v in violations
                 ]
                 payload["profile_note"] = (
-                    "위반이 있어도 기동은 하지만, threat_intel 은 지표가 없어 "
-                    "탐지하지 않는다"
+                    "위반이 있어도 기동은 하지만, 지표가 갱신되지 않으면 "
+                    "위협 피드 대조 결과가 나오지 않는다"
                 )
         return payload
 

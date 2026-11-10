@@ -43,6 +43,17 @@ def _extract_render_fn(src: str, name: str) -> str:
     raise AssertionError(f"{name} 의 끝을 찾지 못했다")
 
 
+def _i18n_stub() -> str:
+    """렌더러가 쓰는 번역 함수를 실제 한국어 번역 파일로 풀어 주는 JS 를 만든다."""
+    locale = (STATIC / "locales" / "ko" / "translation.json").read_text(encoding="utf-8")
+    return (
+        f"const KO = {locale};\n"
+        "globalThis.window = { i18next: { t: (key) =>"
+        " key.split('.').reduce((node, part) => node?.[part], KO) ?? key } };\n"
+        "const L = (text) => text;\n"
+    )
+
+
 def _run_node(body: str) -> dict:
     """Node 로 JS 를 실행하고 JSON 으로 돌려받는다."""
     script = STATIC / "js" / "core" / "utils.js"
@@ -58,7 +69,7 @@ def _run_node(body: str) -> dict:
     clean = _extract_render_fn(gov, "renderCleanNotice")
     sources = _extract_render_fn(gov, "renderFeedSources")
 
-    code = esc_decl + "\n" + inner + "\n" + clean + "\n" + sources + "\n" + fn + textwrap.dedent(f"""
+    code = _i18n_stub() + esc_decl + "\n" + inner + "\n" + clean + "\n" + sources + "\n" + fn + textwrap.dedent(f"""
         const cases = {body};
         // 실제 렌더러를 통과시킨 결과를 돌려준다
         const rendered = cases.map((c) => {{
@@ -96,7 +107,7 @@ def test_support_profile_renders_violations_prominently():
     assert "SUP-002" in out
     assert "response.backend" in out
     assert "nftables 미구현" in out
-    assert "이 상태로는 배포하지 마세요" in out
+    assert "해결한 뒤 배포하세요" in out
 
 
 @requires_node
@@ -110,7 +121,7 @@ def test_clean_profile_does_not_claim_enforcement_certification():
     out = _run_node(f"[{json.dumps(payload)}]")[0]
 
     # 계약 통과를 enforcement 통과로 오인하지 않아야 한다
-    assert "운영 검증을 통과했다는 뜻이 아니다" in out
+    assert "운영 검증을 통과했다는 뜻은 아닙니다" in out
     assert "위반 0건" in out or "0건" in out
 
 
@@ -183,7 +194,7 @@ def _run_observation_node(body: str) -> list[str]:
     # 모듈 레벨 상수도 렌더 경로의 입력이다
     labels = gov[gov.index("const OBS_STATE_LABEL"):gov.index("};", gov.index("const OBS_STATE_LABEL")) + 2]
 
-    code = esc_decl + "\n" + labels + "\n" + fn + textwrap.dedent(f"""
+    code = _i18n_stub() + esc_decl + "\n" + labels + "\n" + fn + textwrap.dedent(f"""
         const cases = {body};
         const rendered = cases.map((c) => {{
             const box = {{ innerHTML: "" }};

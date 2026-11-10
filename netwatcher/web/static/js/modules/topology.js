@@ -1,5 +1,6 @@
 import { authFetch, isAuthEnabled } from '../core/api.js';
 import { openDeviceDrawer } from '../core/detail-drawer.js';
+import { markEmptyState } from '../core/utils.js';
 
 let graph = null;
 let nodes = [];
@@ -16,6 +17,7 @@ function setState(key) {
     const el = document.getElementById('topology-state');
     el.textContent = key ? t(key) : '';
     el.hidden = !key;
+    markEmptyState(el, key === 'empty' ? 'empty' : key === 'unavailable' ? 'failed' : null);
 }
 
 function updateCounts() {

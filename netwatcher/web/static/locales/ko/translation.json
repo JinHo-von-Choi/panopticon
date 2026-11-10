@@ -628,7 +628,14 @@
     "enabled": "활성"
   },
   "console": {
+    "shell": {"settings": "설정", "nav_investigate": "조사", "nav_assets": "자산", "nav_detect": "탐지", "nav_observe": "현황", "nav_admin": "관리", "summary": "관측·검토 요약", "last_alert": "마지막 경보 {{when}}", "no_alert": "수신한 경보 없음", "key_hint": "J/K로 이전·다음 경보 이동", "rate_limited_title": "요청이 많습니다", "rate_limited": "잠시 후 화면이 다시 갱신됩니다.", "severity_filter": "이 심각도만 보기", "per_page": "페이지당 {{count}}개", "since": "시작일", "until": "종료일", "prev": "이전", "next": "다음", "detail": "상세", "empty_kind": {"unsupported": "지원 안 됨", "unconfigured": "설정 필요", "empty": "기록 없음", "failed": "조회 실패"}, "loading": "불러오는 중…", "event_not_found": "사건을 찾을 수 없습니다.", "export_failed": "내보내기에 실패했습니다.", "required_device": "MAC 주소와 별칭을 입력하세요.", "registration_failed": "장치를 등록하지 못했습니다.", "login_failed": "로그인에 실패했습니다.", "server_failed": "서버에 연결하지 못했습니다.", "profile_full": "전체 기능", "profile_limited": "제한 기능 (읽기 전용)", "enforcement": "차단 적용 방식", "none": "없음", "protocol_distribution": "프로토콜 분포", "type_mobile": "모바일", "type_printer": "프린터", "type_router": "라우터", "type_server": "서버", "type_unknown": "미분류", "all_devices": "모든 장치", "registered": "등록됨", "unregistered": "미등록", "register_device": "장치 등록", "risk": "위험도", "type": "유형", "nickname": "별칭", "vendor": "제조사", "hostname": "호스트 이름", "first_seen": "처음 관측", "last_seen": "마지막 관측", "packets": "패킷", "actions": "작업", "all_types": "모든 유형", "export_ecs": "ECS 내보내기", "playbook_title": "대응 절차", "playbook_manual": "자동으로 실행되지 않습니다. 담당자가 직접 수행하세요.", "step_enrich": "주소 정보 조회", "step_notify": "담당자 통지", "step_document": "사건 보고서 작성", "step_contain": "격리 여부 검토", "extract_files": "패킷에서 파일 찾기", "extract_failed": "파일을 추출하지 못했습니다. tshark 설치를 확인하세요.", "extract_empty": "패킷에서 전송 파일을 찾지 못했습니다.", "scope_profile": "이 도구가 실제로 무엇을 하는지 확인하는 곳입니다. 지원 조건을 벗어난 항목이 있으면 해결한 뒤 배포하세요.", "scope_observation": "경보가 없다고 문제가 없다는 뜻은 아닙니다. 무엇을 관측했고 무엇을 관측하지 못했는지 여기서 구분합니다.", "search_devices": "장치 검색..."},
+    "observation_state": {"observed": "정상 관측", "partial": "일부 범위만 관측", "stale": "관측 지연", "unknown": "확인 불가"},
+    "eve_scope": "등록한 Suricata EVE 파일만 관측합니다. 패킷 손실은 Suricata에서 확인하세요.",
+    "eve_queue": "수집 대기 {{pending}} · 누락 가능 {{gaps}}건 · 거절 {{rejected}}건",
     "observed_assets": {
+      "authorization": "인가",
+      "authorized": "인가됨",
+      "unauthorized": "미인가",
       "title": "Suricata가 관측한 주소",
       "hint": "Suricata EVE 기록에 나온 내부 주소입니다. 전체 자산 목록이 아닙니다.",
       "search": "IP 또는 CIDR",
@@ -639,7 +646,7 @@
       "prev": "이전",
       "next": "다음",
       "loading": "불러오는 중…",
-      "empty": "아직 관측된 내부 주소가 없습니다.",
+      "empty": "아직 관측된 내부 주소가 없습니다. 경보가 수집되면 표시됩니다.",
       "unavailable": "관측 주소를 불러오지 못했습니다.",
       "invalid_search": "IP 주소나 CIDR을 입력하세요.",
       "range": "{{total}}건 중 {{from}}–{{to}}"
@@ -655,7 +662,7 @@
       "day": "요일",
       "hour": "시",
       "loading": "불러오는 중",
-      "no_data": "선택한 기간에 기록이 없습니다.",
+      "no_data": "선택한 기간에 기록이 없습니다. 기간을 넓혀 다시 조회하세요.",
       "no_panels": "표시할 패널이 없습니다.",
       "failed": "관측 자료를 불러오지 못했습니다.",
       "failed_since": "갱신 실패 — {{time}} 기준 자료를 표시 중",
@@ -787,7 +794,7 @@
         "pending": "MITRE 탭을 선택하면 탐지를 조회합니다.",
         "loading": "MITRE 탐지 조회 중…",
         "unavailable": "MITRE 탐지를 불러올 수 없습니다. 새로고침으로 재시도하세요.",
-        "empty": "이 기간에 MITRE 탐지가 없습니다.",
+        "empty": "이 기간에 MITRE 탐지가 없습니다. 기간을 넓혀 다시 조회하세요.",
         "no_detections": "탐지 없음",
         "no_matches": "일치하는 기법 없음",
         "unknown_name": "기법명 미제공",
@@ -815,12 +822,7 @@
     "theme": {
       "label": "테마",
       "operator": "Operator",
-      "auditor": "Auditor",
-      "cinematic": "Cinematic",
-      "scanlines": "스캔라인",
-      "sound": "사운드",
-      "scanlines_aria": "HUD 스캔라인 활성화",
-      "sound_aria": "HUD 사운드 활성화"
+      "auditor": "Auditor"
     },
     "navigation": "콘솔 탐색",
     "source": {
@@ -838,7 +840,7 @@
       "no_gateways": "없음",
       "counts": "노드 {{nodes}} · 연결 {{edges}}",
       "loading": "토폴로지 조회 중…",
-      "empty": "관측된 토폴로지 노드가 없습니다.",
+      "empty": "관측된 토폴로지 노드가 없습니다. 경보가 수집되면 표시됩니다.",
       "unavailable": "토폴로지를 조회하지 못했습니다. 새로고침하세요.",
       "severity_critical": "심각",
       "severity_warning": "경고",

@@ -2,6 +2,34 @@
  * NetWatcher Dashboard Utilities
  */
 
+/** 한국어 원문을 키로 쓰는 번역. 한국어 화면은 원문을 쓰고, 다른 언어는 번역 파일의 같은 키를 쓴다. */
+export function L(text) {
+    const language = window.i18next?.language || 'ko';
+    if (language.startsWith('ko')) return text;
+    return window.i18next.t(text, { keySeparator: false, nsSeparator: false, defaultValue: text });
+}
+
+function emptyLabel(kind) {
+    return window.i18next.t('console.shell.empty_kind.' + kind);
+}
+
+/** 빈 화면의 종류(unsupported, unconfigured, empty, failed)를 표시하는 속성을 만든다. */
+export function emptyStateAttrs(kind) {
+    return `data-empty-kind="${kind}" data-empty-label="${escAttr(emptyLabel(kind))}"`;
+}
+
+/** 이미 있는 요소에 빈 화면 종류를 표시한다. kind 가 없으면 표시를 지운다. */
+export function markEmptyState(el, kind) {
+    if (!el) return;
+    if (kind) {
+        el.dataset.emptyKind = kind;
+        el.dataset.emptyLabel = emptyLabel(kind);
+    } else {
+        delete el.dataset.emptyKind;
+        delete el.dataset.emptyLabel;
+    }
+}
+
 var HTML_ESCAPES = {
     "&": "&amp;",
     "<": "&lt;",
@@ -42,7 +70,21 @@ export function escAttr(value) {
 
 export function formatTime(ts) {
     if (!ts) return "-";
-    return new Date(ts).toLocaleString();
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat(window.i18next?.language || undefined, {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).format(date);
+}
+
+/** 차트 축처럼 좁은 자리에 쓰는 월·일 시:분. */
+export function formatShortTime(ts) {
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat(window.i18next?.language || undefined, {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(date);
 }
 
 export function formatBytes(bytes) {
@@ -110,7 +152,7 @@ export function renderPagination(container, currentPage, totalItems, pageSize, o
 
     container.innerHTML = "";
     var prev = document.createElement("button");
-    prev.textContent = "Prev";
+    prev.textContent = window.i18next.t('console.shell.prev');
     prev.disabled = currentPage === 0;
     prev.addEventListener("click", function () { onPageChange(currentPage - 1); });
     container.appendChild(prev);
@@ -143,7 +185,7 @@ export function renderPagination(container, currentPage, totalItems, pageSize, o
     }
 
     var next = document.createElement("button");
-    next.textContent = "Next";
+    next.textContent = window.i18next.t('console.shell.next');
     next.disabled = currentPage >= totalPages - 1;
     next.addEventListener("click", function () { onPageChange(currentPage + 1); });
     container.appendChild(next);

@@ -33,12 +33,8 @@ const server=http.createServer((req,res)=>{
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>window.i18next?.isInitialized);await page.waitForTimeout(250);
  const missing=await page.evaluate(()=>[...document.querySelectorAll('[data-i18n], [data-i18n-aria-label]')].filter(e=>/^(tabs\.(topology|compliance)|console\.(theme|topology|compliance|badge|source|navigation))/.test(e.dataset.i18n||e.dataset.i18nAriaLabel)).filter(e=>!window.i18next.exists(e.dataset.i18n||e.dataset.i18nAriaLabel)).map(e=>e.dataset.i18n));assert.deepEqual(missing,[]);
- for(const theme of ['operator','auditor','cinematic']) {await page.selectOption('#theme-selector',theme);assert.equal(await page.getAttribute('html','data-theme'),theme);const sizes=await page.evaluate(()=>['body','#theme-selector','.theme-switch label','.scope-hint','.badge-sev','.hud-meta'].map(s=>parseFloat(getComputedStyle(document.querySelector(s)).fontSize)));assert.ok(sizes.every(s=>s>=13),`${theme} fonts ${sizes}`);assert.equal(await page.evaluate(()=>localStorage.getItem('nw_theme')),theme);}
- assert.equal(await page.getAttribute('html','data-hud-scanlines'),null);assert.equal(await page.getAttribute('html','data-hud-sound'),null);
- await page.check('#hud-sound-toggle');assert.equal(await page.getAttribute('html','data-hud-sound'),'on');assert.equal(await page.locator('#hud-sound-state').innerText(),'ON');await page.uncheck('#hud-sound-toggle');assert.equal(await page.locator('#hud-sound-state').innerText(),'OFF');
- await page.check('#hud-scanlines-toggle');assert.equal(await page.getAttribute('html','data-hud-scanlines'),'on');await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::after').display),'none');await page.emulateMedia({reducedMotion:'no-preference',forcedColors:'active'});assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::after').display),'none');await page.emulateMedia({forcedColors:'none'});
- await page.selectOption('#theme-selector','operator');assert.equal(await page.getAttribute('html','data-hud-scanlines'),null);
- for(const lang of ['en','ko']) {await page.selectOption('#lang-selector',lang);await page.waitForFunction(l=>window.i18next.language===l,lang);for(const tab of ['topology','compliance']) {await page.click(`[data-tab="${tab}"]`);assert.ok(await page.locator(`#tab-${tab}`).evaluate(e=>e.classList.contains('active')));assert.ok(!(await page.locator(`[data-tab="${tab}"]`).innerText()).startsWith('tabs.'));}}
+ for(const theme of ['operator','auditor']) {await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#theme-selector',theme);await page.evaluate(()=>{document.querySelector('.user-menu').open=false});assert.equal(await page.getAttribute('html','data-theme'),theme);const sizes=await page.evaluate(()=>['body','#theme-selector','.theme-switch label','.scope-hint','.badge-sev','.hud-meta'].map(s=>parseFloat(getComputedStyle(document.querySelector(s)).fontSize)));assert.ok(sizes.every(s=>s>=13),`${theme} fonts ${sizes}`);assert.equal(await page.evaluate(()=>localStorage.getItem('nw_theme')),theme);}
+ for(const lang of ['en','ko']) {await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#lang-selector',lang);await page.evaluate(()=>{document.querySelector('.user-menu').open=false});await page.waitForFunction(l=>window.i18next.language===l,lang);for(const tab of ['topology','compliance']) {await page.click(`[data-tab="${tab}"]`);assert.ok(await page.locator(`#tab-${tab}`).evaluate(e=>e.classList.contains('active')));assert.ok(!(await page.locator(`[data-tab="${tab}"]`).innerText()).startsWith('tabs.'));}}
 
  // API failures are visible and leave refresh available.
  await page.click('[data-tab="topology"]');
@@ -48,7 +44,7 @@ try{
  await page.waitForFunction(()=>document.querySelector('#compliance-state').textContent===window.i18next.t('console.compliance.unavailable'));
  assert.equal(await page.locator('#compliance-refresh').isEnabled(),true);
  apiMode='ok';
- await page.selectOption('#lang-selector','en');
+ await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#lang-selector','en');await page.evaluate(()=>{document.querySelector('.user-menu').open=false});
  await page.click('[data-tab="topology"]');
  await page.waitForFunction(()=>document.querySelector('#topology-state').hidden && document.querySelector('#topology-canvas').width>0);
  assert.equal(await page.locator('#topology-counts').innerText(),'nodes 4 · edges 3');
@@ -105,7 +101,7 @@ try{
  mttd=null;await page.click('#compliance-refresh');
  await page.waitForFunction(()=>document.querySelector('#compliance-kpis').textContent.includes('Insufficient data'));
  assert.equal(await page.inputValue('#compliance-framework'),'pci_dss');
- await page.selectOption('#lang-selector','ko');
+ await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#lang-selector','ko');await page.evaluate(()=>{document.querySelector('.user-menu').open=false});
  await page.waitForFunction(()=>document.querySelector('#compliance-kpis').textContent.includes('데이터 부족'));
  assert.ok(!(await page.locator('#compliance-kpis').innerText()).includes('console.'));
  apiMode='unavailable';await page.click('#compliance-refresh');
@@ -117,7 +113,7 @@ try{
  assert.ok(requests.includes('/api/compliance/coverage/pci_dss'));
  assert.ok(requests.includes('/api/topology/high-risk'));
  console.log('PASS: topology node/link pixels, risk colors, click/keyboard drawer, 5000 nodes, resize, source badges, empty/failure recovery; framework coverage, KPI units/null, refresh, live en/ko labels');
- await page.selectOption('#theme-selector','auditor');await page.reload();await page.waitForFunction(()=>window.i18next?.isInitialized);assert.equal(await page.inputValue('#theme-selector'),'auditor');assert.equal(await page.evaluate(()=>getComputedStyle(document.body).backgroundColor),'rgb(255, 255, 255)');
+ await page.evaluate(()=>{document.querySelector('.user-menu').open=true});await page.selectOption('#theme-selector','auditor');await page.evaluate(()=>{document.querySelector('.user-menu').open=false});await page.reload();await page.waitForFunction(()=>window.i18next?.isInitialized);assert.equal(await page.inputValue('#theme-selector'),'auditor');assert.equal(await page.evaluate(()=>getComputedStyle(document.body).backgroundColor),'rgb(255, 255, 255)');
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'mobile overflow');assert.deepEqual(errors,[]);
 
  const contrasts=await page.evaluate(async()=>{
