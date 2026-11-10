@@ -194,7 +194,7 @@ class PacketProcessor:
         if self._observation is not None:
             self._observation.record(STAGE_ENGINE, KIND_RECEIVED)
         if self._async_registry is not None:
-            self._enqueue_async(packet)
+            self._enqueue_async(packet, self._async_registry)
             return
         self._deliver_alerts(packet, self.registry.process_packet(packet))
 
@@ -208,24 +208,25 @@ class PacketProcessor:
             if self.dispatcher:
                 self.dispatcher.enqueue(alert)
 
-    def _enqueue_async(self, packet: Packet) -> None:
+    def _enqueue_async(self, packet: Packet, registry: "AsyncEngineRegistry") -> None:
         """패킷을 비동기 분배 큐에 넣는다. 가득 차면 버리고 손실로 기록한다."""
-        if self._async_queue is None:
-            self._async_queue = asyncio.Queue(maxsize=self._async_queue_size)
-            self._async_task = asyncio.create_task(self._async_consumer())
+        queue = self._async_queue
+        if queue is None:
+            queue = self._async_queue = asyncio.Queue(maxsize=self._async_queue_size)
+            self._async_task = asyncio.create_task(self._async_consumer(queue, registry))
         try:
-            self._async_queue.put_nowait(packet)
+            queue.put_nowait(packet)
         except asyncio.QueueFull:
             self.async_dropped += 1
             if self._observation is not None:
                 self._observation.record(STAGE_ENGINE, KIND_DROPPED)
 
-    async def _async_consumer(self) -> None:
+    async def _async_consumer(self, queue: asyncio.Queue, registry: "AsyncEngineRegistry") -> None:
         """패킷을 하나씩 처리한다. 엔진끼리는 병렬이지만 한 엔진이 두 패킷을 동시에 보지 않는다."""
         while True:
-            packet = await self._async_queue.get()
+            packet = await queue.get()
             try:
-                self._deliver_alerts(packet, await self._async_registry.process_packet_async(packet))
+                self._deliver_alerts(packet, await registry.process_packet_async(packet))
             except Exception:
                 logger.exception("Async engine dispatch failed")
 
