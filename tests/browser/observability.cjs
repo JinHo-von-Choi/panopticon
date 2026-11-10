@@ -73,7 +73,7 @@ try{
  assert.equal(await page.locator('#obs-panel-picker input[type=checkbox]').count(),4);
  assert.equal(await page.locator('#obs-panel-eve_event_types').count(),0);
  assert.ok(await page.locator('#obs-panel-alerts_by_severity canvas').count()===1);
- assert.equal(await page.locator('#obs-panel-new_devices .empty-state').innerText(),'No records in the selected range.');
+ assert.equal(await page.locator('#obs-panel-new_devices .empty-state').innerText(),'No records in the selected period. Widen the period and try again.');
  assert.equal(await page.locator('#obs-panel-alert_heatmap .obs-heatmap-cell').count(),7*24);
  assert.equal(await page.locator('#obs-panel-top_sources details.obs-table tr').count(),3);
 
