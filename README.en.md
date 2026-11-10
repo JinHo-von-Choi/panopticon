@@ -89,7 +89,7 @@ The console supports Korean and English. Press `Ctrl+K` (`Cmd+K` on macOS) to se
 - [Release notes](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 
-[한국어](README.md) · [MIT License](LICENSE)
+[한국어](README.md) · [AGPL-3.0 License](LICENSE)
 
 ---
 

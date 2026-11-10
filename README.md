@@ -91,7 +91,7 @@ PANOPTICON_EVE_FILE=/var/log/suricata/eve.json ./install.sh eve
 | 변경 기록 | [릴리스 노트](CHANGELOG.md) |
 | 취약점 제보 | [보안 정책](SECURITY.md) |
 
-[English](README.en.md) · [MIT License](LICENSE)
+[English](README.en.md) · [AGPL-3.0 License](LICENSE)
 
 ---
 
