@@ -1,6 +1,6 @@
 feeds:
-  - name: "abuse.ch URLhaus"
-    url: "https://urlhaus.abuse.ch/downloads/text_recent/"
+  - name: "NetAPI Compromised Domains"
+    url: "https://netapi.com/api2/?method=compromised&dataset_type=url&header=0"
     type: "domain"
     format: "text"
     comment_prefix: "#"
@@ -11,8 +11,8 @@ feeds:
     format: "text"
     comment_prefix: "#"
 
-  - name: "abuse.ch SSL Blacklist"
-    url: "https://sslbl.abuse.ch/blacklist/sslipblacklist.txt"
+  - name: "NetAPI Honeypot IPs"
+    url: "https://netapi.com/api2/?method=compromised&dataset_type=ip&header=0"
     type: "ip"
     format: "text"
     comment_prefix: "#"
@@ -27,12 +27,6 @@ feeds:
     url: "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
     type: "ip"
     format: "text"
-    comment_prefix: "#"
-
-  - name: "abuse.ch ThreatFox IOCs"
-    url: "https://threatfox.abuse.ch/downloads/hostfile/"
-    type: "domain"
-    format: "hostfile"
     comment_prefix: "#"
 
   - name: "Blocklist.de SSH"
